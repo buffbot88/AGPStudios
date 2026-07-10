@@ -684,11 +684,19 @@ def call_llama_server(
     if model_name not in MODELS:
         return {"ok": False, "error": f"Unknown model: {model_name}"}
 
+    # Wait for the server to become ready (up to 180s) — the servers start
+    # in a background thread so they may not be ready immediately.
     if not _server_ready.get(model_name, False):
-        return {
-            "ok": False,
-            "error": f"{model_name} is not ready. Check server status.",
-        }
+        _log.info("%s: waiting for server to become ready...", model_name)
+        deadline = time.monotonic() + 180
+        while not _server_ready.get(model_name, False):
+            if time.monotonic() > deadline:
+                return {
+                    "ok": False,
+                    "error": f"{model_name} did not become ready within 180s. Check server status.",
+                }
+            time.sleep(1)
+        _log.info("%s: server is now ready", model_name)
 
     cfg = MODELS[model_name]
     port = cfg["port"]
@@ -1012,6 +1020,15 @@ with gr.Blocks(
             api_name="status",
             concurrency_limit=1,
         )
+        # Auto-refresh the status display every 3 seconds
+        gr.HTML("""
+        <script>
+        setInterval(function() {
+            let btn = document.querySelector('#refresh-status-btn');
+            if (btn) btn.click();
+        }, 3000);
+        </script>
+        """)
 
     with gr.Tab("About"):
         gr.Markdown(f"""
