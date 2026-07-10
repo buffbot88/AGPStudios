@@ -509,6 +509,74 @@ setInterval(function() {{
 </script>
 """
 
+
+# 9.  Lazy initialization — defined before with gr.Blocks() block
+#     Runs inside Gradio's queue when the first browser loads the UI.
+#     startup_report, binary install, env scanner — all lazy.
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _lazy_init() -> str:
+    """Called by demo.load — runs in Gradio's queue, not during import."""
+    global _llama_bin_path, _init_done, _init_error
+
+    # Thread-safe guard against concurrent demo.load from multiple users.
+    if _init_done:
+        return "ready"
+    if not _init_lock.acquire(blocking=False):
+        return "init already in progress"
+    try:
+        if _init_done:
+            return "ready"
+        return _lazy_init_body()
+    finally:
+        _init_lock.release()
+
+
+def _lazy_init_body() -> str:
+    """Actual initialization work, called once under _init_lock."""
+    global _llama_bin_path, _init_done, _init_error
+
+    _log.info("=" * 60)
+    _log.info("AshatOS Neural I/O Host — lazy init start")
+    _log.info("=" * 60)
+
+    # 1. Environment probe (fast, no network)
+    try:
+        scan_and_report()
+    except Exception as exc:
+        _log.warning("env_scanner: %s", exc)
+
+    # 2. Belt-and-suspenders GPU registration
+    for fn, dur in [
+        (gradio_microbrain, 60),
+        (gradio_mainbrain, 120),
+        (_fastapi_sync_inference, 120),
+    ]:
+        try:
+            ensure_gpu_registration(fn, duration=dur)
+        except Exception:
+            pass
+
+    # 3. llama-server binary install (network I/O, may take seconds)
+    try:
+        _llama_bin_path = ensure_llama_server()
+        if _llama_bin_path:
+            _log.info("llama-server: %s", _llama_bin_path)
+        else:
+            _log.warning("llama-server not available — degraded mode")
+    except Exception as exc:
+        _init_error = f"llama-server install failed: {exc}"
+        _log.error(_init_error)
+
+    _init_done = True
+    msg = f"binary={'ok' if _llama_bin_path else 'missing'} error={_init_error}"
+    _log.info("lazy init complete: %s", msg)
+    return msg
+
+
+# ──────────────────────────────────────────────────────────────────────────
+
 with gr.Blocks(title="AshatOS Neural Host") as _demo:
     gr.HTML(
         """
@@ -636,72 +704,6 @@ with gr.Blocks(title="AshatOS Neural Host") as _demo:
         api_name="public_metrics",
         concurrency_limit=1,
     )
-
-
-# ──────────────────────────────────────────────────────────────────────────
-# 9.  Lazy initialization — all I/O happens here, NOT during import.
-#     Runs inside Gradio's queue when the first browser loads the UI.
-#     startup_report, binary install, env scanner — all lazy.
-# ──────────────────────────────────────────────────────────────────────────
-
-
-def _lazy_init() -> str:
-    """Called by demo.load — runs in Gradio's queue, not during import."""
-    global _llama_bin_path, _init_done, _init_error
-
-    # Thread-safe guard against concurrent demo.load from multiple users.
-    if _init_done:
-        return "ready"
-    if not _init_lock.acquire(blocking=False):
-        return "init already in progress"
-    try:
-        if _init_done:
-            return "ready"
-        return _lazy_init_body()
-    finally:
-        _init_lock.release()
-
-
-def _lazy_init_body() -> str:
-    """Actual initialization work, called once under _init_lock."""
-    global _llama_bin_path, _init_done, _init_error
-
-    _log.info("=" * 60)
-    _log.info("AshatOS Neural I/O Host — lazy init start")
-    _log.info("=" * 60)
-
-    # 1. Environment probe (fast, no network)
-    try:
-        scan_and_report()
-    except Exception as exc:
-        _log.warning("env_scanner: %s", exc)
-
-    # 2. Belt-and-suspenders GPU registration
-    for fn, dur in [
-        (gradio_microbrain, 60),
-        (gradio_mainbrain, 120),
-        (_fastapi_sync_inference, 120),
-    ]:
-        try:
-            ensure_gpu_registration(fn, duration=dur)
-        except Exception:
-            pass
-
-    # 3. llama-server binary install (network I/O, may take seconds)
-    try:
-        _llama_bin_path = ensure_llama_server()
-        if _llama_bin_path:
-            _log.info("llama-server: %s", _llama_bin_path)
-        else:
-            _log.warning("llama-server not available — degraded mode")
-    except Exception as exc:
-        _init_error = f"llama-server install failed: {exc}"
-        _log.error(_init_error)
-
-    _init_done = True
-    msg = f"binary={'ok' if _llama_bin_path else 'missing'} error={_init_error}"
-    _log.info("lazy init complete: %s", msg)
-    return msg
 
 
 # ──────────────────────────────────────────────────────────────────────────
