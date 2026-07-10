@@ -224,11 +224,10 @@ def _find_cached_llama_server() -> str | None:
 def _find_llama_server_member(names: list[str]) -> str | None:
     """From a list of archive member paths, pick the best `llama-server`
     candidate.  Priority:
-    1. Basename is exactly ``llama-server`` (no extension)
+    1. Basename is exactly ``llama-server``
     2. Basename is exactly ``llama-server.exe``
-    3. Any member whose *filename* (last path component) is ``llama-server``
-    4. Any member containing ``llama-server`` that is NOT a ``.so`` library
-    5. Any member containing ``llama-server`` (last resort)
+    3. Any member containing ``llama-server`` that is NOT a ``.so`` library
+    4. Any member containing ``llama-server`` (last resort)
     """
     candidates: list[tuple[int, str]] = []
 
@@ -238,12 +237,10 @@ def _find_llama_server_member(names: list[str]) -> str | None:
             candidates.append((1, n))
         elif fname == "llama-server.exe":
             candidates.append((2, n))
-        elif fname.endswith("/llama-server"):
-            candidates.append((3, n))
         elif "llama-server" in n and not n.endswith(".so"):
-            candidates.append((4, n))
+            candidates.append((3, n))
         elif "llama-server" in n:
-            candidates.append((5, n))
+            candidates.append((4, n))
 
     if not candidates:
         return None
