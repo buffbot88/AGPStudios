@@ -6,7 +6,6 @@ colorTo: purple
 sdk: gradio
 app_file: app.py
 pinned: false
-sdk_version: latest
 ---
 
 # AshatOS Dual-Lane ZeroGPU Inference Host
