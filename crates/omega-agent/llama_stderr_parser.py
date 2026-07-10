@@ -16,11 +16,18 @@ into a bounded buffer and parse them out into typed attributes:
 Why a separate module: the parser is pure (no I/O, no subprocess) so we
 can drive it from unit tests with synthetic lines. The launcher feeds it
 in a streaming reader thread.
+
+Event-based offload notification replaces the old timing-based drain:
+``feed()`` sets a ``threading.Event`` when the offload line is parsed.
+The launcher calls :meth:`await_offload` after ``/health`` succeeds,
+blocking deterministically instead of sleeping 200ms hoping the line
+arrives.
 """
 
 from __future__ import annotations
 
 import re
+import threading
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Optional
@@ -113,6 +120,8 @@ class LlamaServerStderrParser:
         self._offloaded: Optional[tuple[int, int]] = None
         self._gpu_layers_requested: int = 0
         self._parsed_mode: str = "unknown"
+        # Event-based offload signal — set when feed() sees the offload line.
+        self._offload_event = threading.Event()
 
     # ── public ─────────────────────────────────────────────────────────
 
@@ -128,6 +137,7 @@ class LlamaServerStderrParser:
         m = _RE_OFFLOADED.match(line)
         if m and self._offloaded is None:
             self._offloaded = (int(m.group(1)), int(m.group(2)))
+            self._offload_event.set()
             return
         # Offloading-in-progress line — informative but doesn't pin success.
         m = _RE_OFFLOADING.match(line)
@@ -164,6 +174,16 @@ class LlamaServerStderrParser:
             backends_seen=list(self._backends),
             raw_lines_kept=len(self._buffer),
         )
+
+    def await_offload(self, timeout: float = 2.0) -> bool:
+        """Block until the offload line is parsed, or timeout expires.
+
+        Returns ``True`` if offload was confirmed, ``False`` on timeout.
+        Replaces the old timing-based ``_drain_stderr`` — deterministic,
+        no race window.
+        """
+        self._offload_event.wait(timeout=timeout)
+        return self._offloaded is not None and self._offloaded[0] > 0
 
     # ── diagnostics helpers ─────────────────────────────────────────────
 
