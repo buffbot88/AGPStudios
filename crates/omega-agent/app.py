@@ -53,26 +53,28 @@ N_CTX_SLOW = int(os.getenv("N_CTX_SLOW", "1536"))
 # ---------------------------------------------------------------------------
 
 MODELS: dict[str, dict[str, Any]] = {
+    # MainBrain = big/reasoning model (1.2B Instruct)
     "MainBrain": {
-        "repo": FAST_MODEL_REPO,
-        "file": FAST_MODEL_FILE,
-        "port": int(os.getenv("MAINBRAIN_PORT", "18080")),
-        "ctx": int(os.getenv("MAINBRAIN_CTX", str(N_CTX_FAST))),
-        "local_path": os.getenv("MAINBRAIN_MODEL_PATH", "").strip() or None,
-        "system_prompt": os.getenv(
-            "FAST_SYSTEM_PROMPT",
-            "You are Ashat's fast conversational lane. Be concise, natural, and helpful.",
-        ),
-    },
-    "MicroBrain": {
         "repo": SLOW_MODEL_REPO,
         "file": SLOW_MODEL_FILE,
-        "port": int(os.getenv("MICROBRAIN_PORT", "18081")),
-        "ctx": int(os.getenv("MICROBRAIN_CTX", str(N_CTX_SLOW))),
-        "local_path": os.getenv("MICROBRAIN_MODEL_PATH", "").strip() or None,
+        "port": int(os.getenv("MAINBRAIN_PORT", "18080")),
+        "ctx": int(os.getenv("MAINBRAIN_CTX", str(N_CTX_SLOW))),
+        "local_path": os.getenv("MAINBRAIN_MODEL_PATH", "").strip() or None,
         "system_prompt": os.getenv(
             "SLOW_SYSTEM_PROMPT",
             "You are Ashat's careful reasoning lane. Think carefully and return a clear final answer.",
+        ),
+    },
+    # MicroBrain = small/fast model (350M)
+    "MicroBrain": {
+        "repo": FAST_MODEL_REPO,
+        "file": FAST_MODEL_FILE,
+        "port": int(os.getenv("MICROBRAIN_PORT", "18081")),
+        "ctx": int(os.getenv("MICROBRAIN_CTX", str(N_CTX_FAST))),
+        "local_path": os.getenv("MICROBRAIN_MODEL_PATH", "").strip() or None,
+        "system_prompt": os.getenv(
+            "FAST_SYSTEM_PROMPT",
+            "You are Ashat's fast conversational lane. Be concise, natural, and helpful.",
         ),
     },
 }
