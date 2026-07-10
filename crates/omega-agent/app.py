@@ -620,23 +620,73 @@ async def http_public_metrics() -> JSONResponse:
     return JSONResponse(content=_snapshot().render_metrics())
 
 
-# === Gradio dashboard === minimal telemetry view ===
 
 
-def _build_telemetry_df(lane_key: str):
-    """Build a long-format DataFrame for dual-line (prompt_tps + gen_tps)."""
+# ── Dashboard helpers ──────────────────────────────────────────────
+
+
+def _build_card_html(lane_key: str) -> str:
+    """Render a model info card as HTML."""
+    records = METRICS.get_lane_metrics(lane_key)
+    lane = Lane.MICROBRAIN if lane_key == "microbrain" else Lane.MAINBRAIN
+    cfg = lane_cfg(lane)
+    model_name = cfg["file"]
+    ctx = cfg["ctx"]
+    label = cfg["label"]
+
+    # Get latest metrics
+    last_prompt_tps = 0.0
+    last_gen_tps = 0.0
+    total_reqs = 0
+    if records:
+        r = records[-1]
+        last_prompt_tps = r.prompt_tokens_per_second or 0.0
+        last_gen_tps = r.generation_tokens_per_second or 0.0
+        total_reqs = len(records)
+
+    return f"""<div style="border: 1px solid #334155; border-radius: 12px;
+        padding: 16px; background: #1e293b; font-family: monospace;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <span style="font-size: 1.2em; font-weight: 700; color: #e2e8f0;">{label}</span>
+            <span style="color: #22c55e; font-size: 0.8em;">&#x25CF; active</span>
+        </div>
+        <div style="color: #94a3b8; font-size: 0.75em; margin-bottom: 12px;">
+            {model_name} &middot; {ctx} ctx &middot; {total_reqs} requests
+        </div>
+        <div style="display: flex; gap: 24px;">
+            <div>
+                <div style="color: #f87171; font-size: 0.7em;">prompt in</div>
+                <div style="font-size: 1.6em; font-weight: 700; color: #fca5a5;">
+                    {last_prompt_tps:.0f}</div>
+                <div style="color: #64748b; font-size: 0.65em;">tok/s</div>
+            </div>
+            <div>
+                <div style="color: #4ade80; font-size: 0.7em;">gen out</div>
+                <div style="font-size: 1.6em; font-weight: 700; color: #86efac;">
+                    {last_gen_tps:.0f}</div>
+                <div style="color: #64748b; font-size: 0.65em;">tok/s</div>
+            </div>
+        </div>
+    </div>"""
+
+
+def _build_bar_df(lane_key: str):
+    """Build a DataFrame for the mini bar chart (prompt_tps, gen_tps)."""
     import pandas as pd
     records = METRICS.get_lane_metrics(lane_key)
     if not records:
-        return pd.DataFrame({"timestamp": [], "value": [], "metric": []})
+        return pd.DataFrame({"metric": [], "value": []})
+    r = records[-1]
+    prompt = r.prompt_tokens_per_second or 0
+    gen = r.generation_tokens_per_second or 0
     rows = []
-    for r in records[-50:]:
-        ts = r.timestamp
-        if r.prompt_tokens_per_second and r.prompt_tokens_per_second > 0:
-            rows.append({"timestamp": ts, "value": r.prompt_tokens_per_second, "metric": "prompt_tps"})
-        if r.generation_tokens_per_second and r.generation_tokens_per_second > 0:
-            rows.append({"timestamp": ts, "value": r.generation_tokens_per_second, "metric": "gen_tps"})
-    return pd.DataFrame(rows) if rows else pd.DataFrame({"timestamp": [], "value": [], "metric": []})
+    if prompt > 0:
+        rows.append({"metric": "prompt", "value": prompt})
+    if gen > 0:
+        rows.append({"metric": "gen", "value": gen})
+    return pd.DataFrame(rows) if rows else pd.DataFrame({"metric": [], "value": []})
+
+# === Gradio dashboard === minimal telemetry view ===
 
 
 AUTO_REFRESH_JS = f"""
@@ -648,81 +698,61 @@ setInterval(function() {{
 </script>
 """
 
-with gr.Blocks(title="AshatOS Neural Host", head=AUTO_REFRESH_JS) as _demo:
+with gr.Blocks(title="AshatOS Neural Host", head=AUTO_REFRESH_JS, theme=gr.themes.Soft()) as _demo:
     gr.HTML(
         """
-        <div style="text-align: center; padding: 30px 20px 10px;">
-            <h1 style="margin: 0; font-size: 2.2em; font-weight: 700;
+        <div style="text-align: center; padding: 24px 20px 8px;">
+            <h1 style="margin: 0; font-size: 2em; font-weight: 700;
                 background: linear-gradient(135deg, #a78bfa, #67e8f9);
-                -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
-                🧠 ASHAT NEURAL HOST</h1>
-            <p style="color: #94a3b8; font-size: 1em; margin: 4px 0 0;">
-                Dual-Lane Inference Telemetry &mdash;
-                <span id="uptime-display">uptime: --</span></p>
+                -webkit-background-clip: text;">
+                &#x1F9E0; ASHAT NEURAL HOST</h1>
+            <p style="color: #94a3b8; font-size: 0.9em; margin: 4px 0 0;">
+                Dual-Lane Inference</p>
         </div>
-        <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            function updateUptime() {
-                var el = document.getElementById('uptime-display');
-                if (el) {
-                    var s = Math.floor(Date.now() / 1000 - ' + str(int(time.time())) + ');
-                    var m = Math.floor(s / 60);
-                    s = s % 60;
-                    el.textContent = 'uptime: ' + m + 'm ' + s + 's';
-                }
-            }
-            updateUptime();
-            setInterval(updateUptime, 1000);
-        });
-        </script>
         """
     )
 
     with gr.Row(equal_height=True):
-        with gr.Column(scale=1, min_width=400):
-            micro_plot = gr.LinePlot(
-                x="timestamp", y="value", color="metric",
-                title="MicroBrain — prompt in / generation out",
-                tooltip=["timestamp", "metric", "value"],
-                height=320,
-                show_label=False,
-                container=True,
+        with gr.Column(scale=1, min_width=360):
+            micro_card = gr.HTML()
+            micro_bar = gr.BarPlot(
+                x="metric", y="value", color="metric",
+                title="", height=120, show_label=False,
+                y_title="tok/s", x_title="", vertical=False,
             )
-        with gr.Column(scale=1, min_width=400):
-            main_plot = gr.LinePlot(
-                x="timestamp", y="value", color="metric",
-                title="MainBrain — prompt in / generation out",
-                tooltip=["timestamp", "metric", "value"],
-                height=320,
-                show_label=False,
-                container=True,
+        with gr.Column(scale=1, min_width=360):
+            main_card = gr.HTML()
+            main_bar = gr.BarPlot(
+                x="metric", y="value", color="metric",
+                title="", height=120, show_label=False,
+                y_title="tok/s", x_title="", vertical=False,
             )
 
     with gr.Row():
         gr.Markdown(
-            """<div style="text-align: center; color: #64748b; font-size: 0.85em; padding: 8px;">
-            🔴 prompt tokens/sec &nbsp;&nbsp;|&nbsp;&nbsp; 🟢 generation tokens/sec
-            &nbsp;&nbsp;|&nbsp;&nbsp; auto-refresh every {PUBLIC_REFRESH_SECONDS}s
+            """<div style="text-align: center; color: #64748b; font-size: 0.8em; padding: 4px;">
+            auto-refresh every 10s
             </div>"""
         )
 
-    # Hidden refresh button triggered by JS timer
     refresh_btn = gr.Button("Refresh", visible=False, elem_id="auto-refresh-btn")
     refresh_btn.click(
-        fn=lambda: (_build_telemetry_df("microbrain"), _build_telemetry_df("mainbrain")),
+        fn=lambda: (_build_card_html("microbrain"), _build_card_html("mainbrain"),
+                     _build_bar_df("microbrain"), _build_bar_df("mainbrain")),
         inputs=[],
-        outputs=[micro_plot, main_plot],
+        outputs=[micro_card, main_card, micro_bar, main_bar],
         concurrency_limit=1,
     )
 
     _demo.load(
-        fn=lambda: (_build_telemetry_df("microbrain"), _build_telemetry_df("mainbrain")),
+        fn=lambda: (_build_card_html("microbrain"), _build_card_html("mainbrain"),
+                     _build_bar_df("microbrain"), _build_bar_df("mainbrain")),
         inputs=[],
-        outputs=[micro_plot, main_plot],
+        outputs=[micro_card, main_card, micro_bar, main_bar],
         concurrency_limit=1,
     )
 
-    # -- Private Gradio API endpoints (AshatOS communication only) --    # -- Private Gradio API endpoints (AshatOS communication only) --    # -- Private Gradio API endpoints (AshatOS communication only) --
+    # -- Private Gradio API endpoints (AshatOS communication only) --    # -- Private Gradio API endpoints (AshatOS communication only) --    # -- Private Gradio API endpoints (AshatOS communication only) --    # -- Private Gradio API endpoints (AshatOS communication only) --
     # Note: BOTH funnels into _run_pipeline; the only difference is the
     # fixed lane (route_hint) for routing and the response shape
     # (json.dumps for Gradio queue API vs. JSONResponse for FastAPI).
