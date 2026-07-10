@@ -1,5 +1,5 @@
 ---
-title: AshatOS Dual GGUF Host
+title: ASHAT Llama Server
 emoji: 🧠
 colorFrom: indigo
 colorTo: purple
@@ -9,13 +9,28 @@ pinned: false
 license: mit
 ---
 
-# AshatOS Dual GGUF Host
+# AshatOS Dual llama-server Host
 
-> Hugging Face Spaces installs Python dependencies from `requirements.txt` and system packages from `packages.txt` automatically on every boot. The host is **Spaces `zeroGPU`** (A10G-class, CUDA 12.x). `requirements.txt` uses `--prefer-binary` with `--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu124` so pip takes a prebuilt CUDA-enabled `llama-cpp-python` wheel when one matches; if no wheel exists for the runtime, the `--config-settings="cmake.args=-DGGML_CUDA=on"` flag falls back to a CUDA-enabled source compile. `packages.txt` ships `build-essential`, `cmake`, `nvidia-cuda-toolkit` (CUDA runtime + `nvcc`), plus `cuda-cudart-dev` and `cuda-cublas-dev` (the `-dev` headers + symlinks needed for source compile of `llama-cpp-python` to link against CUDA). The runtime meta-package alone was insufficient — a real boot showed `ModuleNotFoundError: No module named 'llama_cpp'` when only `nvidia-cuda-toolkit` was present in `packages.txt`.
+> Hugging Face Space that auto-installs or builds `llama-server`, then spawns
+> **two local GGUF model servers** behind a single Gradio UI. No runtime
+> dependency on `llama-cpp-python`.
+
+## How it works
+
+1. On boot, `app.py` detects whether `llama-server` is available.
+2. If missing, it attempts (in order):
+   - Download a prebuilt binary from GitHub releases
+   - Clone and build `llama.cpp` from source (CPU-only)
+3. Two GGUF models are downloaded from Hugging Face Hub (or used from a local path):
+   - **MainBrain** (port `18080`, ctx `1024`) — fast/350M model
+   - **MicroBrain** (port `18081`, ctx `1536`) — slow/1.2B model
+4. Each model gets its own `llama-server` subprocess.
+5. The Gradio UI waits for both servers (or degrades gracefully) and routes
+   user prompts to the selected model via `POST /v1/chat/completions`.
 
 ## Required variables
 
-The block below lists the **built-in defaults** shipped in `app.py` (`RipBuffy/LFM2.5-Q6_K` for both lanes' repos with different GGUF files). To deploy against your own models, copy these into your Space's **Settings → Repository secrets** (or your runtime env) and replace `FAST_MODEL_REPO` / `FAST_MODEL_FILE` / `SLOW_MODEL_REPO` / `SLOW_MODEL_FILE` with your own HF repo + GGUF filename.
+These are the **built-in defaults**. Override them via Space secrets or env vars.
 
 ```text
 FAST_MODEL_REPO=RipBuffy/LFM2.5-Q6_K
@@ -25,27 +40,55 @@ SLOW_MODEL_REPO=RipBuffy/LFM2.5-Q6_K
 SLOW_MODEL_FILE=LFM2.5-1.2B-Instruct-Q6_K.gguf
 
 MODEL_REVISION=main
-N_THREADS=2
-N_BATCH=128
 N_CTX_FAST=1024
 N_CTX_SLOW=1536
-MAX_TOKENS_LIMIT=256
 ```
 
-Optional system prompts (override to customize each lane):
+**Optional overrides:**
 
-```text
-FAST_SYSTEM_PROMPT=You are Ashat's fast conversational lane.
-SLOW_SYSTEM_PROMPT=You are Ashat's careful reasoning lane.
-```
+| Variable | Default | Purpose |
+|---|---|---|
+| `MAINBRAIN_PORT` | `18080` | Port for MainBrain server |
+| `MICROBRAIN_PORT` | `18081` | Port for MicroBrain server |
+| `MAINBRAIN_CTX` | `1024` | Context size for MainBrain |
+| `MICROBRAIN_CTX` | `1536` | Context size for MicroBrain |
+| `MAINBRAIN_MODEL_PATH` | *(none)* | Direct local path to GGUF (bypasses HF download) |
+| `MICROBRAIN_MODEL_PATH` | *(none)* | Direct local path to GGUF (bypasses HF download) |
+| `LLAMA_THREADS` | `2` | CPU threads for tokenization/sampling |
+| `LLAMA_BATCH_SIZE` | `128` | Batch size for prompt processing |
+| `LLAMA_SERVER_PATH` | *(none)* | Explicit path to `llama-server` binary |
+| `AUTO_BUILD_LLAMA_SERVER` | `1` | Set to `0` to skip auto-install |
 
 For private model repositories, add `HF_TOKEN` as a Space secret.
 
 ## API endpoints
 
-- `/fast_chat`
-- `/slow_chat`
-- `/health`
-- `/unload`
+- `/chat` — send a prompt to a selected model
+- `/status` — server status (ready/error/running)
+- `/health` — (legacy health, maintained for backward compat if needed)
 
-Both models are loaded lazily. Only one inference runs at a time.
+## Logs
+
+All logs are written to `./logs/`:
+
+- `mainbrain.out.log` / `mainbrain.err.log`
+- `microbrain.out.log` / `microbrain.err.log`
+- `llama_install.log`
+
+## Client usage
+
+See `dual_model_client_example.py`.
+
+```python
+from gradio_client import Client
+
+client = Client("your-space-id")
+result = client.predict(
+    model_name="MainBrain",
+    message="Hello!",
+    max_tokens=96,
+    temperature=0.7,
+    top_p=0.9,
+    api_name="/chat",
+)
+```

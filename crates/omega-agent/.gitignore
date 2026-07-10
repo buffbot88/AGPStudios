@@ -1,0 +1,10 @@
+.venv-test/
+__pycache__/
+*.pyc
+.agents/
+knowledge.md
+.venv/
+venv/
+.env
+.logs/
+.runtime/
