@@ -557,23 +557,7 @@ def _status_html() -> str:
     return _snapshot().render_html()
 
 
-def _refresh_metrics_body() -> tuple:
-    """Tick callback — drives plot frames + events. Returns DataFrames for Gradio 6.x."""
-    import pandas as pd
-    frames = _snapshot().render_frames()
-    def _to_df(data):
-        return pd.DataFrame(data) if data else pd.DataFrame({
-            "timestamp": [], "generation_tokens_per_second": [],
-            "total_latency_ms": [], "prompt_tokens_per_second": [],
-            "success": [],
-        })
-    return (
-        _to_df(frames["microbrain"]),
-        _to_df(frames["microbrain"]),
-        _to_df(frames["mainbrain"]),
-        _to_df(frames["mainbrain"]),
-        pd.DataFrame(frames["events"]),
-    )
+
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -636,18 +620,35 @@ async def http_public_metrics() -> JSONResponse:
     return JSONResponse(content=_snapshot().render_metrics())
 
 
-# === Gradio dashboard ===
+# === Gradio dashboard === minimal telemetry view ===
 
-JAVASCRIPT_REFRESH = f"""
+
+def _build_telemetry_df(lane_key: str):
+    """Build a long-format DataFrame for dual-line (prompt_tps + gen_tps)."""
+    import pandas as pd
+    records = METRICS.get_lane_metrics(lane_key)
+    if not records:
+        return pd.DataFrame({"timestamp": [], "value": [], "metric": []})
+    rows = []
+    for r in records[-50:]:
+        ts = r.timestamp
+        if r.prompt_tokens_per_second and r.prompt_tokens_per_second > 0:
+            rows.append({"timestamp": ts, "value": r.prompt_tokens_per_second, "metric": "prompt_tps"})
+        if r.generation_tokens_per_second and r.generation_tokens_per_second > 0:
+            rows.append({"timestamp": ts, "value": r.generation_tokens_per_second, "metric": "gen_tps"})
+    return pd.DataFrame(rows) if rows else pd.DataFrame({"timestamp": [], "value": [], "metric": []})
+
+
+AUTO_REFRESH_JS = f"""
 <script>
 setInterval(function() {{
-    var btn = document.querySelector('#refresh-status-btn');
+    var btn = document.querySelector('#auto-refresh-btn');
     if (btn) btn.click();
 }}, {PUBLIC_REFRESH_SECONDS * 1000});
 </script>
 """
 
-with gr.Blocks(title="AshatOS Neural Host") as _demo:
+with gr.Blocks(title="AshatOS Neural Host", head=AUTO_REFRESH_JS) as _demo:
     gr.HTML(
         """
         <div style="text-align: center; padding: 20px;">
@@ -657,83 +658,37 @@ with gr.Blocks(title="AshatOS Neural Host") as _demo:
         """
     )
 
-    status_display = gr.HTML(value=_status_html())
-
-    with gr.Row():
-        refresh_btn = gr.Button(
-            "🔄 Refresh Status",
-            variant="secondary",
-            elem_id="refresh-status-btn",
-        )
-
-    gr.Markdown("## Performance Metrics")
-
-    with gr.Tabs():
-        with gr.TabItem("MicroBrain"):
-            micro_gen_plot = gr.LinePlot(
-                x="timestamp", y="generation_tokens_per_second",
-                title="Generation Tokens/sec (MicroBrain)",
-            )
-            micro_latency_plot = gr.LinePlot(
-                x="timestamp", y="total_latency_ms",
-                title="Total Latency (MicroBrain)",
-            )
-        with gr.TabItem("MainBrain"):
-            main_gen_plot = gr.LinePlot(
-                x="timestamp", y="generation_tokens_per_second",
-                title="Generation Tokens/sec (MainBrain)",
-            )
-            main_latency_plot = gr.LinePlot(
-                x="timestamp", y="total_latency_ms",
-                title="Total Latency (MainBrain)",
-            )
-
-    gr.Markdown("## Recent Events")
-    events_display = gr.Dataframe(
-        headers=["Event"],
-        label="Recent Events",
-        row_count=10,
+    micro_plot = gr.LinePlot(
+        x="timestamp", y="value", color="metric",
+        title="MicroBrain — Tokens/sec (prompt in  |  generation out)",
+        tooltip=["timestamp", "metric", "value"],
+        height=300,
     )
 
-    with gr.Accordion("Configuration", open=False):
-        gr.Markdown(f"""
-        ### Lane Configuration
+    main_plot = gr.LinePlot(
+        x="timestamp", y="value", color="metric",
+        title="MainBrain — Tokens/sec (prompt in  |  generation out)",
+        tooltip=["timestamp", "metric", "value"],
+        height=300,
+    )
 
-        | Setting | MicroBrain | MainBrain |
-        |---|---|---|
-        | Model | `{lane_cfg(Lane.MICROBRAIN)['file']}` | `{lane_cfg(Lane.MAINBRAIN)['file']}` |
-        | Context | {lane_cfg(Lane.MICROBRAIN)['ctx']} | {lane_cfg(Lane.MAINBRAIN)['ctx']} |
-        | Max tokens | {lane_cfg(Lane.MICROBRAIN)['max_tokens']} | {lane_cfg(Lane.MAINBRAIN)['max_tokens']} |
-        | GPU duration | {lane_cfg(Lane.MICROBRAIN)['gpu_duration']}s | {lane_cfg(Lane.MAINBRAIN)['gpu_duration']}s |
-
-        ### Runtime
-
-        - `LLAMA_SERVER_PORT`: {LLAMA_SERVER_PORT}
-        - `N_THREADS`: {N_THREADS} | `N_BATCH`: {N_BATCH}
-        - `PUBLIC_REFRESH_SECONDS`: {PUBLIC_REFRESH_SECONDS}
-        - `QUEUE_LIMIT`: {QUEUE_LIMIT}
-        """)
-
+    # Hidden refresh button triggered by JS timer
+    refresh_btn = gr.Button("Refresh", visible=False, elem_id="auto-refresh-btn")
     refresh_btn.click(
-        fn=lambda: _status_html(),
+        fn=lambda: (_build_telemetry_df("microbrain"), _build_telemetry_df("mainbrain")),
         inputs=[],
-        outputs=status_display,
-        api_name="status",
+        outputs=[micro_plot, main_plot],
         concurrency_limit=1,
     )
 
     _demo.load(
-        fn=_refresh_metrics_body,
+        fn=lambda: (_build_telemetry_df("microbrain"), _build_telemetry_df("mainbrain")),
         inputs=[],
-        outputs=[
-            micro_gen_plot, micro_latency_plot,
-            main_gen_plot, main_latency_plot,
-            events_display,
-        ],
+        outputs=[micro_plot, main_plot],
         concurrency_limit=1,
     )
 
-    # -- Private Gradio API endpoints (AshatOS communication only) --
+    # -- Private Gradio API endpoints (AshatOS communication only) --    # -- Private Gradio API endpoints (AshatOS communication only) --
     # Note: BOTH funnels into _run_pipeline; the only difference is the
     # fixed lane (route_hint) for routing and the response shape
     # (json.dumps for Gradio queue API vs. JSONResponse for FastAPI).
