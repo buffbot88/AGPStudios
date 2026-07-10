@@ -665,18 +665,32 @@ with gr.Blocks(title="AshatOS Neural Host") as _demo:
     )
 
 
-# ── Sync ZeroGPU startup report ──────────────────────────────────────
-# The platform waits for this report to confirm @spaces.GPU functions
-# are registered. Called here (after ALL handlers exist, before the app
-# is mounted) so it completes before the platform health-check fires.
-try:
-    from spaces.config import Config as _SC
-    if _SC.zero_gpu:
-        from spaces.zero import client as _zclient
-        _zclient.startup_report()
-        _log.info("sync startup_report sent")
-except Exception as exc:
-    _log.warning("sync startup_report failed (non-fatal): %s", exc)
+# ── Background ZeroGPU startup (full) ────────────────────────────────
+# Calls spaces.zero.startup() which runs config.get_config(),
+# torch.pack(), and client.startup_report(). This is what the
+# one_launch patch would normally do via Blocks.launch(), but
+# mount_gradio_app never calls launch(). A daemon thread handles
+# it so the app construction is not blocked.
+import threading as _th
+def _zerogpu_background_startup():
+    import logging
+    _log = logging.getLogger("ashatos")
+    try:
+        from spaces.config import Config as _SC
+        if not _SC.zero_gpu:
+            return
+        import importlib as _il
+        _zpkg = _il.import_module("spaces.zero")
+        if hasattr(_zpkg, "startup"):
+            _zpkg.startup()
+            _log.info("spaces.zero.startup() completed in background")
+        else:
+            from spaces.zero import client as _zc
+            _zc.startup_report()
+            _log.info("startup_report sent (background, fallback)")
+    except Exception as exc:
+        _log.warning("background ZeroGPU startup failed: %s", exc)
+_th.Thread(target=_zerogpu_background_startup, daemon=True).start()
 
 
 # ──────────────────────────────────────────────────────────────────────────
