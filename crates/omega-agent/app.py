@@ -698,7 +698,7 @@ setInterval(function() {{
 </script>
 """
 
-with gr.Blocks(title="AshatOS Neural Host", head=AUTO_REFRESH_JS, theme=gr.themes.Soft()) as _demo:
+with gr.Blocks(title="AshatOS Neural Host") as _demo:
     gr.HTML(
         """
         <div style="text-align: center; padding: 24px 20px 8px;">
@@ -718,14 +718,14 @@ with gr.Blocks(title="AshatOS Neural Host", head=AUTO_REFRESH_JS, theme=gr.theme
             micro_bar = gr.BarPlot(
                 x="metric", y="value", color="metric",
                 title="", height=120, show_label=False,
-                y_title="tok/s", x_title="", vertical=False,
+                y_title="tok/s", x_title="",
             )
         with gr.Column(scale=1, min_width=360):
             main_card = gr.HTML()
             main_bar = gr.BarPlot(
                 x="metric", y="value", color="metric",
                 title="", height=120, show_label=False,
-                y_title="tok/s", x_title="", vertical=False,
+                y_title="tok/s", x_title="",
             )
 
     with gr.Row():
@@ -862,4 +862,6 @@ else:
 app = _demo
 
 if __name__ == "__main__":
-    _demo.launch(server_name="0.0.0.0", server_port=7860, show_error=True)
+    _demo.launch(server_name="0.0.0.0", server_port=7860,
+                   show_error=True, head=AUTO_REFRESH_JS,
+                   theme=gr.themes.Soft())
