@@ -331,6 +331,18 @@ def gradio_mainbrain(payload_json: str, request: gr.Request) -> str:
     return _gradio_shared(payload_json, request, Lane.MAINBRAIN)
 
 
+# Dashboard handlers — also @spaces.GPU decorated so the ZeroGPU
+# platform scanner finds a decorated function for every Gradio event.
+@spaces.GPU
+def gradio_status() -> str:
+    return _status_html()
+
+
+@spaces.GPU
+def gradio_metrics_load() -> tuple:
+    return _refresh_metrics_body()
+
+
 def execute_lane(lane_str: str, payload: dict[str, Any]) -> dict[str, Any]:
     lane = Lane.parse(lane_str)
     try:
@@ -563,7 +575,7 @@ with gr.Blocks(title="AshatOS Neural Host") as _demo:
         """)
 
     refresh_btn.click(
-        fn=lambda: _status_html(),
+        fn=gradio_status,
         inputs=[],
         outputs=status_display,
         api_name="status",
@@ -571,7 +583,7 @@ with gr.Blocks(title="AshatOS Neural Host") as _demo:
     )
 
     _demo.load(
-        fn=_refresh_metrics_body,
+        fn=gradio_metrics_load,
         inputs=[],
         outputs=[
             micro_gen_plot, micro_latency_plot,
