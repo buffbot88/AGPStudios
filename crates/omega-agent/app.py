@@ -583,6 +583,10 @@ with gr.Blocks(title="AshatOS Neural Host") as _demo:
         concurrency_limit=1,
     )
 
+    # Lazy init — runs in Gradio's queue when UI loads.
+    # Must be INSIDE the with gr.Blocks() context.
+    _demo.load(fn=_lazy_init, inputs=None, outputs=None, concurrency_limit=1)
+
     _demo.load(
         fn=gradio_metrics_load,
         inputs=[],
@@ -634,32 +638,16 @@ with gr.Blocks(title="AshatOS Neural Host") as _demo:
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# 9.  Mount Gradio on FastAPI — completes quickly, no blocking I/O.
-#     NO import-time I/O below this line. startup_report, llama-server
-#     install, env scanning, and model downloads all run via Gradio's
-#     queue (demo.load) after the first page load, not during import.
+# 9.  Lazy initialization — all I/O happens here, NOT during import.
+#     Runs inside Gradio's queue when the first browser loads the UI.
+#     startup_report, binary install, env scanner — all lazy.
 # ──────────────────────────────────────────────────────────────────────────
-
-_demo.queue(default_concurrency_limit=1, max_size=QUEUE_LIMIT)
-
-app = gr.mount_gradio_app(
-    _fastapi_app, _demo, path="/",
-    theme=gr.themes.Soft(),
-    head=JAVASCRIPT_REFRESH,
-)
-
-# ── Lazy initialization — runs inside Gradio's queue on first load ──
-#     All I/O happens here: startup_report, binary install, model check.
-#     The @spaces.GPU scanner finds our functions (decorated at import),
-#     and the platform's Blocks.launch() calls spaces.zero.startup()
-#     through the one_launch patch automatically.
 
 
 def _lazy_init() -> str:
     """Called by demo.load — runs in Gradio's queue, not during import."""
     global _llama_bin_path, _init_done, _init_error
 
-    # Idempotent guard.
     if _init_done:
         return "ready"
 
@@ -701,9 +689,17 @@ def _lazy_init() -> str:
     return msg
 
 
-# Wire the lazy init to demo.load — runs when the first browser opens the UI.
-# This does NOT block app import. Gradio queues it safely.
-_demo.load(fn=_lazy_init, inputs=None, outputs=None, concurrency_limit=1)
+# ──────────────────────────────────────────────────────────────────────────
+# 10.  Mount Gradio on FastAPI — completes quickly, no blocking I/O.
+# ──────────────────────────────────────────────────────────────────────────
+
+_demo.queue(default_concurrency_limit=1, max_size=QUEUE_LIMIT)
+
+app = gr.mount_gradio_app(
+    _fastapi_app, _demo, path="/",
+    theme=gr.themes.Soft(),
+    head=JAVASCRIPT_REFRESH,
+)
 
 
 if __name__ == "__main__":
