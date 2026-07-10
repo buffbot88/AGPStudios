@@ -694,25 +694,20 @@ def _background_init() -> None:
               "binary=%s error=%s", _llama_bin_path, _init_error)
 
 
-# ── Synchronous ZeroGPU full startup ────────────────────────────────
-# The platform checks for the COMPLETE spaces.zero.startup() sequence:
-# config.get_config() + torch.pack() + client.startup_report().
-# Calling just startup_report() is not enough — the platform may check
-# for the side effects of torch.pack() or config.get_config().
+# ── Synchronous ZeroGPU startup report ─────────────────────────────
+# Sends the startup report to the device API so the platform knows
+# our @spaces.GPU decorated functions are ready. The full
+# spaces.zero.startup() (with config.get_config + torch.pack) is
+# called by the gradio.one_launch() patch when the platform
+# calls Blocks.launch() — calling it twice would be harmful.
 try:
     from spaces.config import Config as _SC
     if _SC.zero_gpu:
-        import importlib as _il
-        _zpkg = _il.import_module("spaces.zero")
-        if hasattr(_zpkg, "startup"):
-            _zpkg.startup()
-            _log.info("SYNC full spaces.zero.startup() completed")
-        else:
-            from spaces.zero import client as _zclient
-            _zclient.startup_report()
-            _log.info("SYNC startup_report sent (fallback)")
+        from spaces.zero import client as _zclient
+        _zclient.startup_report()
+        _log.info("SYNC startup_report sent (HTTP 200)")
 except Exception as exc:
-    _log.warning("SYNC ZeroGPU startup failed (non-fatal): %s", exc)
+    _log.warning("SYNC startup_report failed (non-fatal): %s", exc)
 
 # Start background init in a daemon thread — never blocks app startup.
 threading.Thread(target=_background_init, daemon=True, name="ashatos-init").start()
