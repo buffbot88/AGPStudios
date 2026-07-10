@@ -831,10 +831,10 @@ def status_text() -> str:
 # ---------------------------------------------------------------------------
 
 def handle_chat(model_name: str, message: str, chat_history: list[list[str]],
-                max_tokens: int, temperature: float, top_p: float) -> tuple[list[list[str]], str]:
-    """Process a chat message, append to history, return (updated_history, "")."""
+                max_tokens: int, temperature: float, top_p: float) -> tuple[list[list[str]], list[list[str]], str]:
+    """Process a chat message, append to history, return (state, chatbot, "")."""
     if not message or not message.strip():
-        return chat_history, ""
+        return chat_history, chat_history, ""
 
     # Append user message to history
     chat_history.append([message, None])
@@ -854,7 +854,7 @@ def handle_chat(model_name: str, message: str, chat_history: list[list[str]],
 
     # Update the last entry with the response
     chat_history[-1][1] = response
-    return chat_history, ""
+    return chat_history, chat_history, ""
 
 
 def refresh_status() -> str:
@@ -935,13 +935,9 @@ with gr.Blocks(
                 model_selector, prompt_box, chat_state,
                 max_tokens_slider, temperature_slider, top_p_slider,
             ],
-            outputs=[chatbot, prompt_box],
+            outputs=[chat_state, chatbot, prompt_box],
             api_name="chat",
             concurrency_limit=1,
-        ).then(
-            fn=lambda: "",
-            inputs=[],
-            outputs=prompt_box,
         )
 
         # Also trigger on Enter key in the textbox
@@ -951,7 +947,7 @@ with gr.Blocks(
                 model_selector, prompt_box, chat_state,
                 max_tokens_slider, temperature_slider, top_p_slider,
             ],
-            outputs=[chatbot, prompt_box],
+            outputs=[chat_state, chatbot, prompt_box],
             concurrency_limit=1,
         )
 
