@@ -651,26 +651,60 @@ setInterval(function() {{
 with gr.Blocks(title="AshatOS Neural Host", head=AUTO_REFRESH_JS) as _demo:
     gr.HTML(
         """
-        <div style="text-align: center; padding: 20px;">
-            <h1 style="margin: 0; font-size: 2em;">🧠 ASHAT NEURAL HOST</h1>
-            <p style="color: #888; font-size: 1.1em;">Dual-Lane Inference Telemetry</p>
+        <div style="text-align: center; padding: 30px 20px 10px;">
+            <h1 style="margin: 0; font-size: 2.2em; font-weight: 700;
+                background: linear-gradient(135deg, #a78bfa, #67e8f9);
+                -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
+                🧠 ASHAT NEURAL HOST</h1>
+            <p style="color: #94a3b8; font-size: 1em; margin: 4px 0 0;">
+                Dual-Lane Inference Telemetry &mdash;
+                <span id="uptime-display">uptime: --</span></p>
         </div>
+        <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            function updateUptime() {
+                var el = document.getElementById('uptime-display');
+                if (el) {
+                    var s = Math.floor(Date.now() / 1000 - ' + str(int(time.time())) + ');
+                    var m = Math.floor(s / 60);
+                    s = s % 60;
+                    el.textContent = 'uptime: ' + m + 'm ' + s + 's';
+                }
+            }
+            updateUptime();
+            setInterval(updateUptime, 1000);
+        });
+        </script>
         """
     )
 
-    micro_plot = gr.LinePlot(
-        x="timestamp", y="value", color="metric",
-        title="MicroBrain — Tokens/sec (prompt in  |  generation out)",
-        tooltip=["timestamp", "metric", "value"],
-        height=300,
-    )
+    with gr.Row(equal_height=True):
+        with gr.Column(scale=1, min_width=400):
+            micro_plot = gr.LinePlot(
+                x="timestamp", y="value", color="metric",
+                title="MicroBrain — prompt in / generation out",
+                tooltip=["timestamp", "metric", "value"],
+                height=320,
+                show_label=False,
+                container=True,
+            )
+        with gr.Column(scale=1, min_width=400):
+            main_plot = gr.LinePlot(
+                x="timestamp", y="value", color="metric",
+                title="MainBrain — prompt in / generation out",
+                tooltip=["timestamp", "metric", "value"],
+                height=320,
+                show_label=False,
+                container=True,
+            )
 
-    main_plot = gr.LinePlot(
-        x="timestamp", y="value", color="metric",
-        title="MainBrain — Tokens/sec (prompt in  |  generation out)",
-        tooltip=["timestamp", "metric", "value"],
-        height=300,
-    )
+    with gr.Row():
+        gr.Markdown(
+            """<div style="text-align: center; color: #64748b; font-size: 0.85em; padding: 8px;">
+            🔴 prompt tokens/sec &nbsp;&nbsp;|&nbsp;&nbsp; 🟢 generation tokens/sec
+            &nbsp;&nbsp;|&nbsp;&nbsp; auto-refresh every {PUBLIC_REFRESH_SECONDS}s
+            </div>"""
+        )
 
     # Hidden refresh button triggered by JS timer
     refresh_btn = gr.Button("Refresh", visible=False, elem_id="auto-refresh-btn")
@@ -688,7 +722,7 @@ with gr.Blocks(title="AshatOS Neural Host", head=AUTO_REFRESH_JS) as _demo:
         concurrency_limit=1,
     )
 
-    # -- Private Gradio API endpoints (AshatOS communication only) --    # -- Private Gradio API endpoints (AshatOS communication only) --
+    # -- Private Gradio API endpoints (AshatOS communication only) --    # -- Private Gradio API endpoints (AshatOS communication only) --    # -- Private Gradio API endpoints (AshatOS communication only) --
     # Note: BOTH funnels into _run_pipeline; the only difference is the
     # fixed lane (route_hint) for routing and the response shape
     # (json.dumps for Gradio queue API vs. JSONResponse for FastAPI).
