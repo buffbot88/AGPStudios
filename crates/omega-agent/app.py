@@ -29,6 +29,14 @@ import gradio as gr
 import requests
 from huggingface_hub import hf_hub_download
 
+# ZeroGPU compatibility: the Hugging Face Spaces zeroGPU runtime requires
+# a @spaces.GPU-decorated function to be present and called during startup.
+# If `spaces` isn't available (local dev, CPU Spaces), this is a no-op.
+try:
+    from spaces import GPU as spaces_gpu
+except ImportError:
+    spaces_gpu = lambda f: f  # no-op fallback decorator
+
 # ---------------------------------------------------------------------------
 # 1.  Model definitions (preserved from original app.py)
 # ---------------------------------------------------------------------------
@@ -887,10 +895,29 @@ atexit.register(stop_all_servers)
 # 13.  Gradio UI
 # ---------------------------------------------------------------------------
 
+@spaces_gpu
+def _zero_gpu_init() -> None:
+    """Signal to the zeroGPU runtime that this Space uses GPU resources.
+    The decorator keeps the GPU allocated while this function runs.
+    Since our llama-server subprocesses need persistent GPU access, this
+    function runs the entire server lifecycle and blocks indefinitely."""
+    _llama_bin_local = start_all_servers()
+    if not _llama_bin_local:
+        _log.warning("llama-server not available — UI will launch in degraded mode")
+        return
+    # Block forever to keep the GPU allocated for the subprocesses.
+    import threading
+    threading.Event().wait()
+
+
 # Start servers at import time (before Gradio launches)
-_llama_bin = start_all_servers()
-if not _llama_bin:
-    _log.warning("llama-server not available — UI will launch in degraded mode")
+# For zeroGPU, this runs inside @spaces_gpu to keep GPU allocated.
+import threading
+_gpu_thread = threading.Thread(target=_zero_gpu_init, daemon=True)
+_gpu_thread.start()
+# Give it a moment to start before the UI builds
+import time
+time.sleep(1)
 
 with gr.Blocks(
     title="AshatOS Dual llama-server",
