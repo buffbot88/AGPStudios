@@ -310,8 +310,14 @@ def _run_pipeline(lane: Lane, payload: dict[str, Any]) -> dict[str, Any]:
         )
         return _build_failure_envelope(lane, request_id, exc)
 
+    # On ZeroGPU, CUDA is managed by the spaces package at the Python
+    # level. The llama-server subprocess must not request GPU offload
+    # (the -ngl flag) because it runs in a non-CUDA environment.
+    _is_zerogpu = bool(int(os.environ.get("SPACES_ZERO_GPU", "0")))
     try:
-        with _BACKEND_LAUNCHER.launch(lane) as backend:
+        with _BACKEND_LAUNCHER.launch(
+            lane, gpu_offload_requested=not _is_zerogpu,
+        ) as backend:
             _active_processes.append(backend.process)
             try:
                 completion = _COMPLETION_CLIENT.complete(backend, lane, payload)
@@ -371,12 +377,12 @@ def _make_internal_error(message: str):
 # 7.  @spaces.GPU wrappers — one entry per lane
 # ──────────────────────────────────────────────────────────────────────────
 
-@spaces.GPU(duration=_MICRO_GPU_DURATION)
+@spaces.GPU
 def _execute_microbrain_gpu(payload: dict[str, Any]) -> dict[str, Any]:
     return _run_pipeline(Lane.MICROBRAIN, payload)
 
 
-@spaces.GPU(duration=_MAIN_GPU_DURATION)
+@spaces.GPU
 def _execute_mainbrain_gpu(payload: dict[str, Any]) -> dict[str, Any]:
     return _run_pipeline(Lane.MAINBRAIN, payload)
 
@@ -551,16 +557,7 @@ def _status_html() -> str:
     return _snapshot().render_html()
 
 
-def _refresh_metrics_body() -> tuple:
-    """Tick callback for the Gradio dashboard — drives plot frames + events."""
-    frames = _snapshot().render_frames()
-    return (
-        frames["microbrain"],       # microbrain gen-plot
-        frames["microbrain"],       # microbrain latency-plot (same data)
-        frames["mainbrain"],        # mainbrain gen-plot
-        frames["mainbrain"],        # mainbrain latency-plot (same data)
-        frames["events"],           # events table
-    )
+
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -623,107 +620,89 @@ async def http_public_metrics() -> JSONResponse:
     return JSONResponse(content=_snapshot().render_metrics())
 
 
-# === Gradio dashboard ===
 
-JAVASCRIPT_REFRESH = f"""
-<script>
-setInterval(function() {{
-    var btn = document.querySelector('#refresh-status-btn');
-    if (btn) btn.click();
-}}, {PUBLIC_REFRESH_SECONDS * 1000});
-</script>
-"""
+
+
+AUTO_REFRESH_JS = """<script>
+function updateCards() {
+    fetch('/api/public_metrics')
+        .then(r => r.json())
+        .then(data => {
+            var mb = data.summaries.microbrain || {};
+            var M = data.summaries.mainbrain || {};
+            document.getElementById('mb-prompt').textContent = Math.round(mb.avg_prompt_tokens_per_second || 0);
+            document.getElementById('mb-gen').textContent = Math.round(mb.avg_generation_tokens_per_second || 0);
+            document.getElementById('mb-req').textContent = mb.total_requests || 0;
+            document.getElementById('M-prompt').textContent = Math.round(M.avg_prompt_tokens_per_second || 0);
+            document.getElementById('M-gen').textContent = Math.round(M.avg_generation_tokens_per_second || 0);
+            document.getElementById('M-req').textContent = M.total_requests || 0;
+        }).catch(function(){});
+}
+document.addEventListener('DOMContentLoaded', function() { updateCards(); });
+setInterval(updateCards, 10000);
+</script>"""
 
 with gr.Blocks(title="AshatOS Neural Host") as _demo:
     gr.HTML(
         """
-        <div style="text-align: center; padding: 20px;">
-            <h1 style="margin: 0; font-size: 2em;">🧠 ASHAT NEURAL HOST</h1>
-            <p style="color: #888; font-size: 1.1em;">Dual-Lane Inference Telemetry</p>
+        <div style="text-align: center; padding: 24px 20px 8px;">
+            <h1 style="margin: 0; font-size: 2em; font-weight: 700;
+                background: linear-gradient(135deg, #a78bfa, #67e8f9);
+                -webkit-background-clip: text;">
+                🧠 ASHAT NEURAL HOST</h1>
+            <p style="color: #94a3b8; font-size: 0.9em; margin: 4px 0 0;">
+                Dual-Lane Inference</p>
         </div>
         """
     )
 
-    status_display = gr.HTML(value=_status_html())
-
-    with gr.Row():
-        refresh_btn = gr.Button(
-            "🔄 Refresh Status",
-            variant="secondary",
-            elem_id="refresh-status-btn",
-        )
-
-    gr.Markdown("## Performance Metrics")
-
-    with gr.Tabs():
-        with gr.TabItem("MicroBrain"):
-            micro_gen_plot = gr.LinePlot(
-                x="timestamp", y="generation_tokens_per_second",
-                title="Generation Tokens/sec (MicroBrain)",
+    with gr.Row(equal_height=True):
+        with gr.Column(scale=1, min_width=360):
+            gr.HTML(
+                """
+                <div style="border:1px solid #334155;border-radius:12px;padding:16px;background:#1e293b;font-family:monospace;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                        <span style="font-size:1.2em;font-weight:700;color:#e2e8f0;">MicroBrain</span>
+                        <span style="color:#22c55e;font-size:0.75em;">&#x25CF; active</span>
+                    </div>
+                    <div style="color:#94a3b8;font-size:0.75em;margin-bottom:10px;">
+                        LFM2.5-350M-Q6_K.gguf &middot; 4096 ctx &middot; <span id="mb-req">0</span> req
+                    </div>
+                    <div style="display:flex;gap:20px;">
+                        <div><div style="color:#f87171;font-size:0.65em;">prompt</div>
+                            <div style="font-size:1.5em;font-weight:700;color:#fca5a5;" id="mb-prompt">0</div>
+                            <div style="color:#64748b;font-size:0.6em;">tok/s</div></div>
+                        <div><div style="color:#4ade80;font-size:0.65em;">gen</div>
+                            <div style="font-size:1.5em;font-weight:700;color:#86efac;" id="mb-gen">0</div>
+                            <div style="color:#64748b;font-size:0.6em;">tok/s</div></div>
+                    </div>
+                </div>
+                """
             )
-            micro_latency_plot = gr.LinePlot(
-                x="timestamp", y="total_latency_ms",
-                title="Total Latency (MicroBrain)",
+        with gr.Column(scale=1, min_width=360):
+            gr.HTML(
+                """
+                <div style="border:1px solid #334155;border-radius:12px;padding:16px;background:#1e293b;font-family:monospace;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                        <span style="font-size:1.2em;font-weight:700;color:#e2e8f0;">MainBrain</span>
+                        <span style="color:#22c55e;font-size:0.75em;">&#x25CF; active</span>
+                    </div>
+                    <div style="color:#94a3b8;font-size:0.75em;margin-bottom:10px;">
+                        LFM2.5-1.2B-Instruct-Q6_K.gguf &middot; 8192 ctx &middot; <span id="M-req">0</span> req
+                    </div>
+                    <div style="display:flex;gap:20px;">
+                        <div><div style="color:#f87171;font-size:0.65em;">prompt</div>
+                            <div style="font-size:1.5em;font-weight:700;color:#fca5a5;" id="M-prompt">0</div>
+                            <div style="color:#64748b;font-size:0.6em;">tok/s</div></div>
+                        <div><div style="color:#4ade80;font-size:0.65em;">gen</div>
+                            <div style="font-size:1.5em;font-weight:700;color:#86efac;" id="M-gen">0</div>
+                            <div style="color:#64748b;font-size:0.6em;">tok/s</div></div>
+                    </div>
+                </div>
+                """
             )
-        with gr.TabItem("MainBrain"):
-            main_gen_plot = gr.LinePlot(
-                x="timestamp", y="generation_tokens_per_second",
-                title="Generation Tokens/sec (MainBrain)",
-            )
-            main_latency_plot = gr.LinePlot(
-                x="timestamp", y="total_latency_ms",
-                title="Total Latency (MainBrain)",
-            )
-
-    gr.Markdown("## Recent Events")
-    events_display = gr.Dataframe(
-        headers=["Event"],
-        label="Recent Events",
-        row_count=10,
-    )
-
-    with gr.Accordion("Configuration", open=False):
-        gr.Markdown(f"""
-        ### Lane Configuration
-
-        | Setting | MicroBrain | MainBrain |
-        |---|---|---|
-        | Model | `{lane_cfg(Lane.MICROBRAIN)['file']}` | `{lane_cfg(Lane.MAINBRAIN)['file']}` |
-        | Context | {lane_cfg(Lane.MICROBRAIN)['ctx']} | {lane_cfg(Lane.MAINBRAIN)['ctx']} |
-        | Max tokens | {lane_cfg(Lane.MICROBRAIN)['max_tokens']} | {lane_cfg(Lane.MAINBRAIN)['max_tokens']} |
-        | GPU duration | {lane_cfg(Lane.MICROBRAIN)['gpu_duration']}s | {lane_cfg(Lane.MAINBRAIN)['gpu_duration']}s |
-
-        ### Runtime
-
-        - `LLAMA_SERVER_PORT`: {LLAMA_SERVER_PORT}
-        - `N_THREADS`: {N_THREADS} | `N_BATCH`: {N_BATCH}
-        - `PUBLIC_REFRESH_SECONDS`: {PUBLIC_REFRESH_SECONDS}
-        - `QUEUE_LIMIT`: {QUEUE_LIMIT}
-        """)
-
-    refresh_btn.click(
-        fn=lambda: _status_html(),
-        inputs=[],
-        outputs=status_display,
-        api_name="status",
-        concurrency_limit=1,
-    )
-
-    _demo.load(
-        fn=_refresh_metrics_body,
-        inputs=[],
-        outputs=[
-            micro_gen_plot, micro_latency_plot,
-            main_gen_plot, main_latency_plot,
-            events_display,
-        ],
-        concurrency_limit=1,
-    )
 
     # -- Private Gradio API endpoints (AshatOS communication only) --
-    # Note: BOTH funnels into _run_pipeline; the only difference is the
-    # fixed lane (route_hint) for routing and the response shape
-    # (json.dumps for Gradio queue API vs. JSONResponse for FastAPI).
     _micro_input = gr.Textbox(visible=False, value="{}", label="microbrain_payload")
     _micro_trigger = gr.Button(visible=False, elem_id="_micro_trigger")
     _micro_trigger.click(
@@ -763,10 +742,6 @@ with gr.Blocks(title="AshatOS Neural Host") as _demo:
     )
 
 
-# ──────────────────────────────────────────────────────────────────────────
-# 11.  Startup
-# ──────────────────────────────────────────────────────────────────────────
-
 def startup() -> None:
     global _llama_bin_path
     _log.info("=" * 60)
@@ -779,24 +754,55 @@ def startup() -> None:
     else:
         _log.warning("llama-server binary not available — degraded mode")
 
+    if _llama_bin_path:
+        for lane in (Lane.MICROBRAIN, Lane.MAINBRAIN):
+            try:
+                _BACKEND_LAUNCHER.ensure_model(lane)
+                _log.info("%s model cached: %s", lane.value,
+                          LANE_CONFIG[lane]["model_path"])
+            except Exception as exc:
+                _log.warning("%s model pre-download failed: %s",
+                             lane.value, exc)
+
 
 startup()
 
+# ── Sync startup report (lets ZeroGPU platform confirm readiness) ────
+try:
+    from spaces.config import Config as _SC
+    if _SC.zero_gpu:
+        from spaces.zero import client as _zclient
+        _zclient.startup_report()
+        _log.info("startup_report sent")
+except Exception as exc:
+    _log.warning("startup_report failed: %s", exc)
+
 
 # ──────────────────────────────────────────────────────────────────────────
-# 12.  Mount Gradio on FastAPI and launch
+# 12.  Launch — HF Spaces serves the demo. Gradio's internal FastAPI app
+#      (demo.app) is available after queue() is called. We add the
+#      OpenAI-compatible /v1/chat/completions route to it so AshatOS
+#      can connect with the standard OpenAI format.
 # ──────────────────────────────────────────────────────────────────────────
 
 _demo.queue(default_concurrency_limit=1, max_size=QUEUE_LIMIT)
 
-app = gr.mount_gradio_app(
-    _fastapi_app, _demo, path="/",
-    theme=gr.themes.Soft(),
-    head=JAVASCRIPT_REFRESH,
-)
+# Register the /v1/chat/completions endpoint on Gradio's internal app
+# so it's served on the same port as the Gradio UI.
+_GRADIO_INTERNAL = getattr(_demo, "app", None)
+if _GRADIO_INTERNAL is not None:
+    from fastapi import APIRouter
+    _router = APIRouter()
+    for route in _fastapi_app.routes:
+        _router.routes.append(route)
+    _GRADIO_INTERNAL.include_router(_router)
+    _log.info("FastAPI routes mounted on Gradio internal app")
+else:
+    _log.warning("Gradio internal app not available — FastAPI routes not served")
 
+app = _demo
 
 if __name__ == "__main__":
-    if not os.getenv("SPACE_ID"):  # HF Spaces auto-serves the app
-        import uvicorn
-        uvicorn.run(app, host="0.0.0.0", port=7860)
+    _demo.launch(server_name="0.0.0.0", server_port=7860,
+                   show_error=True, head=AUTO_REFRESH_JS,
+                   theme=gr.themes.Soft())

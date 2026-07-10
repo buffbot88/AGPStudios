@@ -146,14 +146,14 @@ class TestCompletionClient(unittest.TestCase):
         ok_resp = mock.Mock(status_code=200)
         ok_resp.json.return_value = ok_body
         with mock.patch("requests.post", return_value=ok_resp) as post:
-            # Caller asks for 99999 — must be capped at lane's max_tokens (128).
+            # Caller asks for 99999 — must be capped at lane's max_tokens (4096).
             self.client.complete(
                 _make_live_backend(), Lane.MICROBRAIN,
                 {"messages": [{"role": "user", "content": "Hi"}],
                  "max_tokens": 99999},
             )
         kwargs = post.call_args.kwargs
-        self.assertEqual(kwargs["json"]["max_tokens"], 128)
+        self.assertEqual(kwargs["json"]["max_tokens"], 4096)
 
 
 if __name__ == "__main__":

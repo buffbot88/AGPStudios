@@ -177,7 +177,9 @@ class BackendLauncher:
         except ModelDownloadError:
             raise
 
-        cmd = self._build_command(binary, model_path, cfg["ctx"])
+        _offload = gpu_offload_requested
+        cmd = self._build_command(binary, model_path, cfg["ctx"],
+                                  gpu_offload=_offload)
         start_t = time.perf_counter()
         try:
             proc = subprocess.Popen(
@@ -223,10 +225,9 @@ class BackendLauncher:
                     f"llama-server did not become healthy on port {self.port}"
                 )
 
-            # Give the reader thread a brief moment to drain any pending
-            # bytes that arrived after /health returned 200. 200ms is
-            # plenty; the offload line is emitted well before /health.
-            _drain_stderr(parser, proc.stderr, max_wait=0.2)
+            # Wait for the offload line deterministically via the
+            # parser's threading.Event (replaces old timing-based drain).
+            parser.await_offload(timeout=2.0)
             result = parser.finalize()
         except Exception:
             # On any error from this branch, terminate the subprocess so we
@@ -283,7 +284,8 @@ class BackendLauncher:
 
     # ── Private ───────────────────────────────────────────────────────
 
-    def _build_command(self, binary: str, model_path: str, ctx: int) -> list[str]:
+    def _build_command(self, binary: str, model_path: str, ctx: int,
+                        gpu_offload: bool = True) -> list[str]:
         return [
             binary,
             "--host", "127.0.0.1",
@@ -292,7 +294,7 @@ class BackendLauncher:
             "-c", str(ctx),
             "-t", str(self.n_threads),
             "-b", str(self.n_batch),
-            "-ngl", "999",
+            "-ngl", "999" if gpu_offload else "0",
         ]
 
     def _wait_for_health(
@@ -345,32 +347,3 @@ def _stderr_reader_loop(stderr_file, parser: LlamaServerStderrParser) -> None:
             pass
 
 
-def _drain_stderr(
-    parser: LlamaServerStderrParser,
-    stderr_file,
-    *,
-    max_wait: float = 0.2,
-) -> None:
-    """After /health returns 200, give the reader a brief moment to drain.
-
-    The offload-emit line is well before /health in real llama.cpp
-    behavior, but a few hundred milliseconds of grace eliminates a near-
-    zero race in the parser when stderr buffers are full.
-    """
-    if stderr_file is None:
-        return
-    deadline = time.monotonic() + max_wait
-    while time.monotonic() < deadline:
-        # Push any pending buffered bytes into the parser.
-        try:
-            raw = stderr_file.read1(8192)
-        except Exception:
-            return
-        if not raw:
-            return
-        for chunk in raw.splitlines():
-            try:
-                parser.feed(chunk.decode("utf-8", errors="replace"))
-            except Exception:
-                pass
-        time.sleep(0.01)

@@ -49,7 +49,7 @@ _log = logging.getLogger("ashatos")
 # ──────────────────────────────────────────────────────────────────────────
 
 LLAMA_SERVER_VERSION: str = os.getenv("LLAMA_SERVER_VERSION", "b9945")
-LLAMA_SERVER_HF_REPO: str = os.getenv("LLAMA_SERVER_HF_REPO", "RipBuffy/llama-server-mirror")
+LLAMA_SERVER_HF_REPO: str = os.getenv("LLAMA_SERVER_HF_REPO", "stressthismess/llama-server-mirror")
 LLAMA_SERVER_HF_FILE: str = os.getenv("LLAMA_SERVER_HF_FILE", "")
 LLAMA_SERVER_PATH: str = os.getenv("LLAMA_SERVER_PATH", "").strip()
 USER_AGENT: str = "AshatOS-NeuralHost"
