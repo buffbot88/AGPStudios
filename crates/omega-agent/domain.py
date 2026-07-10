@@ -85,11 +85,15 @@ LANE_CONFIG: dict[Lane, dict[str, Any]] = _build_lane_config()
 MICROBRAIN_ALIASES.update({
     "microbrain",
     "ashat-microbrain",
+    "LFM2.5 350M",
+    "LFM2.5-350M",
     LANE_CONFIG[Lane.MICROBRAIN]["file"],
 })
 MAINBRAIN_ALIASES.update({
     "mainbrain",
     "ashat-mainbrain",
+    "LFM2.5 1.2B Instruct",
+    "LFM2.5-1.2B",
     LANE_CONFIG[Lane.MAINBRAIN]["file"],
 })
 MICROBRAIN_ALIASES.discard("")
