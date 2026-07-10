@@ -903,29 +903,18 @@ atexit.register(stop_all_servers)
 # 13.  Gradio UI
 # ---------------------------------------------------------------------------
 
+# Start servers synchronously at module level, wrapped by @spaces_gpu so the
+# zeroGPU runtime allocates GPU for the subprocesses' entire lifetime.
 @spaces_gpu
-def _zero_gpu_init() -> None:
-    """Signal to the zeroGPU runtime that this Space uses GPU resources.
-    The decorator keeps the GPU allocated while this function runs.
-    Since our llama-server subprocesses need persistent GPU access, this
-    function runs the entire server lifecycle and blocks indefinitely."""
-    _llama_bin_local = start_all_servers()
-    if not _llama_bin_local:
-        _log.warning("llama-server not available — UI will launch in degraded mode")
-        return
-    # Block forever to keep the GPU allocated for the subprocesses.
-    import threading
-    threading.Event().wait()
+def _start_with_gpu() -> str | None:
+    """Call start_all_servers under the @spaces_gpu decorator so the zeroGPU
+    runtime allocates GPU resources for the full duration."""
+    return start_all_servers()
 
 
-# Start servers at import time (before Gradio launches)
-# For zeroGPU, this runs inside @spaces_gpu to keep GPU allocated.
-import threading
-_gpu_thread = threading.Thread(target=_zero_gpu_init, daemon=True)
-_gpu_thread.start()
-# Give it a moment to start before the UI builds
-import time
-time.sleep(1)
+_llama_bin = _start_with_gpu()
+if not _llama_bin:
+    _log.warning("llama-server not available — UI will launch in degraded mode")
 
 with gr.Blocks(
     title="AshatOS Dual llama-server",
