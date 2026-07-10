@@ -450,6 +450,7 @@ _fastapi_app = FastAPI(title="AshatOS Neural Host")
 
 @_fastapi_app.get("/health")
 async def http_health() -> JSONResponse:
+    """Boring, static health check — no I/O, no locks, no imports."""
     return JSONResponse(content={
         "status": "ok",
         "app": "ashat-neural-host",
@@ -633,7 +634,10 @@ with gr.Blocks(title="AshatOS Neural Host") as _demo:
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# 9.  Mount Gradio on FastAPI — completes quickly, no blocking I/O
+# 9.  Mount Gradio on FastAPI — completes quickly, no blocking I/O.
+#     NO import-time I/O below this line. startup_report, llama-server
+#     install, env scanning, and model downloads all run via Gradio's
+#     queue (demo.load) after the first page load, not during import.
 # ──────────────────────────────────────────────────────────────────────────
 
 _demo.queue(default_concurrency_limit=1, max_size=QUEUE_LIMIT)
@@ -644,26 +648,32 @@ app = gr.mount_gradio_app(
     head=JAVASCRIPT_REFRESH,
 )
 
+# ── Lazy initialization — runs inside Gradio's queue on first load ──
+#     All I/O happens here: startup_report, binary install, model check.
+#     The @spaces.GPU scanner finds our functions (decorated at import),
+#     and the platform's Blocks.launch() calls spaces.zero.startup()
+#     through the one_launch patch automatically.
 
-# ──────────────────────────────────────────────────────────────────────────
-# 10.  Background initialization — runs AFTER app construction
-#      Everything that does I/O: llama-server install, startup_report, etc.
-# ──────────────────────────────────────────────────────────────────────────
 
-def _background_init() -> None:
-    """Run expensive startup work in a daemon thread so /health isn't blocked."""
+def _lazy_init() -> str:
+    """Called by demo.load — runs in Gradio's queue, not during import."""
     global _llama_bin_path, _init_done, _init_error
+
+    # Idempotent guard.
+    if _init_done:
+        return "ready"
+
     _log.info("=" * 60)
-    _log.info("AshatOS Neural I/O Host — background init start")
+    _log.info("AshatOS Neural I/O Host — lazy init start")
     _log.info("=" * 60)
 
-    # 1. Probe environment (fast, no network)
+    # 1. Environment probe (fast, no network)
     try:
         scan_and_report()
     except Exception as exc:
-        _log.warning("env_scanner failed: %s", exc)
+        _log.warning("env_scanner: %s", exc)
 
-    # 2. Register GPU functions with spaces package
+    # 2. Belt-and-suspenders GPU registration
     for fn, dur in [
         (gradio_microbrain, 60),
         (gradio_mainbrain, 120),
@@ -674,46 +684,31 @@ def _background_init() -> None:
         except Exception:
             pass
 
-    # 3. Install / detect llama-server binary (network I/O)
+    # 3. llama-server binary install (network I/O, may take seconds)
     try:
         _llama_bin_path = ensure_llama_server()
         if _llama_bin_path:
-            _log.info("llama-server binary: %s", _llama_bin_path)
+            _log.info("llama-server: %s", _llama_bin_path)
         else:
-            _log.warning("llama-server binary not available — degraded mode")
+            _log.warning("llama-server not available — degraded mode")
     except Exception as exc:
         _init_error = f"llama-server install failed: {exc}"
         _log.error(_init_error)
 
-    # 4. torch.pack() is already called by the SYNC startup() above.
-    #     No need to duplicate here — the background thread handles
-    #     only binary install and model readiness, not GPU registration.
-
     _init_done = True
-    _log.info("AshatOS background init complete. "
-              "binary=%s error=%s", _llama_bin_path, _init_error)
+    msg = f"binary={'ok' if _llama_bin_path else 'missing'} error={_init_error}"
+    _log.info("lazy init complete: %s", msg)
+    return msg
 
 
-# ── Synchronous ZeroGPU startup report ─────────────────────────────
-# Sends the startup report to the device API so the platform knows
-# our @spaces.GPU decorated functions are ready. The full
-# spaces.zero.startup() (with config.get_config + torch.pack) is
-# called by the gradio.one_launch() patch when the platform
-# calls Blocks.launch() — calling it twice would be harmful.
-try:
-    from spaces.config import Config as _SC
-    if _SC.zero_gpu:
-        from spaces.zero import client as _zclient
-        _zclient.startup_report()
-        _log.info("SYNC startup_report sent (HTTP 200)")
-except Exception as exc:
-    _log.warning("SYNC startup_report failed (non-fatal): %s", exc)
-
-# Start background init in a daemon thread — never blocks app startup.
-threading.Thread(target=_background_init, daemon=True, name="ashatos-init").start()
+# Wire the lazy init to demo.load — runs when the first browser opens the UI.
+# This does NOT block app import. Gradio queues it safely.
+_demo.load(fn=_lazy_init, inputs=None, outputs=None, concurrency_limit=1)
 
 
 if __name__ == "__main__":
     if not os.getenv("SPACE_ID"):  # HF Spaces auto-serves the app
         import uvicorn
+        # Note: on HF Spaces the platform manages the server.
+        # This block only runs in local dev.
         uvicorn.run(app, host="0.0.0.0", port=7860)
