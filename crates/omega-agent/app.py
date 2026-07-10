@@ -853,14 +853,15 @@ def status_text() -> str:
 # 11.  Gradio event handlers
 # ---------------------------------------------------------------------------
 
-def handle_chat(model_name: str, message: str, chat_history: list[list[str]],
-                max_tokens: int, temperature: float, top_p: float) -> tuple[list[list[str]], list[list[str]], str]:
-    """Process a chat message, append to history, return (state, chatbot, "")."""
+def handle_chat(model_name: str, message: str, chat_history: list[dict],
+                max_tokens: int, temperature: float, top_p: float) -> tuple[list[dict], list[dict], str]:
+    """Process a chat message, append to history, return (state, chatbot, "").
+    Uses Gradio 6.x "messages" format: [{"role": ..., "content": ...}, ...]"""
     if not message or not message.strip():
         return chat_history, chat_history, ""
 
     # Append user message to history
-    chat_history.append([message, None])
+    chat_history.append({"role": "user", "content": message})
 
     result = call_llama_server(
         model_name=model_name,
@@ -875,8 +876,7 @@ def handle_chat(model_name: str, message: str, chat_history: list[list[str]],
     else:
         response = f"**Error:** {result.get('error', 'unknown error')}"
 
-    # Update the last entry with the response
-    chat_history[-1][1] = response
+    chat_history.append({"role": "assistant", "content": response})
     return chat_history, chat_history, ""
 
 
@@ -994,7 +994,7 @@ with gr.Blocks(
         )
 
         clear_btn.click(
-            fn=lambda: ([], ""),
+            fn=lambda: ([], []),
             inputs=[],
             outputs=[chat_state, chatbot],
         )
