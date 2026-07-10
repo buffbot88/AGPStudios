@@ -177,7 +177,9 @@ class BackendLauncher:
         except ModelDownloadError:
             raise
 
-        cmd = self._build_command(binary, model_path, cfg["ctx"])
+        _offload = gpu_offload_requested
+        cmd = self._build_command(binary, model_path, cfg["ctx"],
+                                  gpu_offload=_offload)
         start_t = time.perf_counter()
         try:
             proc = subprocess.Popen(
@@ -282,7 +284,8 @@ class BackendLauncher:
 
     # ── Private ───────────────────────────────────────────────────────
 
-    def _build_command(self, binary: str, model_path: str, ctx: int) -> list[str]:
+    def _build_command(self, binary: str, model_path: str, ctx: int,
+                        gpu_offload: bool = True) -> list[str]:
         return [
             binary,
             "--host", "127.0.0.1",
@@ -291,7 +294,7 @@ class BackendLauncher:
             "-c", str(ctx),
             "-t", str(self.n_threads),
             "-b", str(self.n_batch),
-            "-ngl", "999",
+            "-ngl", "999" if gpu_offload else "0",
         ]
 
     def _wait_for_health(

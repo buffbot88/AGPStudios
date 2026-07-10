@@ -310,8 +310,14 @@ def _run_pipeline(lane: Lane, payload: dict[str, Any]) -> dict[str, Any]:
         )
         return _build_failure_envelope(lane, request_id, exc)
 
+    # On ZeroGPU, CUDA is managed by the spaces package at the Python
+    # level. The llama-server subprocess must not request GPU offload
+    # (the -ngl flag) because it runs in a non-CUDA environment.
+    _is_zerogpu = bool(int(os.environ.get("SPACES_ZERO_GPU", "0")))
     try:
-        with _BACKEND_LAUNCHER.launch(lane) as backend:
+        with _BACKEND_LAUNCHER.launch(
+            lane, gpu_offload_requested=not _is_zerogpu,
+        ) as backend:
             _active_processes.append(backend.process)
             try:
                 completion = _COMPLETION_CLIENT.complete(backend, lane, payload)
