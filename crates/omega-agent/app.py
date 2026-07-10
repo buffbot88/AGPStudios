@@ -792,6 +792,18 @@ def startup() -> None:
     else:
         _log.warning("llama-server binary not available — degraded mode")
 
+    # Pre-download models so they are ready on first request.
+    # Models are cached by huggingface_hub after first download.
+    if _llama_bin_path:
+        for lane in (Lane.MICROBRAIN, Lane.MAINBRAIN):
+            try:
+                _BACKEND_LAUNCHER.ensure_model(lane)
+                _log.info("%s model cached: %s", lane.value,
+                          LANE_CONFIG[lane]["model_path"])
+            except Exception as exc:
+                _log.warning("%s model pre-download failed: %s",
+                             lane.value, exc)
+
 
 startup()
 
