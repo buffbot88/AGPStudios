@@ -819,14 +819,21 @@ except Exception as exc:
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# 12.  Standard Gradio launch — HF Spaces serves the demo directly
-#      Using demo.launch() instead of mount_gradio_app() for ZeroGPU compat.
-#      The FastAPI routes are not served — use Gradio API endpoints instead.
+# 12.  Mount Gradio on FastAPI — serves both the dashboard UI and the
+#      OpenAI-compatible /v1/chat/completions endpoint that AshatOS uses.
+#      The sync token (AshatOS-00192) is accepted as X-Ashat-Key.
 # ──────────────────────────────────────────────────────────────────────────
 
 _demo.queue(default_concurrency_limit=1, max_size=QUEUE_LIMIT)
 
-app = _demo
+app = gr.mount_gradio_app(
+    _fastapi_app, _demo, path="/",
+    theme=gr.themes.Soft(),
+    head=JAVASCRIPT_REFRESH,
+)
+
 
 if __name__ == "__main__":
-    _demo.launch(server_name="0.0.0.0", server_port=7860, show_error=True)
+    if not os.getenv("SPACE_ID"):
+        import uvicorn
+        uvicorn.run(app, host="0.0.0.0", port=7860)

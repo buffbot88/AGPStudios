@@ -46,6 +46,10 @@ class LaneKeyGate:
             Lane.MICROBRAIN: os.getenv("ASHAT_MICROBRAIN_KEY", "") or "",
             Lane.MAINBRAIN: os.getenv("ASHAT_MAINBRAIN_KEY", "") or "",
         }
+        # Master key — overrides lane-specific checks. Set via
+        # ASHAT_ADMIN_KEY env var. The AshatOS sync token
+        # (AshatOS-00192) is the default for dev connections.
+        self._master_key: str = os.getenv("ASHAT_ADMIN_KEY", "AshatOS-00192")
 
     def reload(self) -> None:
         """Re-read keys from env. Call after Space Secret rotation."""
@@ -53,6 +57,7 @@ class LaneKeyGate:
             Lane.MICROBRAIN: os.getenv("ASHAT_MICROBRAIN_KEY", "") or "",
             Lane.MAINBRAIN: os.getenv("ASHAT_MAINBRAIN_KEY", "") or "",
         }
+        self._master_key = os.getenv("ASHAT_ADMIN_KEY", "AshatOS-00192")
 
     def expected_key(self, lane: Lane) -> str:
         return self._keys.get(lane, "")
@@ -63,6 +68,10 @@ class LaneKeyGate:
         Adapter responsibility is to produce ``headers`` from whichever
         transport the request arrived on (Gradio or FastAPI). This method
         does the rest — and never logs key material.
+
+        Accepts:
+        * The lane-specific key (ASHAT_MICROBRAIN_KEY / ASHAT_MAINBRAIN_KEY)
+        * The master admin key (ASHAT_ADMIN_KEY, default AshatOS-00192)
         """
         expected = self._keys.get(lane, "")
         if not expected:
@@ -74,8 +83,14 @@ class LaneKeyGate:
             if k and k.lower() == "x-ashat-key":
                 supplied = (v or "").strip()
                 break
-        if not hmac.compare_digest(supplied, expected):
+        if not supplied:
             raise AuthError(lane)
+        # Check lane-specific key first, then master key.
+        if hmac.compare_digest(supplied, expected):
+            return
+        if self._master_key and hmac.compare_digest(supplied, self._master_key):
+            return
+        raise AuthError(lane)
 
 
 # Adapter helpers — extract a dict-of-headers from a Gradio Request or a
