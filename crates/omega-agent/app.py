@@ -819,15 +819,26 @@ except Exception as exc:
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# 12.  Standard Gradio launch — HF Spaces serves the demo directly.
-#      The FastAPI routes remain defined but unreachable (dead code).
-#      AshatOS connects via the Gradio API endpoints for now:
-#        POST /gradio_api/call/microbrain  (X-Ashat-Key: AshatOS-00192)
-#      The /v1/chat/completions endpoint requires mount_gradio_app(),
-#      which has ZeroGPU compatibility issues. Tracked for a future fix.
+# 12.  Launch — HF Spaces serves the demo. Gradio's internal FastAPI app
+#      (demo.app) is available after queue() is called. We add the
+#      OpenAI-compatible /v1/chat/completions route to it so AshatOS
+#      can connect with the standard OpenAI format.
 # ──────────────────────────────────────────────────────────────────────────
 
 _demo.queue(default_concurrency_limit=1, max_size=QUEUE_LIMIT)
+
+# Register the /v1/chat/completions endpoint on Gradio's internal app
+# so it's served on the same port as the Gradio UI.
+_GRADIO_INTERNAL = getattr(_demo, "app", None)
+if _GRADIO_INTERNAL is not None:
+    from fastapi import APIRouter
+    _router = APIRouter()
+    for route in _fastapi_app.routes:
+        _router.routes.append(route)
+    _GRADIO_INTERNAL.include_router(_router)
+    _log.info("FastAPI routes mounted on Gradio internal app")
+else:
+    _log.warning("Gradio internal app not available — FastAPI routes not served")
 
 app = _demo
 
