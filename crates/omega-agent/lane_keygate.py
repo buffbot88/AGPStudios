@@ -69,28 +69,43 @@ class LaneKeyGate:
         transport the request arrived on (Gradio or FastAPI). This method
         does the rest — and never logs key material.
 
-        Accepts:
-        * The lane-specific key (ASHAT_MICROBRAIN_KEY / ASHAT_MAINBRAIN_KEY)
-        * The master admin key (ASHAT_ADMIN_KEY, default AshatOS-00192)
+        Accepts key from:
+        * ``X-Ashat-Key`` header (AshatOS protocol)
+        * ``Authorization: Bearer <key>`` header (OpenAI-compatible standard)
+        * Lane-specific key (ASHAT_MICROBRAIN_KEY / ASHAT_MAINBRAIN_KEY)
+        * Master admin key (ASHAT_ADMIN_KEY, default AshatOS-00192)
         """
         expected = self._keys.get(lane, "")
         if not expected:
-            # No key configured → allow (dev / open Space).
             return
-        # Look up case-insensitively but compare exactly.
-        supplied = ""
-        for k, v in headers.items():
-            if k and k.lower() == "x-ashat-key":
-                supplied = (v or "").strip()
-                break
+        supplied = self._extract_key(headers)
         if not supplied:
             raise AuthError(lane)
-        # Check lane-specific key first, then master key.
         if hmac.compare_digest(supplied, expected):
             return
         if self._master_key and hmac.compare_digest(supplied, self._master_key):
             return
         raise AuthError(lane)
+
+    @staticmethod
+    def _extract_key(headers: Mapping[str, str]) -> str:
+        """Extract the API key from request headers.
+
+        Checks in order:
+        1. X-Ashat-Key header
+        2. Authorization: Bearer <token> header
+        """
+        for k, v in headers.items():
+            kl = k.lower() if isinstance(k, str) else ""
+            if kl == "x-ashat-key":
+                return (v or "").strip()
+        for k, v in headers.items():
+            kl = k.lower() if isinstance(k, str) else ""
+            if kl == "authorization":
+                val = (v or "").strip()
+                if val.lower().startswith("bearer "):
+                    return val[7:].strip()
+        return ""
 
 
 # Adapter helpers — extract a dict-of-headers from a Gradio Request or a
