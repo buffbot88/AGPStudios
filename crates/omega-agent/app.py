@@ -17,6 +17,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import urllib.request
@@ -218,6 +219,69 @@ def _find_cached_llama_server() -> str | None:
     return None
 
 
+def _extract_archive(archive_path: str, extract_dir: str) -> str | None:
+    """Extract `llama-server` from a .zip or .tar.gz archive.  Returns the
+    path to the extracted executable, or None on failure."""
+    dst = Path(extract_dir) / "llama-server"
+
+    if archive_path.endswith(".zip"):
+        with zipfile.ZipFile(archive_path) as zf:
+            members = [
+                m for m in zf.namelist()
+                if "llama-server" in m and not m.endswith("/")
+            ]
+            if not members:
+                _log_install("no llama-server found inside zip archive")
+                return None
+            member = members[0]
+            _log_install_fmt("extracting %s from zip", member)
+            extracted = zf.extract(member, extract_dir)
+
+    elif archive_path.endswith(".tar.gz") or archive_path.endswith(".tgz"):
+        with tarfile.open(archive_path, "r:gz") as tf:
+            members = [
+                m for m in tf.getmembers()
+                if "llama-server" in m.name and not m.isdir()
+            ]
+            if not members:
+                _log_install("no llama-server found inside tar.gz archive")
+                return None
+            member = members[0]
+            _log_install_fmt("extracting %s from tar.gz", member.name)
+            tf.extract(member, path=extract_dir)
+            extracted = str(Path(extract_dir) / member.name)
+
+    else:
+        _log_install_fmt("unsupported archive format: %s", archive_path)
+        return None
+
+    extracted_path = Path(extracted)
+    extracted_path.chmod(extracted_path.stat().st_mode | 0o111)
+
+    if extracted_path.name != "llama-server":
+        shutil.move(str(extracted_path), str(dst))
+    elif extracted_path != dst:
+        shutil.move(str(extracted_path), str(dst))
+
+    return str(dst) if dst.is_file() else None
+
+
+def _is_linux_x86_64_asset(name: str) -> bool:
+    """Return True if *name* looks like a plain Linux x86_64 prebuilt archive
+    (excluding specialized builds like OpenVINO, ROCm, SYCL, Vulkan)."""
+    n = name.lower()
+    # Exclude specialized / GPU-specific builds
+    excluded = {"openvino", "rocm", "sycl", "vulkan", "hip", "cuda"}
+    if any(x in n for x in excluded):
+        return False
+    # Match: ubuntu-x64, linux-x64, linux-amd64, linux-x86_64
+    if "ubuntu" in n and "x64" in n:
+        return True
+    if "linux" in n and ("amd64" in n or "x86_64" in n or "x64" in n):
+        return True
+    return False
+
+
 def _download_prebuilt_llama_server() -> str | None:
     """Download a prebuilt llama-server from GitHub releases."""
     _log_install("attempting to download prebuilt llama-server from GitHub ...")
@@ -244,75 +308,61 @@ def _download_prebuilt_llama_server() -> str | None:
 
     _log_install_fmt("latest llama.cpp release: %s", tag)
 
-    # Look for a Linux x86_64 prebuilt zip among release assets
+    # Look for a Linux x86_64 prebuilt archive (.zip or .tar.gz)
     assets = release.get("assets", [])
-    zip_url = None
+    candidates: list[tuple[str, str]] = []  # (name, url)
+
     for asset in assets:
         name: str = asset.get("name", "")
-        name_lower = name.lower()
-        if name_lower.endswith(".zip"):
-            # Match: ubuntu-x64, linux-x64, linux-amd64, or just contains "linux" and "x86_64" / "amd64"
-            if ("ubuntu" in name_lower and "x64" in name_lower) or \
-               ("linux" in name_lower and ("amd64" in name_lower or "x86_64" in name_lower or "x64" in name_lower)):
-                zip_url = asset.get("browser_download_url")
-                _log_install_fmt("found prebuilt asset: %s", name)
-                break
+        if not (name.endswith(".zip") or name.endswith(".tar.gz") or name.endswith(".tgz")):
+            continue
+        if _is_linux_x86_64_asset(name):
+            candidates.append((name, asset["browser_download_url"]))
+            _log_install_fmt("found prebuilt asset: %s", name)
 
-    if not zip_url:
-        _log_install_fmt("no Linux x86_64 zip asset found in release %s — listing all assets for debugging", tag)
+    if not candidates:
+        _log_install_fmt(
+            "no Linux x86_64 prebuilt archive found in release %s — "
+            "listing all assets for debugging:", tag
+        )
         for asset in assets:
             _log_install_fmt("  available asset: %s", asset.get("name", "?"))
-        # Try a fallback URL pattern that may work across releases
-        fallback_candidates = [
-            f"https://github.com/ggerganov/llama.cpp/releases/download/{tag}/llama-{tag}-bin-ubuntu-x64.zip",
-            f"https://github.com/ggerganov/llama.cpp/releases/download/{tag}/llama-{tag}-bin-linux-x64.zip",
-            f"https://github.com/ggerganov/llama.cpp/releases/download/{tag}/llama-{tag}-bin-linux-amd64.zip",
+        # Fallback URL patterns for both zip and tar.gz
+        fallback_names = [
+            f"llama-{tag}-bin-ubuntu-x64.zip",
+            f"llama-{tag}-bin-ubuntu-x64.tar.gz",
+            f"llama-{tag}-bin-linux-x64.zip",
+            f"llama-{tag}-bin-linux-amd64.zip",
+            f"llama-{tag}-bin-linux-x64.tar.gz",
         ]
-        for fb in fallback_candidates:
-            _log_install_fmt("trying fallback URL: %s", fb)
-            zip_url = fb
-            break  # try first falling back; if it fails 404, _download_prebuilt will catch the exception and continue to source build
+        for fname in fallback_names:
+            url = f"https://github.com/ggerganov/llama.cpp/releases/download/{tag}/{fname}"
+            candidates.append((fname, url))
 
-    # Download the zip
-    try:
-        CACHE_BIN_DIR.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
-            tmp_path = tmp.name
-            _log_install_fmt("downloading %s ...", zip_url)
-            req = urllib.request.Request(
-                zip_url, headers={"Accept": "application/octet-stream"}
-            )
-            with urllib.request.urlopen(req, timeout=120) as resp:
-                tmp.write(resp.read())
+    # Try each candidate URL until one succeeds
+    for asset_name, asset_url in candidates:
+        suffix = ".tar.gz" if (asset_name.endswith(".tar.gz") or asset_name.endswith(".tgz")) else ".zip"
+        _log_install_fmt("trying: %s", asset_url)
 
-        # Extract llama-server
-        with zipfile.ZipFile(tmp_path) as zf:
-            members = [
-                m for m in zf.namelist()
-                if "llama-server" in m and not m.endswith("/")
-            ]
-            if not members:
-                _log_install("no llama-server found inside zip archive")
-                os.unlink(tmp_path)
-                return None
-            member = members[0]
-            _log_install_fmt("extracting %s from zip", member)
-            extracted = zf.extract(member, str(CACHE_BIN_DIR))
-            extracted_path = Path(extracted)
-            extracted_path.chmod(extracted_path.stat().st_mode | 0o111)
-            # Rename to canonical name if needed
-            if extracted_path.name != "llama-server":
-                shutil.move(str(extracted_path), str(dst))
-            elif extracted_path != dst:
-                shutil.move(str(extracted_path), str(dst))
+        try:
+            CACHE_BIN_DIR.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                tmp_path = tmp.name
+                req = urllib.request.Request(
+                    asset_url, headers={"Accept": "application/octet-stream"}
+                )
+                with urllib.request.urlopen(req, timeout=120) as resp:
+                    tmp.write(resp.read())
 
-        os.unlink(tmp_path)
+            result = _extract_archive(tmp_path, str(CACHE_BIN_DIR))
+            os.unlink(tmp_path)
 
-        if dst.is_file():
-            _log_install_fmt("prebuilt llama-server ready at %s", dst)
-            return str(dst)
-    except Exception as exc:
-        _log_install_fmt("prebuilt download/extract failed: %s", exc)
+            if result:
+                _log_install_fmt("prebuilt llama-server ready at %s", result)
+                return result
+        except Exception as exc:
+            _log_install_fmt("  failed: %s", exc)
+            continue
 
     return None
 
