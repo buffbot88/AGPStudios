@@ -1,15 +1,29 @@
 #!/usr/bin/env python3
 """
-AshatOS Dual llama-server Host
+AshatOS Dual-Lane ZeroGPU Inference Host
 
-Launches two llama-server subprocesses (MainBrain / MicroBrain) behind a
-Gradio UI.  No runtime dependency on `llama-cpp-python` — inference happens
-through the local HTTP servers.
+A Hugging Face Space providing two private inference lanes (MicroBrain /
+MainBrain) behind authenticated API endpoints, with a public read-only
+telemetry dashboard.  Each inference request starts llama-server on demand,
+runs one completion, collects metrics, and terminates.
+
+OpenAI-compatible endpoints (fastapi):
+    GET  /v1/models              → list available models (no auth)
+    POST /v1/chat/completions    → chat completions (X-Ashat-Key header)
+
+Gradio API endpoints (queue-based):
+    POST /gradio_api/call/microbrain   → MicroBrain inference
+    POST /gradio_api/call/mainbrain    → MainBrain inference
+
+Public (read-only):
+    GET  /                         → Gradio telemetry dashboard
 """
 
 from __future__ import annotations
 
+import asyncio
 import atexit
+import hmac
 import json
 import logging
 import os
@@ -19,250 +33,357 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 import urllib.request
+import uuid
 import zipfile
+from collections import deque
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import gradio as gr
 import requests
+from fastapi import FastAPI, Request as FastRequest
+from fastapi.responses import JSONResponse
 from huggingface_hub import hf_hub_download
 
-# ZeroGPU compatibility: the Hugging Face Spaces zeroGPU runtime requires
-# a @spaces.GPU-decorated function to be present and called during startup.
-# If `spaces` isn't available (local dev, CPU Spaces), this is a no-op.
+# ZeroGPU compatibility — supports both @spaces_gpu and @spaces_gpu(duration=N)
 try:
-    from spaces import GPU as spaces_gpu
+    from spaces import GPU as _spaces_gpu
+    def spaces_gpu(f=None, **kwargs):
+        if f is not None:
+            return _spaces_gpu(f)
+        return _spaces_gpu(**kwargs)
 except ImportError:
-    spaces_gpu = lambda f: f  # no-op fallback decorator
+    def spaces_gpu(f=None, **kwargs):  # type: ignore[no-redef]
+        if f is not None:
+            return f
+        return lambda f: f
 
-# ---------------------------------------------------------------------------
-# 1.  Model definitions (preserved from original app.py)
-# ---------------------------------------------------------------------------
-
-# Fast-lane (MainBrain)
-FAST_MODEL_REPO = os.getenv("FAST_MODEL_REPO", "RipBuffy/LFM2.5-Q6_K").strip()
-FAST_MODEL_FILE = os.getenv("FAST_MODEL_FILE", "LFM2.5-350M-Q6_K.gguf").strip()
-
-# Slow-lane (MicroBrain)
-SLOW_MODEL_REPO = os.getenv("SLOW_MODEL_REPO", "RipBuffy/LFM2.5-Q6_K").strip()
-SLOW_MODEL_FILE = os.getenv("SLOW_MODEL_FILE", "LFM2.5-1.2B-Instruct-Q6_K.gguf").strip()
-
-MODEL_REVISION = os.getenv("MODEL_REVISION", "main").strip()
-HF_TOKEN = os.getenv("HF_TOKEN") or None
-
-# Original context sizes
-N_CTX_FAST = int(os.getenv("N_CTX_FAST", "1024"))
-N_CTX_SLOW = int(os.getenv("N_CTX_SLOW", "1536"))
-
-# ---------------------------------------------------------------------------
-# 2.  Normalised model registry
-# ---------------------------------------------------------------------------
-
-MODELS: dict[str, dict[str, Any]] = {
-    # MainBrain = big/reasoning model (1.2B Instruct)
-    "MainBrain": {
-        "repo": SLOW_MODEL_REPO,
-        "file": SLOW_MODEL_FILE,
-        "port": int(os.getenv("MAINBRAIN_PORT", "18080")),
-        "ctx": int(os.getenv("MAINBRAIN_CTX", str(N_CTX_SLOW))),
-        "local_path": os.getenv("MAINBRAIN_MODEL_PATH", "").strip() or None,
-        "system_prompt": os.getenv(
-            "SLOW_SYSTEM_PROMPT",
-            "You are Ashat's careful reasoning lane. Think carefully and return a clear final answer.",
-        ),
-    },
-    # MicroBrain = small/fast model (350M)
-    "MicroBrain": {
-        "repo": FAST_MODEL_REPO,
-        "file": FAST_MODEL_FILE,
-        "port": int(os.getenv("MICROBRAIN_PORT", "18081")),
-        "ctx": int(os.getenv("MICROBRAIN_CTX", str(N_CTX_FAST))),
-        "local_path": os.getenv("MICROBRAIN_MODEL_PATH", "").strip() or None,
-        "system_prompt": os.getenv(
-            "FAST_SYSTEM_PROMPT",
-            "You are Ashat's fast conversational lane. Be concise, natural, and helpful.",
-        ),
-    },
-}
-
-# ---------------------------------------------------------------------------
-# 3.  Runtime constants
-# ---------------------------------------------------------------------------
-
-RUNTIME_DIR = Path("./.runtime")
-CACHE_BIN_DIR = RUNTIME_DIR / "bin"
-LLAMA_CPP_SRC = RUNTIME_DIR / "llama.cpp"
-LOGS_DIR = Path("./logs")
-
-LLAMA_THREADS = int(os.getenv("LLAMA_THREADS", "2"))
-LLAMA_BATCH_SIZE = int(os.getenv("LLAMA_BATCH_SIZE", "128"))
-AUTO_BUILD = os.getenv("AUTO_BUILD_LLAMA_SERVER", "1") in ("1", "true", "yes")
-
-# Override path to llama-server binary (skip auto-detect)
-LLAMA_SERVER_PATH = os.getenv("LLAMA_SERVER_PATH", "").strip() or None
-
-_started_at = time.time()
-_server_processes: dict[str, subprocess.Popen | None] = {
-    "MainBrain": None,
-    "MicroBrain": None,
-}
-_server_ready: dict[str, bool] = {
-    "MainBrain": False,
-    "MicroBrain": False,
-}
-_server_errors: dict[str, str] = {
-    "MainBrain": "",
-    "MicroBrain": "",
-}
-_downloaded_models: dict[str, str] = {}  # lane -> local GGUF path
-
-# ---------------------------------------------------------------------------
-# 4.  Logging helpers
-# ---------------------------------------------------------------------------
-
+# ──────────────────────────────────────────────────────────────────────────
+# 1.  Logging
+# ──────────────────────────────────────────────────────────────────────────
 logging.basicConfig(
-    level=logging.INFO,
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
     format="%(asctime)s [%(levelname)s] %(message)s",
     stream=sys.stdout,
 )
 _log = logging.getLogger("ashatos")
 
+# ──────────────────────────────────────────────────────────────────────────
+# 2.  Configuration (all overridable via env vars / Space secrets)
+# ──────────────────────────────────────────────────────────────────────────
 
-def _log_install(msg: str) -> None:
-    """Write to both the install log and the application log."""
-    LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    with open(LOGS_DIR / "llama_install.log", "a", encoding="utf-8") as fh:
-        fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {msg}\n")
-    _log.info("install: %s", msg)
+# Models
+MAIN_MODEL_REPO = os.getenv("MAIN_MODEL_REPO", "RipBuffy/LFM2.5-Q6_K")
+MAIN_MODEL_FILE = os.getenv("MAIN_MODEL_FILE", "LFM2.5-1.2B-Instruct-Q6_K.gguf")
+MICRO_MODEL_REPO = os.getenv("MICRO_MODEL_REPO", "RipBuffy/LFM2.5-Q6_K")
+MICRO_MODEL_FILE = os.getenv("MICRO_MODEL_FILE", "LFM2.5-350M-Q6_K.gguf")
+MODEL_REVISION = os.getenv("MODEL_REVISION", "main")
+HF_TOKEN: str | None = os.getenv("HF_TOKEN") or None
+
+# Runtime
+INTERNAL_PORT = int(os.getenv("INTERNAL_PORT", "18080"))
+N_THREADS = int(os.getenv("N_THREADS", "2"))
+N_BATCH = int(os.getenv("N_BATCH", "128"))
+MAIN_CTX = int(os.getenv("MAIN_CTX", "1536"))
+MICRO_CTX = int(os.getenv("MICRO_CTX", "1024"))
+MAIN_MAX_TOKENS = int(os.getenv("MAIN_MAX_TOKENS", "256"))
+MICRO_MAX_TOKENS = int(os.getenv("MICRO_MAX_TOKENS", "128"))
+MAIN_GPU_DURATION = int(os.getenv("MAIN_GPU_DURATION", "120"))
+MICRO_GPU_DURATION = int(os.getenv("MICRO_GPU_DURATION", "60"))
+QUEUE_LIMIT = int(os.getenv("QUEUE_LIMIT", "16"))
+PUBLIC_REFRESH_SECONDS = int(os.getenv("PUBLIC_REFRESH_SECONDS", "10"))
+LLAMA_SERVER_VERSION = os.getenv("LLAMA_SERVER_VERSION", "")
+
+# Paths
+RUNTIME_DIR = Path("./.runtime")
+CACHE_BIN_DIR = RUNTIME_DIR / "bin"
+LOGS_DIR = Path("./logs")
+LLAMA_CPP_SRC = RUNTIME_DIR / "llama.cpp"
+
+# Lane definitions
+LANES: dict[str, dict[str, Any]] = {
+    "mainbrain": {
+        "label": "MainBrain",
+        "repo": MAIN_MODEL_REPO,
+        "file": MAIN_MODEL_FILE,
+        "ctx": MAIN_CTX,
+        "max_tokens": MAIN_MAX_TOKENS,
+        "gpu_duration": MAIN_GPU_DURATION,
+        "max_messages": 64,
+        "max_body_bytes": 262_144,
+        "model_path": "",
+    },
+    "microbrain": {
+        "label": "MicroBrain",
+        "repo": MICRO_MODEL_REPO,
+        "file": MICRO_MODEL_FILE,
+        "ctx": MICRO_CTX,
+        "max_tokens": MICRO_MAX_TOKENS,
+        "gpu_duration": MICRO_GPU_DURATION,
+        "max_messages": 32,
+        "max_body_bytes": 131_072,
+        "model_path": "",
+    },
+}
+
+# Authentication keys (Space secrets)
+_ASHAT_MICRO_KEY: str = os.getenv("ASHAT_MICROBRAIN_KEY", "")
+_ASHAT_MAIN_KEY: str = os.getenv("ASHAT_MAINBRAIN_KEY", "")
+_ASHAT_ADMIN_KEY: str = os.getenv("ASHAT_ADMIN_KEY", "")
+
+# Benchmark prompts
+_BENCHMARK_PROMPTS: dict[str, str] = {
+    "microbrain": "Write exactly three concise facts about the Moon.",
+    "mainbrain": (
+        "Analyze a simplified software deadlock scenario:\n"
+        "Thread A holds lock X and waits for lock Y.\n"
+        "Thread B holds lock Y and waits for lock X.\n"
+        "Identify the likely cause and resolution."
+    ),
+}
+
+# ──────────────────────────────────────────────────────────────────────────
+# 3.  Global state
+# ──────────────────────────────────────────────────────────────────────────
+
+_started_at: float = time.time()
+_inference_lock = threading.Lock()
+_metrics_lock = threading.Lock()
+_downloaded_models: dict[str, str] = {}
+_llama_bin_path: str | None = None
+_active_processes: list[subprocess.Popen[str]] = []
+
+# ──────────────────────────────────────────────────────────────────────────
+# 4.  Metrics store (thread-safe, rolling deque)
+# ──────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class MetricRecord:
+    timestamp: str = ""
+    lane: str = ""
+    success: bool = True
+    cold_start: bool = False
+    server_start_ms: float = 0.0
+    model_load_ms: float = 0.0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    prompt_tokens_per_second: float = 0.0
+    generation_tokens_per_second: float = 0.0
+    time_to_first_token_ms: float | None = None
+    total_latency_ms: float = 0.0
+    backend: str = "cuda"
+    gpu_offload_verified: bool = True
+    finish_reason: str = "stop"
+    error_category: str | None = None
 
 
-def _log_install_fmt(fmt: str, *args: object) -> None:
-    """Format and write an install log message."""
-    _log_install(fmt % args if args else fmt)
+class MetricsStore:
+    """Thread-safe in-memory rolling metrics store."""
+
+    def __init__(self, maxlen: int = 500, event_maxlen: int = 200) -> None:
+        self._maxlen = maxlen
+        self._microbrain: deque[MetricRecord] = deque(maxlen=maxlen)
+        self._mainbrain: deque[MetricRecord] = deque(maxlen=maxlen)
+        self._events: deque[str] = deque(maxlen=event_maxlen)
+
+    def record(self, rec: MetricRecord) -> None:
+        with _metrics_lock:
+            if rec.lane == "microbrain":
+                self._microbrain.append(rec)
+            else:
+                self._mainbrain.append(rec)
+
+    def add_event(self, event: str) -> None:
+        with _metrics_lock:
+            ts = datetime.now(timezone.utc).isoformat()
+            self._events.append(f"[{ts}] {event}")
+
+    def get_lane_metrics(self, lane: str) -> list[MetricRecord]:
+        with _metrics_lock:
+            if lane == "microbrain":
+                return list(self._microbrain)
+            return list(self._mainbrain)
+
+    def get_all_metrics(self) -> dict[str, list[MetricRecord]]:
+        with _metrics_lock:
+            return {
+                "microbrain": list(self._microbrain),
+                "mainbrain": list(self._mainbrain),
+            }
+
+    def get_events(self) -> list[str]:
+        with _metrics_lock:
+            return list(self._events)
+
+    def clear(self) -> None:
+        with _metrics_lock:
+            self._microbrain.clear()
+            self._mainbrain.clear()
+            self._events.clear()
+
+    def get_summary(self, lane: str) -> dict[str, Any]:
+        records = self.get_lane_metrics(lane)
+        if not records:
+            return {
+                "total_requests": 0,
+                "success_count": 0,
+                "failure_count": 0,
+                "avg_generation_tokens_per_second": 0.0,
+                "avg_prompt_tokens_per_second": 0.0,
+                "avg_total_latency_ms": 0.0,
+                "last_request_time": None,
+                "last_success": True,
+                "success_rate": 100.0,
+            }
+        successes = [r for r in records if r.success]
+        failures = [r for r in records if not r.success]
+        gen_tps = [r.generation_tokens_per_second for r in successes if r.generation_tokens_per_second > 0]
+        prompt_tps = [r.prompt_tokens_per_second for r in successes if r.prompt_tokens_per_second > 0]
+        latencies = [r.total_latency_ms for r in successes]
+        total = len(records)
+        return {
+            "total_requests": total,
+            "success_count": len(successes),
+            "failure_count": len(failures),
+            "success_rate": round(len(successes) / total * 100, 1) if total > 0 else 100.0,
+            "avg_generation_tokens_per_second": round(sum(gen_tps) / len(gen_tps), 2) if gen_tps else 0.0,
+            "avg_prompt_tokens_per_second": round(sum(prompt_tps) / len(prompt_tps), 2) if prompt_tps else 0.0,
+            "avg_total_latency_ms": round(sum(latencies) / len(latencies), 1) if latencies else 0.0,
+            "last_request_time": records[-1].timestamp if records else None,
+            "last_success": records[-1].success if records else True,
+        }
 
 
-# ---------------------------------------------------------------------------
+METRICS = MetricsStore()
+
+# ──────────────────────────────────────────────────────────────────────────
 # 5.  Utility functions
-# ---------------------------------------------------------------------------
+# ──────────────────────────────────────────────────────────────────────────
 
 def is_port_open(port: int, host: str = "127.0.0.1") -> bool:
-    """Check whether *something* is listening on host:port."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.settimeout(2)
+        sock.settimeout(1)
         return sock.connect_ex((host, port)) == 0
 
 
-def _tail_log(path: Path, n: int = 20) -> str:
-    """Return the last *n* lines of a file, or an empty string."""
+def _tail_log(path: Path, n: int = 30) -> str:
     if not path.is_file():
         return ""
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         return "\n".join(lines[-n:])
     except Exception:
         return "(unreadable)"
 
 
-# ---------------------------------------------------------------------------
-# 6.  Download GGUF models  (preserves original hf_hub_download logic)
-# ---------------------------------------------------------------------------
-
-def ensure_model(lane: str, cfg: dict[str, Any]) -> str:
-    """Return a local path to the GGUF file for *lane*, downloading if needed."""
-    if cfg["local_path"]:
-        p = cfg["local_path"]
-        if os.path.isfile(p):
-            _log.info("%s: using local path %s", lane, p)
-            return p
-        _log.warning("%s: %s set but not found (%s)", lane,
-                     f"{lane.upper()}_MODEL_PATH", p)
-
-    # Download from Hugging Face Hub (same as original app.py)
-    _log.info("%s: downloading %s/%s ...", lane, cfg["repo"], cfg["file"])
-    path = hf_hub_download(
-        repo_id=cfg["repo"],
-        filename=cfg["file"],
-        revision=MODEL_REVISION,
-        token=HF_TOKEN,
-    )
-    _log.info("%s: downloaded to %s", lane, path)
-    return path
+def _terminate_process(proc: subprocess.Popen[str] | None, name: str) -> None:
+    if proc is None or proc.poll() is not None:
+        return
+    try:
+        proc.terminate()
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            proc.kill()
+            proc.wait(timeout=2)
+        except Exception:
+            pass
+    except Exception:
+        pass
 
 
-# ---------------------------------------------------------------------------
+def stop_all_servers() -> None:
+    for proc in list(_active_processes):
+        _terminate_process(proc, "atexit")
+
+
+atexit.register(stop_all_servers)
+
+
+def _print_key_gen_help() -> None:
+    _log.info("=" * 60)
+    _log.info("Key Generation (run on your local machine):")
+    _log.info("  python -c \"import secrets; print('MICRO:', secrets.token_urlsafe(48))\"")
+    _log.info("  python -c \"import secrets; print('MAIN: ', secrets.token_urlsafe(48))\"")
+    _log.info("  python -c \"import secrets; print('ADMIN:', secrets.token_urlsafe(48))\"")
+    _log.info("=" * 60)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# 6.  Authentication
+# ──────────────────────────────────────────────────────────────────────────
+
+class AuthError(Exception):
+    def __init__(self, message: str = "Unauthorized") -> None:
+        self.message = message
+        super().__init__(message)
+
+
+def _resolve_key(lane: str) -> str:
+    if lane == "mainbrain":
+        return _ASHAT_MAIN_KEY
+    elif lane == "microbrain":
+        return _ASHAT_MICRO_KEY
+    return ""
+
+
+def require_key(request: gr.Request, lane: str) -> None:
+    """Raise AuthError if the request does not carry a valid X-Ashat-Key."""
+    expected = _resolve_key(lane)
+    if not expected:
+        return  # no key configured → open (discouraged for prod)
+    supplied = (request.headers.get("x-ashat-key") or "").strip()
+    if not hmac.compare_digest(supplied, expected):
+        raise AuthError("Unauthorized")
+
+
+def require_key_http(headers: dict[str, str], lane: str) -> None:
+    """Raise AuthError from a plain dict of HTTP headers."""
+    expected = _resolve_key(lane)
+    if not expected:
+        return
+    supplied = (headers.get("x-ashat-key") or "").strip()
+    if not hmac.compare_digest(supplied, expected):
+        raise AuthError("Unauthorized")
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # 7.  llama-server install / detect
-# ---------------------------------------------------------------------------
+# ──────────────────────────────────────────────────────────────────────────
 
 def _find_existing_llama_server() -> str | None:
-    """Check common locations and PATH for an existing llama-server binary."""
     which = shutil.which("llama-server")
     if which:
-        _log_install_fmt("found llama-server on PATH: %s", which)
+        _log.info("install: found llama-server on PATH: %s", which)
         return which
-
     candidates = [
-        "./llama-server",
-        "./llama-server.exe",
-        "./bin/llama-server",
-        "/usr/local/bin/llama-server",
+        "./llama-server", "./llama-server.exe",
+        "./bin/llama-server", "/usr/local/bin/llama-server",
     ]
     for c in candidates:
         p = Path(c)
         if p.is_file() and os.access(p, os.X_OK):
-            _log_install_fmt("found llama-server at %s", p.resolve())
             return str(p.resolve())
     return None
 
 
 def _find_cached_llama_server() -> str | None:
-    """Check the local runtime cache directory."""
-    candidates = [
-        CACHE_BIN_DIR / "llama-server",
-        CACHE_BIN_DIR / "llama-server.exe",
-    ]
+    candidates = [CACHE_BIN_DIR / "llama-server", CACHE_BIN_DIR / "llama-server.exe"]
     for c in candidates:
         if c.is_file() and os.access(c, os.X_OK):
-            _log_install_fmt("found cached llama-server at %s", c)
             return str(c)
     return None
 
 
-def _find_llama_server_member(names: list[str]) -> str | None:
-    """From a list of archive member paths, pick the best `llama-server`
-    candidate.  Priority:
-    1. Basename is exactly ``llama-server``
-    2. Basename is exactly ``llama-server.exe``
-    3. Any member containing ``llama-server`` that is NOT a ``.so`` library
-    4. Any member containing ``llama-server`` (last resort)
-    """
-    candidates: list[tuple[int, str]] = []
-
-    for n in names:
-        fname = Path(n).name  # last path component
-        if fname == "llama-server":
-            candidates.append((1, n))
-        elif fname == "llama-server.exe":
-            candidates.append((2, n))
-        elif "llama-server" in n and not n.endswith(".so"):
-            candidates.append((3, n))
-        elif "llama-server" in n:
-            candidates.append((4, n))
-
-    if not candidates:
-        return None
-    candidates.sort(key=lambda x: x[0])
-    return candidates[0][1]
-
-
 def _extract_archive(archive_path: str, extract_dir: str) -> str | None:
-    """Extract everything from the prebuilt archive into *extract_dir* flatly,
-    then return the path to the ``llama-server`` executable.  We extract *all*
-    files so that shared libraries (``libllama-server*.so``) end up alongside
-    the binary and can be loaded at runtime."""
+    """Extract all files flat into extract_dir and return the binary path."""
     dst = Path(extract_dir) / "llama-server"
-    extracted: dict[str, bytes] = {}  # filename -> content
+    extracted: dict[str, bytes] = {}
 
     if archive_path.endswith(".zip"):
         with zipfile.ZipFile(archive_path) as zf:
@@ -270,7 +391,6 @@ def _extract_archive(archive_path: str, extract_dir: str) -> str | None:
                 if n.endswith("/"):
                     continue
                 extracted[Path(n).name] = zf.read(n)
-
     elif archive_path.endswith(".tar.gz") or archive_path.endswith(".tgz"):
         with tarfile.open(archive_path, "r:gz") as tf:
             for m in tf.getmembers():
@@ -279,777 +399,982 @@ def _extract_archive(archive_path: str, extract_dir: str) -> str | None:
                 src = tf.extractfile(m)
                 if src is not None:
                     extracted[Path(m.name).name] = src.read()
-
     else:
-        _log_install_fmt("unsupported archive format: %s", archive_path)
+        _log.warning("install: unsupported archive format: %s", archive_path)
         return None
 
     if not extracted:
-        _log_install("empty archive — nothing extracted")
         return None
 
-    _log_install_fmt("extracted %d files from archive", len(extracted))
-
-    # Write all files flat into extract_dir, make everything executable so
-    # that the dynamic linker can mmap(PROT_EXEC) .so files.
+    _log.info("install: extracted %d files from archive", len(extracted))
     for fname, content in extracted.items():
         target = Path(extract_dir) / fname
         target.write_bytes(content)
         target.chmod(0o755)
 
-    # Ensure the canonical binary path exists
     if dst.is_file():
         return str(dst)
-
-    # If the binary was named differently, rename it
     if "llama-server" in extracted:
         src_path = Path(extract_dir) / "llama-server"
         if src_path != dst:
             shutil.move(str(src_path), str(dst))
         return str(dst)
-
-    _log_install("llama-server binary not found among extracted files")
+    for f in Path(extract_dir).iterdir():
+        if f.is_file() and "llama-server" in f.name and os.access(f, os.X_OK):
+            if f != dst:
+                shutil.copy2(str(f), str(dst))
+                dst.chmod(0o755)
+            return str(dst)
     return None
 
 
-def _is_linux_x86_64_asset(name: str) -> bool:
-    """Return True if *name* looks like a plain Linux x86_64 prebuilt archive
-    (excluding specialized builds like OpenVINO, ROCm, SYCL, Vulkan)."""
-    n = name.lower()
-    # Exclude specialized / GPU-specific builds
-    excluded = {"openvino", "rocm", "sycl", "vulkan", "hip", "cuda"}
-    if any(x in n for x in excluded):
-        return False
-    # Match: ubuntu-x64, linux-x64, linux-amd64, linux-x86_64
-    if "ubuntu" in n and "x64" in n:
-        return True
-    if "linux" in n and ("amd64" in n or "x86_64" in n or "x64" in n):
-        return True
-    return False
+def _get_latest_release_tag() -> str | None:
+    try:
+        req = urllib.request.Request(
+            "https://api.github.com/repos/ggerganov/llama.cpp/releases/latest",
+            headers={"Accept": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            release = json.loads(resp.read().decode())
+            return release.get("tag_name", "")
+    except Exception as exc:
+        _log.warning("install: GitHub API error: %s", exc)
+        return None
 
 
 def _download_prebuilt_llama_server() -> str | None:
-    """Download a prebuilt llama-server from GitHub releases."""
-    _log_install("attempting to download prebuilt llama-server from GitHub ...")
-
+    _log.info("install: downloading prebuilt llama-server from GitHub ...")
     dst = CACHE_BIN_DIR / "llama-server"
     if dst.is_file():
-        _log_install_fmt("prebuilt binary already cached at %s", dst)
         return str(dst)
 
-    # Discover the latest release tag via the GitHub API
-    api_url = "https://api.github.com/repos/ggerganov/llama.cpp/releases/latest"
-    try:
-        req = urllib.request.Request(api_url, headers={"Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            release = json.loads(resp.read().decode())
-    except Exception as exc:
-        _log_install_fmt("GitHub API error (latest release): %s", exc)
-        return None
-
-    tag = release.get("tag_name", "")
+    tag = LLAMA_SERVER_VERSION or _get_latest_release_tag()
     if not tag:
-        _log_install("no tag_name in latest release response")
         return None
+    _log.info("install: llama.cpp release: %s", tag)
 
-    _log_install_fmt("latest llama.cpp release: %s", tag)
-
-    # Look for a Linux x86_64 prebuilt archive (.zip or .tar.gz)
-    assets = release.get("assets", [])
-    candidates: list[tuple[str, str]] = []  # (name, url)
-
-    for asset in assets:
-        name: str = asset.get("name", "")
-        if not (name.endswith(".zip") or name.endswith(".tar.gz") or name.endswith(".tgz")):
-            continue
-        if _is_linux_x86_64_asset(name):
-            candidates.append((name, asset["browser_download_url"]))
-            _log_install_fmt("found prebuilt asset: %s", name)
-
-    if not candidates:
-        _log_install_fmt(
-            "no Linux x86_64 prebuilt archive found in release %s — "
-            "listing all assets for debugging:", tag
-        )
-        for asset in assets:
-            _log_install_fmt("  available asset: %s", asset.get("name", "?"))
-        # Fallback URL patterns for both zip and tar.gz
-        fallback_names = [
-            f"llama-{tag}-bin-ubuntu-x64.zip",
-            f"llama-{tag}-bin-ubuntu-x64.tar.gz",
-            f"llama-{tag}-bin-linux-x64.zip",
-            f"llama-{tag}-bin-linux-amd64.zip",
-            f"llama-{tag}-bin-linux-x64.tar.gz",
-        ]
-        for fname in fallback_names:
+    candidates: list[tuple[str, str]] = []
+    for suffix in [".tar.gz", ".zip"]:
+        for os_name in ["ubuntu-x64", "linux-x64", "linux-amd64"]:
+            fname = f"llama-{tag}-bin-{os_name}{suffix}"
             url = f"https://github.com/ggerganov/llama.cpp/releases/download/{tag}/{fname}"
             candidates.append((fname, url))
 
-    # Try each candidate URL until one succeeds
-    for asset_name, asset_url in candidates:
-        suffix = ".tar.gz" if (asset_name.endswith(".tar.gz") or asset_name.endswith(".tgz")) else ".zip"
-        _log_install_fmt("trying: %s", asset_url)
-
+    for fname, url in candidates:
+        suffix = ".tar.gz" if fname.endswith(".tar.gz") else ".zip"
         try:
             CACHE_BIN_DIR.mkdir(parents=True, exist_ok=True)
             with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
                 tmp_path = tmp.name
-                req = urllib.request.Request(
-                    asset_url, headers={"Accept": "application/octet-stream"}
-                )
+                req = urllib.request.Request(url, headers={"Accept": "application/octet-stream"})
                 with urllib.request.urlopen(req, timeout=120) as resp:
                     tmp.write(resp.read())
-
             result = _extract_archive(tmp_path, str(CACHE_BIN_DIR))
             os.unlink(tmp_path)
-
             if result:
-                _log_install_fmt("prebuilt llama-server ready at %s", result)
+                _log.info("install: llama-server ready at %s", result)
                 return result
-        except Exception as exc:
-            _log_install_fmt("  failed: %s", exc)
+        except Exception:
             continue
-
     return None
 
 
 def _build_llama_server_from_source() -> str | None:
-    """Clone llama.cpp and build llama-server from source (CPU-only build)."""
-    _log_install("building llama-server from source ...")
-
+    _log.info("install: building llama-server from source (CPU fallback) ...")
     LLAMA_CPP_SRC.mkdir(parents=True, exist_ok=True)
 
-    # Check if already cloned
     if not (LLAMA_CPP_SRC / "CMakeLists.txt").is_file():
-        _log_install_fmt("cloning llama.cpp into %s ...", LLAMA_CPP_SRC)
         result = subprocess.run(
             ["git", "clone", "--depth", "1",
-             "https://github.com/ggerganov/llama.cpp.git",
-             str(LLAMA_CPP_SRC)],
+             "https://github.com/ggerganov/llama.cpp.git", str(LLAMA_CPP_SRC)],
             capture_output=True, text=True, timeout=300,
         )
         if result.returncode != 0:
-            _log_install_fmt("git clone failed:\n%s", result.stderr[:2000])
+            _log.warning("install: git clone failed: %s", result.stderr[:500])
             return None
-        _log_install("clone successful")
-    else:
-        _log_install_fmt("llama.cpp already cloned at %s", LLAMA_CPP_SRC)
 
-    # CMake configure
     build_dir = LLAMA_CPP_SRC / "build"
     build_dir.mkdir(parents=True, exist_ok=True)
 
-    _log_install("cmake -B build ...")
     result = subprocess.run(
         ["cmake", "-B", "build", "-DGGML_CUDA=OFF", "-DGGML_NATIVE=OFF"],
-        capture_output=True, text=True, timeout=120,
-        cwd=str(LLAMA_CPP_SRC),
+        capture_output=True, text=True, timeout=120, cwd=str(LLAMA_CPP_SRC),
     )
     if result.returncode != 0:
-        _log_install_fmt("cmake configure failed:\n%s", result.stderr[:2000])
+        _log.warning("install: cmake configure failed: %s", result.stderr[:500])
         return None
-    _log_install("cmake configure OK")
 
-    # CMake build
-    _log_install("cmake --build build --config Release -j ...")
     result = subprocess.run(
         ["cmake", "--build", "build", "--config", "Release", "-j"],
-        capture_output=True, text=True, timeout=600,
-        cwd=str(LLAMA_CPP_SRC),
+        capture_output=True, text=True, timeout=600, cwd=str(LLAMA_CPP_SRC),
     )
     if result.returncode != 0:
-        _log_install_fmt("cmake build failed:\n%s", result.stderr[:2000])
+        _log.warning("install: cmake build failed: %s", result.stderr[:500])
         return None
-    _log_install("cmake build OK")
 
-    # Locate the built binary
-    candidates = [
+    for c in [
         build_dir / "bin" / "llama-server",
         build_dir / "bin" / "Release" / "llama-server",
-        build_dir / "bin" / "llama-server.exe",
-        build_dir / "bin" / "Release" / "llama-server.exe",
-    ]
-    for c in candidates:
+    ]:
         if c.is_file():
-            _log_install_fmt("built llama-server found at %s", c)
             CACHE_BIN_DIR.mkdir(parents=True, exist_ok=True)
             cached = CACHE_BIN_DIR / c.name
             shutil.copy2(str(c), str(cached))
-            cached.chmod(cached.stat().st_mode | 0o111)
+            cached.chmod(0o755)
             return str(cached)
-
-    _log_install("build succeeded but llama-server binary not found in expected locations")
     return None
 
 
 def ensure_llama_server() -> str | None:
-    """
-    Return the path to a usable ``llama-server`` executable, or None if
-    every detection / install strategy fails.
-    """
-    # 0. Explicit path override
-    if LLAMA_SERVER_PATH:
-        p = Path(LLAMA_SERVER_PATH)
+    server_path = os.getenv("LLAMA_SERVER_PATH", "").strip()
+    if server_path:
+        p = Path(server_path)
         if p.is_file() and os.access(p, os.X_OK):
-            _log_install_fmt("using LLAMA_SERVER_PATH: %s", p)
             return str(p)
-        _log_install_fmt("LLAMA_SERVER_PATH set but not executable: %s", p)
 
-    # 1. Existing on PATH or common locations
     found = _find_existing_llama_server()
     if found:
         return found
-
-    # 2. Cached install
     found = _find_cached_llama_server()
     if found:
         return found
 
-    if not AUTO_BUILD:
-        _log_install("AUTO_BUILD_LLAMA_SERVER is disabled, not installing")
+    if os.getenv("AUTO_BUILD_LLAMA_SERVER", "1") not in ("1", "true", "yes"):
         return None
 
-    # 3. Prebuilt binary from GitHub
-    LOGS_DIR.mkdir(parents=True, exist_ok=True)
     found = _download_prebuilt_llama_server()
     if found:
         return found
-
-    # 4. Build from source
     found = _build_llama_server_from_source()
     if found:
         return found
 
-    _log_install("ALL INSTALL STRATEGIES FAILED — llama-server is not available")
+    _log.error("install: ALL INSTALL STRATEGIES FAILED")
     return None
 
 
-# ---------------------------------------------------------------------------
-# 8.  Server lifecycle
-# ---------------------------------------------------------------------------
+# ──────────────────────────────────────────────────────────────────────────
+# 8.  Model download
+# ──────────────────────────────────────────────────────────────────────────
 
-def start_llama_server(name: str, cfg: dict[str, Any], llama_server_bin: str) -> bool:
-    """Launch a llama-server subprocess.  Returns True on success."""
-    port = cfg["port"]
-    ctx = cfg["ctx"]
+def ensure_model(lane: str) -> str:
+    cfg = LANES[lane]
+    env_key = f"{lane.upper()}_MODEL_PATH"
+    local_path = os.getenv(env_key, "").strip()
+    if local_path and os.path.isfile(local_path):
+        _log.info("%s: using local path %s", lane, local_path)
+        return local_path
 
-    if is_port_open(port):
-        _log.info("%s: port %d is already active — assuming already running", name, port)
-        _server_ready[name] = True
-        return True
+    if cfg["model_path"] and os.path.isfile(cfg["model_path"]):
+        return cfg["model_path"]
 
-    model_path = ensure_model(name, cfg)
-    _downloaded_models[name] = model_path
+    _log.info("%s: downloading %s/%s ...", lane, cfg["repo"], cfg["file"])
+    path = hf_hub_download(
+        repo_id=cfg["repo"],
+        filename=cfg["file"],
+        revision=MODEL_REVISION,
+        token=HF_TOKEN,
+    )
+    cfg["model_path"] = path
+    _log.info("%s: downloaded to %s", lane, path)
+    return path
 
-    LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    out_log = str(LOGS_DIR / f"{name.lower()}.out.log")
-    err_log = str(LOGS_DIR / f"{name.lower()}.err.log")
 
-    cmd = [
-        llama_server_bin,
+# ──────────────────────────────────────────────────────────────────────────
+# 9.  llama-server lifecycle (per-request)
+# ──────────────────────────────────────────────────────────────────────────
+
+def _build_server_cmd(
+    binary: str, model_path: str, port: int, ctx: int,
+) -> list[str]:
+    return [
+        binary,
         "--host", "127.0.0.1",
         "--port", str(port),
         "-m", model_path,
         "-c", str(ctx),
-        "-t", str(LLAMA_THREADS),
-        "-b", str(LLAMA_BATCH_SIZE),
+        "-t", str(N_THREADS),
+        "-b", str(N_BATCH),
+        "-ngl", "999",
     ]
 
-    _log.info("%s: starting: %s", name, " ".join(cmd))
-    _log.info("%s: stdout -> %s", name, out_log)
-    _log.info("%s: stderr -> %s", name, err_log)
+
+def _wait_for_health(port: int, timeout: float = 30.0, interval: float = 0.25) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            resp = requests.get(f"http://127.0.0.1:{port}/health", timeout=2)
+            if resp.status_code < 500:
+                return True
+        except requests.RequestException:
+            pass
+        if is_port_open(port):
+            return True
+        time.sleep(interval)
+    return False
+
+
+def _verify_gpu_from_logs(err_log: Path) -> tuple[str, bool]:
+    tail = _tail_log(err_log)
+    if not tail:
+        return "unknown", False
+    has_cuda = any(marker in tail.lower() for marker in
+                   ["ggml_cuda_init", "found cuda device", "cuda0", "offloaded layers"])
+    if has_cuda:
+        return "cuda", True
+    return "cpu", False
+
+
+def execute_lane_inner(lane: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    Execute a single inference request against the given lane.
+    This is the inner function called from the @spaces.GPU wrapper.
+    """
+    request_id = payload.get("request_id", str(uuid.uuid4()))
+    lane_cfg = LANES[lane]
+    is_cold_start = not _downloaded_models.get(lane)
+    t0 = time.perf_counter()  # initialized before try
 
     try:
-        proc = subprocess.Popen(
+        model_path = ensure_model(lane)
+        _downloaded_models[lane] = model_path
+
+        # Start llama-server
+        cmd = _build_server_cmd(
+            str(_llama_bin_path or ""), model_path,
+            INTERNAL_PORT, lane_cfg["ctx"],
+        )
+        LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        err_log = LOGS_DIR / f"{lane}.err.log"
+        out_log = LOGS_DIR / f"{lane}.out.log"
+
+        _log.info("%s: starting server on port %d ...", lane, INTERNAL_PORT)
+        server_proc = subprocess.Popen(
             cmd,
             stdout=open(out_log, "w", encoding="utf-8"),
             stderr=open(err_log, "w", encoding="utf-8"),
         )
-    except Exception as exc:
-        msg = f"Failed to launch {name}: {exc}"
-        _log.error(msg)
-        _server_errors[name] = msg
-        return False
+        _active_processes.append(server_proc)
+        server_start_time = time.perf_counter()
+        load_ms = round((server_start_time - t0) * 1000, 1)
 
-    _server_processes[name] = proc
-    return True
+        # Wait for health
+        healthy = _wait_for_health(INTERNAL_PORT, timeout=30.0)
+        health_time = time.perf_counter()
+        server_start_ms = round((health_time - t0) * 1000, 1)
 
-
-def wait_for_server(name: str, port: int, timeout_seconds: int = 120) -> bool:
-    """Poll the server until it responds or the timeout expires."""
-    _log.info("%s: waiting for server on port %d (timeout=%ds)", name, port, timeout_seconds)
-
-    deadline = time.monotonic() + timeout_seconds
-    health_url = f"http://127.0.0.1:{port}/health"
-    models_url = f"http://127.0.0.1:{port}/v1/models"
-
-    while time.monotonic() < deadline:
-        try:
-            resp = requests.get(health_url, timeout=3)
-            if resp.status_code < 500:
-                _log.info("%s: ready (health OK)", name)
-                _server_ready[name] = True
-                return True
-        except requests.RequestException:
-            pass
-
-        try:
-            resp = requests.get(models_url, timeout=3)
-            if resp.status_code < 500:
-                _log.info("%s: ready (v1/models OK)", name)
-                _server_ready[name] = True
-                return True
-        except requests.RequestException:
-            pass
-
-        if is_port_open(port):
-            _log.info("%s: ready (TCP connect OK)", name)
-            _server_ready[name] = True
-            return True
-
-        time.sleep(2)
-
-    # Timeout
-    err_log = LOGS_DIR / f"{name.lower()}.err.log"
-    tail = _tail_log(err_log)
-    msg = f"{name} did not become ready within {timeout_seconds}s"
-    if tail:
-        msg += f"\nLast stderr lines:\n{tail}"
-    _log.error("%s: %s", name, msg)
-    _server_errors[name] = msg
-    return False
-
-
-def start_all_servers() -> str | None:
-    """
-    Detect/install llama-server, download models, launch both servers, and
-    wait for readiness.  Returns the llama-server binary path, or None if
-    the binary itself could not be obtained.
-    """
-    _log.info("=" * 60)
-    _log.info("Starting AshatOS Dual llama-server Host")
-    _log.info("=" * 60)
-
-    llama_bin = ensure_llama_server()
-    if not llama_bin:
-        msg = "llama-server binary could not be found or installed"
-        _log.error(msg)
-        _server_errors["MainBrain"] = msg
-        _server_errors["MicroBrain"] = msg
-        return None
-
-    _log.info("llama-server binary: %s", llama_bin)
-
-    for name, cfg in MODELS.items():
-        start_llama_server(name, cfg, llama_bin)
-
-    for name, cfg in MODELS.items():
-        if _server_processes.get(name):
-            wait_for_server(name, cfg["port"])
-
-    ready = [n for n, v in _server_ready.items() if v]
-    failed = [n for n, v in _server_ready.items() if not v]
-    _log.info("Ready: %s  |  Failed: %s", ready, failed)
-
-    return llama_bin
-
-
-def stop_all_servers() -> None:
-    """Terminate any running llama-server subprocesses."""
-    for name, proc in _server_processes.items():
-        if proc and proc.poll() is None:
-            _log.info("terminating %s (pid %d)", name, proc.pid)
-            proc.terminate()
+        if not healthy:
+            err_tail = _tail_log(err_log)
+            _log.error("%s: server health check failed", lane)
+            _terminate_process(server_proc, lane)
+            METRICS.add_event(f"{lane}: server start failed")
+            # Try to remove from active processes
             try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-            _server_processes[name] = None
-            _server_ready[name] = False
-
-
-# ---------------------------------------------------------------------------
-# 9.  Inference via HTTP
-# ---------------------------------------------------------------------------
-
-def call_llama_server(
-    model_name: str,
-    prompt: str,
-    max_tokens: int = 512,
-    temperature: float = 0.7,
-    top_p: float = 0.9,
-    system_prompt: str | None = None,
-) -> dict[str, Any]:
-    """Send a chat-completion request to the local llama-server."""
-    if model_name not in MODELS:
-        return {"ok": False, "error": f"Unknown model: {model_name}"}
-
-    # Wait for the server to become ready (up to 180s) — the servers start
-    # in a background thread so they may not be ready immediately.
-    if not _server_ready.get(model_name, False):
-        _log.info("%s: waiting for server to become ready...", model_name)
-        deadline = time.monotonic() + 180
-        while not _server_ready.get(model_name, False):
-            if time.monotonic() > deadline:
-                return {
-                    "ok": False,
-                    "error": f"{model_name} did not become ready within 180s. Check server status.",
-                }
-            time.sleep(1)
-        _log.info("%s: server is now ready", model_name)
-
-    cfg = MODELS[model_name]
-    port = cfg["port"]
-
-    messages: list[dict[str, str]] = []
-    sp = (system_prompt or cfg["system_prompt"]).strip()
-    if sp:
-        messages.append({"role": "system", "content": sp})
-    messages.append({"role": "user", "content": prompt.strip()})
-
-    payload = {
-        "model": "local",
-        "messages": messages,
-        "temperature": float(temperature),
-        "max_tokens": max(1, min(int(max_tokens), 2048)),
-        "top_p": float(top_p),
-        "stream": False,
-    }
-
-    url = f"http://127.0.0.1:{port}/v1/chat/completions"
-    try:
-        started = time.perf_counter()
-        resp = requests.post(url, json=payload, timeout=120)
-        elapsed = time.perf_counter() - started
-    except requests.RequestException as exc:
-        return {"ok": False, "error": f"HTTP request failed: {exc}"}
-
-    if resp.status_code == 200:
-        try:
-            data = resp.json()
-            text = data["choices"][0]["message"]["content"]
+                _active_processes.remove(server_proc)
+            except ValueError:
+                pass
             return {
-                "ok": True,
-                "model": model_name,
-                "response": text,
-                "elapsed_seconds": round(elapsed, 3),
-                "usage": data.get("usage", {}),
+                "ok": False, "request_id": request_id, "lane": lane,
+                "error": {"code": "SERVER_START_FAILED",
+                          "message": f"llama-server did not become healthy",
+                          "retryable": True},
             }
-        except (KeyError, IndexError, json.JSONDecodeError) as exc:
-            return {"ok": False, "error": f"Response parse error: {exc}"}
-    else:
-        return _call_legacy_completion(port, prompt, max_tokens, temperature, top_p)
 
+        # Verify GPU offload
+        backend, gpu_ok = _verify_gpu_from_logs(err_log)
+        _log.info("%s: backend=%s gpu_offload=%s", lane, backend, gpu_ok)
 
-def _call_legacy_completion(
-    port: int,
-    prompt: str,
-    max_tokens: int = 512,
-    temperature: float = 0.7,
-    top_p: float = 0.9,
-) -> dict[str, Any]:
-    """Fallback to the /completion (non-chat) endpoint."""
-    url = f"http://127.0.0.1:{port}/completion"
-    payload = {
-        "prompt": prompt,
-        "n_predict": max(1, min(int(max_tokens), 2048)),
-        "temperature": float(temperature),
-        "top_p": float(top_p),
-    }
-
-    try:
-        started = time.perf_counter()
-        resp = requests.post(url, json=payload, timeout=120)
-        elapsed = time.perf_counter() - started
-    except requests.RequestException as exc:
-        return {"ok": False, "error": f"Legacy endpoint also failed: {exc}"}
-
-    if resp.status_code == 200:
-        try:
-            data = resp.json()
-            text = data.get("content", data.get("response", ""))
+        # Build messages
+        messages = payload.get("messages", [])
+        if not messages:
+            _terminate_process(server_proc, lane)
+            try:
+                _active_processes.remove(server_proc)
+            except ValueError:
+                pass
             return {
-                "ok": True,
-                "model": "legacy",
-                "response": text,
-                "elapsed_seconds": round(elapsed, 3),
+                "ok": False, "request_id": request_id, "lane": lane,
+                "error": {"code": "INVALID_REQUEST",
+                          "message": "No messages provided", "retryable": False},
             }
-        except (KeyError, json.JSONDecodeError) as exc:
-            return {"ok": False, "error": f"Legacy response parse error: {exc}"}
 
-    return {
-        "ok": False,
-        "error": f"HTTP {resp.status_code}: {resp.text[:500]}",
-    }
-
-
-# ---------------------------------------------------------------------------
-# 10.  Status helpers
-# ---------------------------------------------------------------------------
-
-def get_status() -> dict[str, Any]:
-    """Return a snapshot of the current server / app state."""
-    llama_bin_path: str | None = None
-    if LLAMA_SERVER_PATH:
-        llama_bin_path = LLAMA_SERVER_PATH
-    else:
-        which = shutil.which("llama-server")
-        if which:
-            llama_bin_path = which
-        else:
-            cached = CACHE_BIN_DIR / "llama-server"
-            if cached.is_file():
-                llama_bin_path = str(cached)
-
-    lanes: dict[str, dict[str, Any]] = {}
-    for name, cfg in MODELS.items():
-        proc = _server_processes.get(name)
-        running = proc is not None and proc.poll() is None
-        error_msg = _server_errors.get(name, "")
-        # Include error log tail when server failed
-        log_tail = ""
-        if error_msg and not _server_ready.get(name, False):
-            log_tail = _tail_log(LOGS_DIR / f"{name.lower()}.err.log")
-        lanes[name] = {
-            "ready": _server_ready.get(name, False),
-            "running": running,
-            "port": cfg["port"],
-            "ctx": cfg["ctx"],
-            "model_path": _downloaded_models.get(name, cfg["local_path"] or ""),
-            "error": error_msg,
-            "error_log_tail": log_tail,
+        # Send completion request
+        completion_payload = {
+            "model": lane_cfg["file"],
+            "messages": messages,
+            "max_tokens": min(
+                int(payload.get("max_tokens", lane_cfg["max_tokens"])),
+                lane_cfg["max_tokens"],
+            ),
+            "temperature": float(payload.get("temperature", 0.7)),
+            "top_p": float(payload.get("top_p", 0.9)),
+            "stream": False,
         }
 
+        inference_start = time.perf_counter()
+        resp = requests.post(
+            f"http://127.0.0.1:{INTERNAL_PORT}/v1/chat/completions",
+            json=completion_payload,
+            timeout=120,
+        )
+        inference_end = time.perf_counter()
+        total_latency_ms = round((inference_end - t0) * 1000, 1)
+
+        if resp.status_code != 200:
+            _terminate_process(server_proc, lane)
+            try:
+                _active_processes.remove(server_proc)
+            except ValueError:
+                pass
+            return {
+                "ok": False, "request_id": request_id, "lane": lane,
+                "error": {"code": "INFERENCE_FAILED",
+                          "message": f"llama-server returned HTTP {resp.status_code}",
+                          "retryable": True},
+            }
+
+        data = resp.json()
+        prompt_tokens = data.get("usage", {}).get("prompt_tokens", 0)
+        completion_tokens = data.get("usage", {}).get("completion_tokens", 0)
+
+        try:
+            text = data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError):
+            text = ""
+
+        # Build OpenAI-compatible response
+        gen_ms = max(1.0, total_latency_ms - server_start_ms)
+        prompt_tps = round(prompt_tokens / (gen_ms / 1000), 2) if gen_ms > 0 else 0.0
+        gen_tps = round(completion_tokens / (gen_ms / 1000), 2) if gen_ms > 0 else 0.0
+
+        response: dict[str, Any] = {
+            "id": f"ashat-{request_id[:8]}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": lane_cfg["file"],
+            "lane": lane,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": text},
+                    "finish_reason": data.get("choices", [{}])[0].get("finish_reason", "stop"),
+                }
+            ],
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+            },
+            "performance": {
+                "cold_start": is_cold_start,
+                "server_start_ms": server_start_ms,
+                "model_load_ms": load_ms,
+                "total_latency_ms": total_latency_ms,
+                "time_to_first_token_ms": None,
+                "prompt_tokens_per_second": prompt_tps,
+                "generation_tokens_per_second": gen_tps,
+                "backend": backend,
+                "gpu_offload_verified": gpu_ok,
+            },
+            "request_id": request_id,
+            "ok": True,
+        }
+
+        # Record metrics
+        METRICS.record(MetricRecord(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            lane=lane,
+            success=True,
+            cold_start=is_cold_start,
+            server_start_ms=server_start_ms,
+            model_load_ms=load_ms,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            prompt_tokens_per_second=prompt_tps,
+            generation_tokens_per_second=gen_tps,
+            time_to_first_token_ms=None,
+            total_latency_ms=total_latency_ms,
+            backend=backend,
+            gpu_offload_verified=gpu_ok,
+        ))
+        METRICS.add_event(f"{lane}: inference completed ({prompt_tokens}+{completion_tokens} tokens)")
+
+        # Terminate server before returning
+        _terminate_process(server_proc, lane)
+        try:
+            _active_processes.remove(server_proc)
+        except ValueError:
+            pass
+
+        return response
+
+    except Exception as exc:
+        _log.exception("%s: inference failed: %s", lane, exc)
+        METRICS.record(MetricRecord(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            lane=lane,
+            success=False,
+            cold_start=is_cold_start,
+            total_latency_ms=round((time.perf_counter() - t0) * 1000, 1),
+            error_category="INTERNAL_ERROR",
+        ))
+        METRICS.add_event(f"{lane}: inference error — {exc}")
+        return {
+            "ok": False, "request_id": request_id, "lane": lane,
+            "error": {"code": "INTERNAL_ERROR",
+                      "message": str(exc)[:200], "retryable": True},
+        }
+
+
+@spaces_gpu(duration=LANES["microbrain"]["gpu_duration"])
+def _execute_microbrain_gpu(payload: dict[str, Any]) -> dict[str, Any]:
+    """MicroBrain inference with GPU allocation (called under @spaces.GPU)."""
+    return execute_lane_inner("microbrain", payload)
+
+
+@spaces_gpu(duration=LANES["mainbrain"]["gpu_duration"])
+def _execute_mainbrain_gpu(payload: dict[str, Any]) -> dict[str, Any]:
+    """MainBrain inference with GPU allocation (called under @spaces.GPU)."""
+    return execute_lane_inner("mainbrain", payload)
+
+
+def execute_lane(lane: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Thread-safe lane execution with GPU lifecycle."""
+    with _inference_lock:
+        if lane == "microbrain":
+            return _execute_microbrain_gpu(payload)
+        return _execute_mainbrain_gpu(payload)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# 10.  Request validation
+# ──────────────────────────────────────────────────────────────────────────
+
+def validate_request(body: dict[str, Any], lane: str) -> str | None:
+    lane_cfg = LANES[lane]
+    messages = body.get("messages", [])
+    if not messages or not isinstance(messages, list):
+        return "Missing or invalid 'messages' field"
+    if len(messages) > lane_cfg["max_messages"]:
+        return f"Too many messages (max {lane_cfg['max_messages']})"
+    body_bytes = len(json.dumps(body))
+    if body_bytes > lane_cfg["max_body_bytes"]:
+        return f"Request body too large (max {lane_cfg['max_body_bytes']} bytes)"
+    for msg in messages:
+        if not isinstance(msg, dict):
+            return "Each message must be a dict"
+        role = msg.get("role", "")
+        if role not in ("system", "user", "assistant"):
+            return f"Unsupported role: {role}"
+        content = msg.get("content", "")
+        if not isinstance(content, str) or not content.strip():
+            return "Message content must be a non-empty string"
+    max_tokens = body.get("max_tokens", 0)
+    if max_tokens and (not isinstance(max_tokens, (int, float)) or max_tokens < 1):
+        return "max_tokens must be a positive integer"
+    temperature = body.get("temperature", 0.7)
+    if isinstance(temperature, (int, float)) and (temperature < 0 or temperature > 2):
+        return "temperature must be between 0 and 2"
+    top_p = body.get("top_p", 0.9)
+    if isinstance(top_p, (int, float)) and (top_p < 0 or top_p > 1):
+        return "top_p must be between 0 and 1"
+    if body.get("stream", False):
+        return "Streaming is not yet supported"
+    return None
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# 11.  Gradio API functions
+# ──────────────────────────────────────────────────────────────────────────
+
+def microbrain_endpoint(
+    payload_json: str,
+    request: gr.Request,
+) -> str:
+    """Authenticated MicroBrain inference (Gradio API)."""
+    try:
+        require_key(request, "microbrain")
+    except AuthError as e:
+        return json.dumps({
+            "ok": False, "error": {"code": "UNAUTHORIZED", "message": e.message, "retryable": False},
+        })
+    try:
+        body = json.loads(payload_json) if isinstance(payload_json, str) else payload_json
+    except (json.JSONDecodeError, TypeError):
+        return json.dumps({
+            "ok": False, "error": {"code": "INVALID_REQUEST", "message": "Invalid JSON", "retryable": False},
+        })
+    err = validate_request(body, "microbrain")
+    if err:
+        return json.dumps({
+            "ok": False, "error": {"code": "INVALID_REQUEST", "message": err, "retryable": False},
+        })
+    result = execute_lane("microbrain", body)
+    return json.dumps(result)
+
+
+def mainbrain_endpoint(
+    payload_json: str,
+    request: gr.Request,
+) -> str:
+    """Authenticated MainBrain inference (Gradio API)."""
+    try:
+        require_key(request, "mainbrain")
+    except AuthError as e:
+        return json.dumps({
+            "ok": False, "error": {"code": "UNAUTHORIZED", "message": e.message, "retryable": False},
+        })
+    try:
+        body = json.loads(payload_json) if isinstance(payload_json, str) else payload_json
+    except (json.JSONDecodeError, TypeError):
+        return json.dumps({
+            "ok": False, "error": {"code": "INVALID_REQUEST", "message": "Invalid JSON", "retryable": False},
+        })
+    err = validate_request(body, "mainbrain")
+    if err:
+        return json.dumps({
+            "ok": False, "error": {"code": "INVALID_REQUEST", "message": err, "retryable": False},
+        })
+    result = execute_lane("mainbrain", body)
+    return json.dumps(result)
+
+
+def _public_status_json() -> str:
+    s = _build_status()
+    return json.dumps(s)
+
+
+def _public_metrics_json() -> str:
+    summaries = {
+        "microbrain": METRICS.get_summary("microbrain"),
+        "mainbrain": METRICS.get_summary("mainbrain"),
+    }
+    return json.dumps({
+        "uptime_seconds": round(time.time() - _started_at, 1),
+        "summaries": summaries,
+        "recent_events": METRICS.get_events()[-20:],
+        "total_events": len(METRICS.get_events()),
+    })
+
+
+def _admin_benchmark_endpoint(lane: str, request: gr.Request) -> str:
+    try:
+        expected = _ASHAT_ADMIN_KEY
+        if not expected:
+            raise AuthError("Admin endpoint not configured")
+        supplied = (request.headers.get("x-ashat-key") or "").strip()
+        if not hmac.compare_digest(supplied, expected):
+            raise AuthError("Unauthorized")
+    except AuthError as e:
+        return json.dumps({"ok": False, "error": {"code": "UNAUTHORIZED", "message": e.message}})
+
+    target = lane.strip().lower()
+    if target not in ("microbrain", "mainbrain", "both"):
+        return json.dumps({"ok": False, "error": "Specify 'microbrain', 'mainbrain', or 'both'"})
+
+    results: dict[str, dict[str, Any]] = {}
+    if target in ("microbrain", "both"):
+        payload = {
+            "request_id": f"bench-{uuid.uuid4()}",
+            "messages": [{"role": "user", "content": _BENCHMARK_PROMPTS["microbrain"]}],
+            "max_tokens": 64, "temperature": 0.1,
+        }
+        results["microbrain"] = execute_lane("microbrain", payload)
+    if target in ("mainbrain", "both"):
+        payload = {
+            "request_id": f"bench-{uuid.uuid4()}",
+            "messages": [{"role": "user", "content": _BENCHMARK_PROMPTS["mainbrain"]}],
+            "max_tokens": 96, "temperature": 0.1,
+        }
+        results["mainbrain"] = execute_lane("mainbrain", payload)
+    return json.dumps({"ok": True, "results": results})
+
+
+def _build_status() -> dict[str, Any]:
+    micro_avail = bool(_downloaded_models.get("microbrain"))
+    main_avail = bool(_downloaded_models.get("mainbrain"))
     return {
         "uptime_seconds": round(time.time() - _started_at, 1),
-        "llama_server_path": llama_bin_path or "(not found)",
-        "lanes": lanes,
-        "all_ready": all(l["ready"] for l in lanes.values()),
+        "llama_server": str(_llama_bin_path or "(not found)"),
+        "lanes": {
+            "microbrain": {
+                "label": "MicroBrain",
+                "model": LANES["microbrain"]["file"],
+                "ctx": LANES["microbrain"]["ctx"],
+                "available": micro_avail, "ready": micro_avail,
+                **METRICS.get_summary("microbrain"),
+            },
+            "mainbrain": {
+                "label": "MainBrain",
+                "model": LANES["mainbrain"]["file"],
+                "ctx": LANES["mainbrain"]["ctx"],
+                "available": main_avail, "ready": main_avail,
+                **METRICS.get_summary("mainbrain"),
+            },
+        },
+        "all_ready": micro_avail and main_avail,
     }
 
 
-def status_text() -> str:
-    """Render server status as a Markdown string for the UI."""
-    st = get_status()
+# ──────────────────────────────────────────────────────────────────────────
+# 12.  Dashboard HTML / refresh helpers
+# ──────────────────────────────────────────────────────────────────────────
+
+def _status_html() -> str:
+    s = _build_status()
     lines = [
-        f"**Uptime:** {st['uptime_seconds']:.0f}s",
-        f"**llama-server:** `{st['llama_server_path']}`",
-        "",
+        '<div style="font-family: monospace; padding: 8px;">',
+        f"<b>Uptime:</b> {s['uptime_seconds']:.0f}s &nbsp;|&nbsp; "
+        f"<b>llama-server:</b> <code>{s['llama_server']}</code>",
     ]
-    for name, info in st["lanes"].items():
-        emoji = "✅" if info["ready"] else ("❌" if info["error"] else "⏳")
-        lines.append(f"{emoji} **{name}** (port {info['port']}, ctx {info['ctx']})")
-        lines.append(f"   - running: {info['running']}")
-        lines.append(f"   - ready: {info['ready']}")
-        if info["model_path"]:
-            lines.append(f"   - model: `{info['model_path']}`")
-        if info["error"]:
-            lines.append(f"   - error: `{info['error'][:150]}`")
-        if info["error_log_tail"]:
-            lines.append("   - last stderr lines:")
-            for line in info["error_log_tail"].splitlines():
-                lines.append(f"     `{line[:120]}`")
-        lines.append("")
-
-    if not st["all_ready"]:
-        lines.append("⚠️ **Degraded mode** — some servers are not ready.")
-
+    for key in ("mainbrain", "microbrain"):
+        info = s["lanes"][key]
+        emoji = "🟢" if info["ready"] else ("🔴" if not info["available"] else "🟡")
+        last_req = info["last_request_time"] or "—"
+        gen_tps = info["avg_generation_tokens_per_second"]
+        latency = info["avg_total_latency_ms"]
+        total = info["total_requests"]
+        success_pct = info["success_rate"]
+        lines.append(
+            f'<div style="margin: 8px 0; padding: 8px; border: 1px solid #444; '
+            f'border-radius: 6px; background: #1a1a2e;">'
+            f'<b style="font-size: 1.1em;">{emoji} {info["label"]}</b><br>'
+            f'<span style="color: #aaa;">Model:</span> {info["model"]} '
+            f'<span style="color: #aaa;">Context:</span> {info["ctx"]}<br>'
+            f'<span style="color: #aaa;">Requests:</span> {total} '
+            f'<span style="color: #aaa;">Success:</span> {success_pct}%<br>'
+            f'<span style="color: #aaa;">Avg gen tok/s:</span> {gen_tps} '
+            f'<span style="color: #aaa;">Avg latency:</span> {latency}ms<br>'
+            f'<span style="color: #aaa;">Last request:</span> {last_req}'
+            f'</div>'
+        )
+    lines.append("</div>")
     return "\n".join(lines)
 
 
-# ---------------------------------------------------------------------------
-# 11.  Gradio event handlers
-# ---------------------------------------------------------------------------
+def _to_frame(records: list[MetricRecord]) -> list[dict[str, Any]]:
+    return [
+        {
+            "timestamp": r.timestamp,
+            "generation_tokens_per_second": r.generation_tokens_per_second,
+            "total_latency_ms": r.total_latency_ms,
+            "prompt_tokens_per_second": r.prompt_tokens_per_second,
+            "success": r.success,
+        }
+        for r in records[-50:]
+    ]
 
-def handle_chat(model_name: str, message: str, chat_history: list[dict],
-                max_tokens: int, temperature: float, top_p: float) -> tuple[list[dict], list[dict], str]:
-    """Process a chat message, append to history, return (state, chatbot, "").
-    Uses Gradio 6.x "messages" format: [{"role": ..., "content": ...}, ...]"""
-    if not message or not message.strip():
-        return chat_history, chat_history, ""
 
-    # Append user message to history
-    chat_history.append({"role": "user", "content": message})
+# ──────────────────────────────────────────────────────────────────────────
+# 13.  FastAPI app and Gradio dashboard
+# ──────────────────────────────────────────────────────────────────────────
 
-    result = call_llama_server(
-        model_name=model_name,
-        prompt=message,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        top_p=top_p,
-    )
+# Create the FastAPI app first (for custom routes)
+_fastapi_app = FastAPI(title="AshatOS Neural Host")
+
+
+# === Custom HTTP routes (OpenAI-compatible API) ===
+
+@_fastapi_app.post("/v1/chat/completions")
+async def http_chat_completions(request: FastRequest) -> JSONResponse:
+    """OpenAI-compatible chat completions endpoint (X-Ashat-Key auth)."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={
+            "error": {"message": "Invalid JSON body", "type": "invalid_request_error"},
+        })
+
+    model = (body.get("model") or "").lower()
+    if "micro" in model or "350m" in model:
+        lane = "microbrain"
+    elif "main" in model or "1.2b" in model:
+        lane = "mainbrain"
+    else:
+        lane = "mainbrain"
+
+    headers = dict(request.headers)
+    try:
+        require_key_http(headers, lane)
+    except AuthError as e:
+        return JSONResponse(status_code=401, content={
+            "error": {"message": e.message, "type": "authentication_error"},
+        })
+
+    err = validate_request(body, lane)
+    if err:
+        return JSONResponse(status_code=400, content={
+            "error": {"message": err, "type": "invalid_request_error"},
+        })
+
+    # Run blocking inference in executor (don't block event loop)
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, execute_lane, lane, body)
 
     if result.get("ok"):
-        response = result["response"]
-    else:
-        response = f"**Error:** {result.get('error', 'unknown error')}"
+        # Return standard OpenAI-compatible response, keeping extra metadata
+        resp = {k: v for k, v in result.items() if k not in ("ok",)}
+        return JSONResponse(content=resp)
 
-    chat_history.append({"role": "assistant", "content": response})
-    return chat_history, chat_history, ""
-
-
-def refresh_status() -> str:
-    """Return fresh status text."""
-    return status_text()
-
-
-# ---------------------------------------------------------------------------
-# 12.  Graceful shutdown
-# ---------------------------------------------------------------------------
-
-atexit.register(stop_all_servers)
-
-# ---------------------------------------------------------------------------
-# 13.  Gradio UI
-# ---------------------------------------------------------------------------
-
-# Keep a @spaces_gpu-decorated function alive in a daemon thread so the
-# zeroGPU runtime keeps GPU allocated for our subprocesses' lifetime.
-@spaces_gpu
-def _gpu_holder() -> None:
-    """Block forever to keep the GPU allocated for llama-server subprocesses."""
-    import threading as _t
-    _t.Event().wait()
+    err_code = result.get("error", {}).get("code", "internal_error")
+    err_msg = result.get("error", {}).get("message", "Unknown error")
+    status = 503 if err_code in ("SERVER_START_FAILED", "INFERENCE_TIMEOUT") else \
+             400 if err_code.startswith("INVALID") else 500
+    return JSONResponse(status_code=status, content={
+        "error": {"message": err_msg, "type": err_code.lower()},
+    })
 
 
-import threading as _t
-_t.Thread(target=_gpu_holder, daemon=True).start()
+@_fastapi_app.get("/v1/models")
+async def http_list_models() -> JSONResponse:
+    return JSONResponse(content={
+        "object": "list",
+        "data": [
+            {
+                "id": LANES["mainbrain"]["file"],
+                "object": "model",
+                "created": int(_started_at),
+                "owned_by": "ashatos",
+            },
+            {
+                "id": LANES["microbrain"]["file"],
+                "object": "model",
+                "created": int(_started_at),
+                "owned_by": "ashatos",
+            },
+        ],
+    })
 
-# Start servers at module level (without @spaces_gpu — the decorator
-# interferes with subprocess.Popen). The GPU holder thread keeps CUDA
-# available for the child processes.
-_llama_bin = start_all_servers()
-if not _llama_bin:
-    _log.warning("llama-server not available — UI will launch in degraded mode")
+
+@_fastapi_app.get("/health")
+async def http_health() -> JSONResponse:
+    return JSONResponse(content={
+        "status": "ok",
+        "uptime_seconds": round(time.time() - _started_at, 1),
+        "microbrain_ready": bool(_downloaded_models.get("microbrain")),
+        "mainbrain_ready": bool(_downloaded_models.get("mainbrain")),
+        "llama_server_available": _llama_bin_path is not None,
+    })
+
+
+@_fastapi_app.get("/api/public_status")
+async def http_public_status() -> JSONResponse:
+    return JSONResponse(content=_build_status())
+
+
+@_fastapi_app.get("/api/public_metrics")
+async def http_public_metrics() -> JSONResponse:
+    return JSONResponse(content={
+        "uptime_seconds": round(time.time() - _started_at, 1),
+        "microbrain": METRICS.get_summary("microbrain"),
+        "mainbrain": METRICS.get_summary("mainbrain"),
+        "recent_events": METRICS.get_events()[-20:],
+    })
+
+
+# === Gradio dashboard ===
+
+JAVASCRIPT_REFRESH = f"""
+<script>
+setInterval(function() {{
+    var btn = document.querySelector('#refresh-status-btn');
+    if (btn) btn.click();
+}}, {PUBLIC_REFRESH_SECONDS * 1000});
+</script>
+"""
 
 with gr.Blocks(
-    title="AshatOS Dual llama-server",
-    head="<script>setInterval(function(){var b=document.querySelector('#refresh-status-btn');if(b)b.click()},3000)</script>",
-) as demo:
+    title="AshatOS Neural Host",
+    theme=gr.themes.Soft(),
+    head=JAVASCRIPT_REFRESH,
+) as _demo:
 
-    gr.Markdown(
+    gr.HTML(
         """
-        # 🧠 AshatOS Dual llama-server
-
-        Two local GGUF models served by `llama-server` subprocesses.
+        <div style="text-align: center; padding: 20px;">
+            <h1 style="margin: 0; font-size: 2em;">🧠 ASHAT NEURAL HOST</h1>
+            <p style="color: #888; font-size: 1.1em;">Dual-Lane Inference Telemetry</p>
+        </div>
         """
     )
 
-    with gr.Tab("Chat"):
-        chatbot = gr.Chatbot(
-            label="Conversation",
-            placeholder="Select a model and start chatting...",
-            height=400,
-        )
+    status_display = gr.HTML(value=_status_html())
 
-        with gr.Row():
-            model_selector = gr.Dropdown(
-                choices=list(MODELS.keys()),
-                value="MainBrain",
-                label="Model",
-                scale=1,
-                interactive=True,
-            )
-            with gr.Column(scale=4):
-                prompt_box = gr.Textbox(
-                    label="Your message",
-                    placeholder="Type your message here and press Enter or click Send...",
-                    lines=2,
-                )
-            submit_btn = gr.Button("Send", variant="primary", scale=1, min_width=80)
-
-        with gr.Accordion("Parameters", open=False):
-            with gr.Row():
-                max_tokens_slider = gr.Slider(
-                    1, 2048, value=512, step=1, label="Max tokens"
-                )
-                temperature_slider = gr.Slider(
-                    0.0, 2.0, value=0.7, step=0.05, label="Temperature"
-                )
-                top_p_slider = gr.Slider(
-                    0.0, 1.0, value=0.9, step=0.05, label="Top-p"
-                )
-
-        clear_btn = gr.Button("🗑 Clear conversation", variant="secondary", size="sm")
-
-        # State to hold conversation history
-        chat_state = gr.State([])
-
-        submit_btn.click(
-            fn=handle_chat,
-            inputs=[
-                model_selector, prompt_box, chat_state,
-                max_tokens_slider, temperature_slider, top_p_slider,
-            ],
-            outputs=[chat_state, chatbot, prompt_box],
-            api_name="chat",
-            concurrency_limit=1,
-        )
-
-        # Also trigger on Enter key in the textbox
-        prompt_box.submit(
-            fn=handle_chat,
-            inputs=[
-                model_selector, prompt_box, chat_state,
-                max_tokens_slider, temperature_slider, top_p_slider,
-            ],
-            outputs=[chat_state, chatbot, prompt_box],
-            concurrency_limit=1,
-        )
-
-        clear_btn.click(
-            fn=lambda: ([], []),
-            inputs=[],
-            outputs=[chat_state, chatbot],
-        )
-
-    with gr.Tab("Server Status"):
+    with gr.Row():
         refresh_btn = gr.Button(
             "🔄 Refresh Status", variant="secondary",
             elem_id="refresh-status-btn",
         )
-        status_display = gr.Markdown(value=status_text())
-        refresh_btn.click(
-            fn=refresh_status,
-            inputs=[],
-            outputs=status_display,
-            api_name="status",
-            concurrency_limit=1,
-        )
-        # Auto-refresh status every 3s via the _js parameter (Gradio 6.x injects
-        # this into the page head, so scripts execute properly).
-        # Note: gr.HTML with inline <script> does NOT work in Gradio 6.x.
-        # We use a custom HTML reload hint instead.
-        gr.HTML(
-            '<p style="font-size:0.85em;color:var(--body-text-color-subdued);">'
-            'Status auto-refreshes every 3 seconds.</p>'
-        )
 
-    with gr.Tab("About"):
+    gr.Markdown("## Performance Metrics")
+
+    with gr.Tabs():
+        with gr.TabItem("MicroBrain"):
+            micro_gen_plot = gr.LinePlot(
+                x="timestamp", y="generation_tokens_per_second",
+                title="Generation Tokens/sec (MicroBrain)",
+            )
+            micro_latency_plot = gr.LinePlot(
+                x="timestamp", y="total_latency_ms",
+                title="Total Latency (MicroBrain)",
+            )
+        with gr.TabItem("MainBrain"):
+            main_gen_plot = gr.LinePlot(
+                x="timestamp", y="generation_tokens_per_second",
+                title="Generation Tokens/sec (MainBrain)",
+            )
+            main_latency_plot = gr.LinePlot(
+                x="timestamp", y="total_latency_ms",
+                title="Total Latency (MainBrain)",
+            )
+
+    gr.Markdown("## Recent Health Events")
+    events_display = gr.Dataframe(
+        headers=["Event"],
+        label="Recent Events",
+        row_count=10,
+    )
+
+    with gr.Accordion("Configuration", open=False):
         gr.Markdown(f"""
-        ### AshatOS Dual llama-server Host
+        ### Lane Configuration
 
-        - **MainBrain** port `{MODELS['MainBrain']['port']}` (ctx {MODELS['MainBrain']['ctx']})
-        - **MicroBrain** port `{MODELS['MicroBrain']['port']}` (ctx {MODELS['MicroBrain']['ctx']})
+        | Setting | MicroBrain | MainBrain |
+        |---|---|---|
+        | Model | `{LANES['microbrain']['file']}` | `{LANES['mainbrain']['file']}` |
+        | Repository | `{LANES['microbrain']['repo']}` | `{LANES['mainbrain']['repo']}` |
+        | Context | {LANES['microbrain']['ctx']} | {LANES['mainbrain']['ctx']} |
+        | Max tokens | {LANES['microbrain']['max_tokens']} | {LANES['mainbrain']['max_tokens']} |
+        | GPU duration | {LANES['microbrain']['gpu_duration']}s | {LANES['mainbrain']['gpu_duration']}s |
 
-        **Model files:**
-        - MainBrain: `{MODELS['MainBrain']['file']}` from `{MODELS['MainBrain']['repo']}`
-        - MicroBrain: `{MODELS['MicroBrain']['file']}` from `{MODELS['MicroBrain']['repo']}`
+        ### Runtime
 
-        **Logs:** `./logs/`
-        - `mainbrain.out.log` / `mainbrain.err.log`
-        - `microbrain.out.log` / `microbrain.err.log`
-        - `llama_install.log`
-
-        **Environment variables:**
-        - `MAINBRAIN_PORT`, `MICROBRAIN_PORT`
-        - `MAINBRAIN_CTX`, `MICROBRAIN_CTX`
-        - `MAINBRAIN_MODEL_PATH`, `MICROBRAIN_MODEL_PATH`
-        - `LLAMA_THREADS`, `LLAMA_BATCH_SIZE`
-        - `LLAMA_SERVER_PATH`, `AUTO_BUILD_LLAMA_SERVER`
+        - `INTERNAL_PORT`: {INTERNAL_PORT}
+        - `N_THREADS`: {N_THREADS} | `N_BATCH`: {N_BATCH}
+        - `PUBLIC_REFRESH_SECONDS`: {PUBLIC_REFRESH_SECONDS}
+        - `QUEUE_LIMIT`: {QUEUE_LIMIT}
         """)
 
-demo.queue(default_concurrency_limit=1, max_size=12)
+    # -- Refresh handlers --
+    refresh_btn.click(
+        fn=lambda: _status_html(),
+        inputs=[],
+        outputs=status_display,
+        api_name="status",
+        concurrency_limit=1,
+    )
+
+    def _refresh_metrics() -> tuple:
+        all_m = METRICS.get_all_metrics()
+        micro_frame = _to_frame(all_m.get("microbrain", []))
+        main_frame = _to_frame(all_m.get("mainbrain", []))
+        events = [{"Event": e} for e in METRICS.get_events()[-10:]]
+        return (micro_frame, micro_frame, main_frame, main_frame, events)
+
+    _demo.load(
+        fn=_refresh_metrics,
+        inputs=[],
+        outputs=[micro_gen_plot, micro_latency_plot, main_gen_plot, main_latency_plot, events_display],
+        concurrency_limit=1,
+    )
+
+    # -- Register private Gradio API endpoints (hidden triggers inside Blocks) --
+    _micro_input = gr.Textbox(visible=False, value="{}", label="microbrain_payload")
+    _micro_trigger = gr.Button(visible=False, elem_id="_micro_trigger")
+    _micro_trigger.click(
+        fn=microbrain_endpoint,
+        inputs=[_micro_input, gr.Request()],
+        outputs=[gr.Textbox(visible=False)],
+        api_name="microbrain",
+        concurrency_limit=1,
+    )
+
+    _main_input = gr.Textbox(visible=False, value="{}", label="mainbrain_payload")
+    _main_trigger = gr.Button(visible=False, elem_id="_main_trigger")
+    _main_trigger.click(
+        fn=mainbrain_endpoint,
+        inputs=[_main_input, gr.Request()],
+        outputs=[gr.Textbox(visible=False)],
+        api_name="mainbrain",
+        concurrency_limit=1,
+    )
+
+    _status_trigger = gr.Button(visible=False, elem_id="_status_trigger")
+    _status_trigger.click(
+        fn=_public_status_json,
+        inputs=[],
+        outputs=[gr.Textbox(visible=False)],
+        api_name="public_status",
+        concurrency_limit=1,
+    )
+
+    _metrics_trigger = gr.Button(visible=False, elem_id="_metrics_trigger")
+    _metrics_trigger.click(
+        fn=_public_metrics_json,
+        inputs=[],
+        outputs=[gr.Textbox(visible=False)],
+        api_name="public_metrics",
+        concurrency_limit=1,
+    )
+
+    _benchmark_input = gr.Textbox(visible=False, value="both", label="benchmark_lane")
+    _benchmark_trigger = gr.Button(visible=False, elem_id="_benchmark_trigger")
+    _benchmark_trigger.click(
+        fn=_admin_benchmark_endpoint,
+        inputs=[_benchmark_input, gr.Request()],
+        outputs=[gr.Textbox(visible=False)],
+        api_name="admin_benchmark",
+        concurrency_limit=1,
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# 15.  Startup
+# ──────────────────────────────────────────────────────────────────────────
+
+def startup() -> None:
+    global _llama_bin_path
+    _log.info("=" * 60)
+    _log.info("AshatOS Dual-Lane ZeroGPU Inference Host")
+    _log.info("=" * 60)
+
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    _print_key_gen_help()
+
+    _llama_bin_path = ensure_llama_server()
+    if _llama_bin_path:
+        _log.info("llama-server binary: %s", _llama_bin_path)
+    else:
+        _log.warning("llama-server binary not available — degraded mode")
+
+    def _dl(lane: str) -> None:
+        try:
+            ensure_model(lane)
+            _log.info("%s: model cached at startup", lane)
+            METRICS.add_event(f"{lane}: model cached")
+        except Exception as exc:
+            _log.warning("%s: model download failed: %s", lane, exc)
+            METRICS.add_event(f"{lane}: model download failed")
+
+    t1 = threading.Thread(target=_dl, args=("microbrain",), daemon=True)
+    t2 = threading.Thread(target=_dl, args=("mainbrain",), daemon=True)
+    t1.start()
+    t2.start()
+
+
+startup()
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# 16.  Mount Gradio on FastAPI and launch
+# ──────────────────────────────────────────────────────────────────────────
+
+# Queue configuration
+_demo.queue(default_concurrency_limit=1, max_size=QUEUE_LIMIT)
+
+# Mount Gradio at the root of our FastAPI app
+app = gr.mount_gradio_app(_fastapi_app, _demo, path="/")
 
 if __name__ == "__main__":
-    demo.launch(server_name="0.0.0.0", server_port=7860, theme=gr.themes.Soft())
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=7860)

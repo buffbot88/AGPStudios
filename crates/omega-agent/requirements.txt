@@ -2,3 +2,6 @@ gradio>=5.0,<7
 gradio_client>=1.0
 huggingface_hub>=0.27
 requests>=2.31.0
+fastapi>=0.115.0
+uvicorn>=0.34.0
+spaces>=0.1

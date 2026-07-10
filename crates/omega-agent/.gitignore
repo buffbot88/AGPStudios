@@ -1,10 +1,12 @@
-.venv-test/
 __pycache__/
 *.pyc
-.agents/
-knowledge.md
 .venv/
 venv/
-.env
-.logs/
+runtime/
 .runtime/
+models/
+cache/
+*.log
+.env
+.env.*
+metrics_snapshot.json

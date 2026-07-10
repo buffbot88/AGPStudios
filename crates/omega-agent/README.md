@@ -1,94 +1,130 @@
----
-title: ASHAT Llama Server
-emoji: 🧠
-colorFrom: indigo
-colorTo: purple
-sdk: gradio
-app_file: app.py
-pinned: false
-license: mit
----
+# AshatOS Dual-Lane ZeroGPU Inference Host
 
-# AshatOS Dual llama-server Host
+A private inference appliance running on Hugging Face Spaces (zeroGPU).
 
-> Hugging Face Space that auto-installs or builds `llama-server`, then spawns
-> **two local GGUF model servers** behind a single Gradio UI. No runtime
-> dependency on `llama-cpp-python`.
+**Public surface:** Read-only telemetry dashboard  
+**Private surface:** Two authenticated GGUF inference lanes (MicroBrain / MainBrain)
+
+The Space is **not** AshatOS itself. It is a focused token-generation host that
+accepts authenticated requests, runs inference on-demand, collects metrics,
+and displays a sanitized public dashboard.
+
+---
 
 ## How it works
 
-1. On boot, `app.py` detects whether `llama-server` is available.
-2. If missing, it attempts (in order):
-   - Download a prebuilt binary from GitHub releases
-   - Clone and build `llama.cpp` from source (CPU-only)
-3. Two GGUF models are downloaded from Hugging Face Hub (or used from a local path):
-   - **MainBrain** (port `18080`, ctx `1024`) — fast/350M model
-   - **MicroBrain** (port `18081`, ctx `1536`) — slow/1.2B model
-4. Each model gets its own `llama-server` subprocess.
-5. The Gradio UI waits for both servers (or degrades gracefully) and routes
-   user prompts to the selected model via `POST /v1/chat/completions`.
+1. On boot, `app.py` installs or detects `llama-server` (prebuilt binary from
+   GitHub releases, with CPU-only source build fallback).
+2. Both GGUF models download from Hugging Face Hub in background threads.
+3. The ZeroGPU runtime is used per-request: each inference call starts
+   `llama-server`, runs one completion, collects metrics, and terminates.
+4. The Gradio dashboard displays live telemetry (no inference controls).
+5. FastAPI routes expose OpenAI-compatible `/v1/chat/completions` and
+   `/v1/models` endpoints.
+6. Authentication via `X-Ashat-Key` header (constant-time HMAC comparison).
 
-## Required variables
+---
 
-These are the **built-in defaults**. Override them via Space secrets or env vars.
+## Required Space Secrets
 
-```text
-FAST_MODEL_REPO=RipBuffy/LFM2.5-Q6_K
-FAST_MODEL_FILE=LFM2.5-350M-Q6_K.gguf
+| Secret | Purpose |
+|---|---|
+| `HF_TOKEN` | Hugging Face access token (for private repos) |
+| `ASHAT_MICROBRAIN_KEY` | MicroBrain lane API key |
+| `ASHAT_MAINBRAIN_KEY` | MainBrain lane API key |
+| `ASHAT_ADMIN_KEY` | Admin operations (benchmark) key |
 
-SLOW_MODEL_REPO=RipBuffy/LFM2.5-Q6_K
-SLOW_MODEL_FILE=LFM2.5-1.2B-Instruct-Q6_K.gguf
+---
 
-MODEL_REVISION=main
-N_CTX_FAST=1024
-N_CTX_SLOW=1536
-```
+## Environment Variables
 
-**Optional overrides:**
+### Model Configuration
 
-| Variable | Default | Purpose |
+| Variable | Default | Description |
 |---|---|---|
-| `MAINBRAIN_PORT` | `18080` | Port for MainBrain server |
-| `MICROBRAIN_PORT` | `18081` | Port for MicroBrain server |
-| `MAINBRAIN_CTX` | `1024` | Context size for MainBrain |
-| `MICROBRAIN_CTX` | `1536` | Context size for MicroBrain |
-| `MAINBRAIN_MODEL_PATH` | *(none)* | Direct local path to GGUF (bypasses HF download) |
-| `MICROBRAIN_MODEL_PATH` | *(none)* | Direct local path to GGUF (bypasses HF download) |
-| `LLAMA_THREADS` | `2` | CPU threads for tokenization/sampling |
-| `LLAMA_BATCH_SIZE` | `128` | Batch size for prompt processing |
-| `LLAMA_SERVER_PATH` | *(none)* | Explicit path to `llama-server` binary |
-| `AUTO_BUILD_LLAMA_SERVER` | `1` | Set to `0` to skip auto-install |
+| `MAIN_MODEL_REPO` | `RipBuffy/LFM2.5-Q6_K` | MainBrain model repository |
+| `MAIN_MODEL_FILE` | `LFM2.5-1.2B-Instruct-Q6_K.gguf` | MainBrain GGUF filename |
+| `MICRO_MODEL_REPO` | `RipBuffy/LFM2.5-Q6_K` | MicroBrain model repository |
+| `MICRO_MODEL_FILE` | `LFM2.5-350M-Q6_K.gguf` | MicroBrain GGUF filename |
+| `MODEL_REVISION` | `main` | Hugging Face model revision |
 
-For private model repositories, add `HF_TOKEN` as a Space secret.
+### Runtime Configuration
 
-## API endpoints
+| Variable | Default | Description |
+|---|---|---|
+| `INTERNAL_PORT` | `18080` | Port for llama-server |
+| `N_THREADS` | `2` | CPU threads for tokenization/sampling |
+| `N_BATCH` | `128` | Batch size |
+| `MAIN_CTX` | `1536` | MainBrain context size |
+| `MICRO_CTX` | `1024` | MicroBrain context size |
+| `MAIN_MAX_TOKENS` | `256` | MainBrain max output tokens |
+| `MICRO_MAX_TOKENS` | `128` | MicroBrain max output tokens |
+| `MAIN_GPU_DURATION` | `120` | ZeroGPU duration for MainBrain (seconds) |
+| `MICRO_GPU_DURATION` | `60` | ZeroGPU duration for MicroBrain (seconds) |
+| `QUEUE_LIMIT` | `16` | Max queued requests |
+| `PUBLIC_REFRESH_SECONDS` | `10` | Dashboard auto-refresh interval |
+| `LOG_LEVEL` | `INFO` | Logging level |
+| `LLAMA_SERVER_VERSION` | *(auto)* | Specific llama.cpp release tag |
+| `LLAMA_SERVER_PATH` | *(none)* | Manual path to llama-server binary |
 
-- `/chat` — send a prompt to a selected model
-- `/status` — server status (ready/error/running)
-- `/health` — (legacy health, maintained for backward compat if needed)
+---
+
+## API Endpoints
+
+### OpenAI-Compatible (FastAPI)
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `GET` | `/` | No | Gradio dashboard |
+| `GET` | `/v1/models` | No | List available models |
+| `POST` | `/v1/chat/completions` | `X-Ashat-Key` | Chat completions |
+| `GET` | `/health` | No | Health check |
+| `GET` | `/api/public_status` | No | Public status snapshot |
+| `GET` | `/api/public_metrics` | No | Public metrics snapshot |
+
+### Gradio Queue API
+
+| API Name | Auth | Description |
+|---|---|---|
+| `microbrain` | `X-Ashat-Key` | MicroBrain inference |
+| `mainbrain` | `X-Ashat-Key` | MainBrain inference |
+| `public_status` | No | Status (must be called via gradio_client) |
+| `public_metrics` | No | Metrics (must be called via gradio_client) |
+| `admin_benchmark` | `X-Ashat-Key` (admin) | Run benchmark |
+
+---
 
 ## Logs
 
-All logs are written to `./logs/`:
+All logs written to `./logs/`:
 
-- `mainbrain.out.log` / `mainbrain.err.log`
-- `microbrain.out.log` / `microbrain.err.log`
-- `llama_install.log`
+- `microbrain.out.log` / `microbrain.err.log` — llama-server output
+- `mainbrain.out.log` / `mainbrain.err.log` — llama-server output
+- `llama_install.log` — binary install diagnostics
 
-## Client usage
+---
 
-See `dual_model_client_example.py`.
+## Client Usage
 
 ```python
-from gradio_client import Client
+import httpx
+import json
 
-client = Client("your-space-id")
-result = client.predict(
-    model_name="MainBrain",
-    message="Hello!",
-    max_tokens=96,
-    temperature=0.7,
-    top_p=0.9,
-    api_name="/chat",
+# OpenAI-compatible endpoint (requires HF auth for zeroGPU Space)
+resp = httpx.post(
+    "https://RipBuffy-ashatos.hf.space/v1/chat/completions",
+    headers={
+        "Authorization": "Bearer <HF_TOKEN>",
+        "X-Ashat-Key": "<ASHAT_MICROBRAIN_KEY>",
+    },
+    json={
+        "messages": [{"role": "user", "content": "Hello!"}],
+        "max_tokens": 64,
+    },
 )
+print(resp.json()["choices"][0]["message"]["content"])
 ```
+
+## License
+
+MIT
