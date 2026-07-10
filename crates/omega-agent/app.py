@@ -633,9 +633,13 @@ function updateCards() {
             document.getElementById('mb-prompt').textContent = Math.round(mb.avg_prompt_tokens_per_second || 0);
             document.getElementById('mb-gen').textContent = Math.round(mb.avg_generation_tokens_per_second || 0);
             document.getElementById('mb-req').textContent = mb.total_requests || 0;
+            document.getElementById('mb-quickest').textContent = (mb.quickest_generation_tokens_per_second || 0).toFixed(1);
+            document.getElementById('mb-slowest').textContent = (mb.slowest_generation_tokens_per_second || 0).toFixed(1);
             document.getElementById('M-prompt').textContent = Math.round(M.avg_prompt_tokens_per_second || 0);
             document.getElementById('M-gen').textContent = Math.round(M.avg_generation_tokens_per_second || 0);
             document.getElementById('M-req').textContent = M.total_requests || 0;
+            document.getElementById('M-quickest').textContent = (M.quickest_generation_tokens_per_second || 0).toFixed(1);
+            document.getElementById('M-slowest').textContent = (M.slowest_generation_tokens_per_second || 0).toFixed(1);
         }).catch(function(){});
 }
 document.addEventListener('DOMContentLoaded', function() { updateCards(); });
@@ -675,6 +679,13 @@ with gr.Blocks(title="AshatOS Neural Host") as _demo:
                         <div><div style="color:#4ade80;font-size:0.65em;">gen</div>
                             <div style="font-size:1.5em;font-weight:700;color:#86efac;" id="mb-gen">0</div>
                             <div style="color:#64748b;font-size:0.6em;">tok/s</div></div>
+                    <div style="display:flex;gap:20px;margin-top:10px;padding-top:8px;border-top:1px solid #334155;">
+                        <div><div style="color:#c084fc;font-size:0.65em;">quickest</div>
+                            <div style="font-size:1.1em;font-weight:600;color:#d8b4fe;" id="mb-quickest">0</div>
+                            <div style="color:#64748b;font-size:0.6em;">tok/s</div></div>
+                        <div><div style="color:#fbbf24;font-size:0.65em;">slowest</div>
+                            <div style="font-size:1.1em;font-weight:600;color:#fcd34d;" id="mb-slowest">0</div>
+                            <div style="color:#64748b;font-size:0.6em;">tok/s</div></div>
                     </div>
                 </div>
                 """
@@ -696,6 +707,13 @@ with gr.Blocks(title="AshatOS Neural Host") as _demo:
                             <div style="color:#64748b;font-size:0.6em;">tok/s</div></div>
                         <div><div style="color:#4ade80;font-size:0.65em;">gen</div>
                             <div style="font-size:1.5em;font-weight:700;color:#86efac;" id="M-gen">0</div>
+                            <div style="color:#64748b;font-size:0.6em;">tok/s</div></div>
+                    <div style="display:flex;gap:20px;margin-top:10px;padding-top:8px;border-top:1px solid #334155;">
+                        <div><div style="color:#c084fc;font-size:0.65em;">quickest</div>
+                            <div style="font-size:1.1em;font-weight:600;color:#d8b4fe;" id="M-quickest">0</div>
+                            <div style="color:#64748b;font-size:0.6em;">tok/s</div></div>
+                        <div><div style="color:#fbbf24;font-size:0.65em;">slowest</div>
+                            <div style="font-size:1.1em;font-weight:600;color:#fcd34d;" id="M-slowest">0</div>
                             <div style="color:#64748b;font-size:0.6em;">tok/s</div></div>
                     </div>
                 </div>
