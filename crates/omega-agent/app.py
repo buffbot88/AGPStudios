@@ -1,9 +1,28 @@
 #!/usr/bin/env python3
 """AshatOS Neural I/O Host — slim orchestrator.
 
-Preserves the new Ashat Neural Host UI and Live Benchmark dashboard.
-Startup work is backgrounded so /health responds immediately and the
-Gradio UI renders before models or the llama-server binary are ready.
+The heavy lifting now lives in purpose-built modules:
+    * :mod:`domain`            — Lane enum + per-lane config + request validation
+    * :mod:`run_errors`        — typed exception hierarchy + RunError->JSON codes
+    * :mod:`lane_resolver`     — strict route-or-model lane routing
+    * :mod:`lane_keygate`      — single auth authority for both surfaces
+    * :mod:`backend_launcher`  — per-request llama-server lifecycle
+    * :mod:`completion_client` — HTTP-only client to the live backend
+    * :mod:`run_metrics`       — sanitized metric + event recording
+    * :mod:`metrics_store`     — thread-safe in-memory rolling deque
+    * :mod:`installer`         — bin installer + GitHub/HF mirror tiers
+    * :mod:`run_queue`         — inference queue with timeout + depth tracking
+    * :mod:`surface_adapter`   — transport-agnostic pipeline seam
+    * :mod:`response_adapter`  — envelope to HTTP response conversion
+    * :mod:`env_scanner`       — ZeroGPU runtime diagnostics probe
+    * :mod:`public_snapshot`   — one canonical projection, three consumers
+
+What stays here: logging, config defaults, the FastAPI and Gradio wiring,
+the :func:`_run_pipeline` orchestrator and envelope builders,
+the @spaces.GPU decorated handlers, the Gradio dashboard,
+:func:`execute_lane` (serialising entry point), and lazy initialization
+(backgrounded so /health responds immediately and the UI renders before
+models or the llama-server binary are ready).
 """
 
 from __future__ import annotations
@@ -344,6 +363,13 @@ def gradio_metrics_load() -> tuple:
     return _refresh_metrics_body()
 
 
+@spaces.GPU
+def gradio_lazy_init() -> str:
+    """Lazy init wrapper — @spaces.GPU decorated so the platform scanner
+    finds a decorated handler for every demo.load() event."""
+    return _lazy_init()
+
+
 def execute_lane(lane_str: str, payload: dict[str, Any]) -> dict[str, Any]:
     lane = Lane.parse(lane_str)
     try:
@@ -653,8 +679,8 @@ with gr.Blocks(title="AshatOS Neural Host") as _demo:
     )
 
     # Lazy init — runs in Gradio's queue when UI loads.
-    # Must be INSIDE the with gr.Blocks() context.
-    _demo.load(fn=_lazy_init, inputs=None, outputs=None, concurrency_limit=1)
+    # Must be @spaces.GPU-decorated so the ZeroGPU scanner finds it.
+    _demo.load(fn=gradio_lazy_init, inputs=None, outputs=None, concurrency_limit=1)
 
     _demo.load(
         fn=gradio_metrics_load,
