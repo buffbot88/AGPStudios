@@ -38,7 +38,9 @@ These can be set as normal environment variables to override defaults:
 | `MAIN_MODEL_FILE` | `LFM2.5-1.2B-Instruct-Q6_K.gguf` | Override model file |
 | `MICRO_MODEL_REPO` | `RipBuffy/LFM2.5-Q6_K` | Override model repository |
 | `MICRO_MODEL_FILE` | `LFM2.5-350M-Q6_K.gguf` | Override model file |
-| `LLAMA_SERVER_VERSION` | *(auto)* | Pin a specific llama.cpp release |
+| `LLAMA_SERVER_VERSION` | `b9945` | Pin a specific llama.cpp release (pinned default; set Space Secret to override) |
+| `LLAMA_SERVER_HF_REPO` | `RipBuffy/llama-server-mirror` | HF mirror repo used as fallback when GitHub releases are unreachable |
+| `LLAMA_SERVER_HF_FILE` | `llama-server-{tag}` | Filename inside the mirror repo (auto-derived from tag if blank) |
 | `LOG_LEVEL` | `INFO` | Set to `DEBUG` for verbose logging |
 
 ## Key Generation

@@ -74,7 +74,9 @@ and displays a sanitized public dashboard.
 | `QUEUE_LIMIT` | `16` | Max queued requests |
 | `PUBLIC_REFRESH_SECONDS` | `10` | Dashboard auto-refresh interval |
 | `LOG_LEVEL` | `INFO` | Logging level |
-| `LLAMA_SERVER_VERSION` | *(auto)* | Specific llama.cpp release tag |
+| `LLAMA_SERVER_VERSION` | `b9945` | Specific llama.cpp release tag (pinned for reproducible installs). Set to `"latest"` to track upstream. |
+| `LLAMA_SERVER_HF_REPO` | `RipBuffy/llama-server-mirror` | HF mirror repo consulted if every GitHub-release strategy fails. |
+| `LLAMA_SERVER_HF_FILE` | `llama-server-{tag}` | Filename in the mirror repo (auto-derived from the pinned tag if left blank). |
 | `LLAMA_SERVER_PATH` | *(none)* | Manual path to llama-server binary |
 
 ---
@@ -138,3 +140,19 @@ print(resp.json()["choices"][0]["message"]["content"])
 ## License
 
 MIT
+
+## Tests
+
+A small unittest suite covers the install-asset-selection logic without
+booting the Space. The `install_strategies` module is dependency-light
+(no gradio, fastapi, huggingface_hub), so tests run on a vanilla Python install:
+
+```bash
+python -m unittest discover tests -v
+```
+
+The suite pins:
+- Real-asset filtering (rejects cudart-* / cross-tag / non-archive names).
+- Fallback to "every archive in the release" when no linux binary matches.
+- Empty-asset fallback to URL-pattern guesses.
+- URL guesses that disagree with the GitHub release JSON are dropped.
