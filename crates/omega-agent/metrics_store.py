@@ -89,6 +89,8 @@ class MetricsStore:
                 "avg_generation_tokens_per_second": 0.0,
                 "avg_prompt_tokens_per_second": 0.0,
                 "avg_total_latency_ms": 0.0,
+                "quickest_generation_tokens_per_second": 0.0,
+                "slowest_generation_tokens_per_second": 0.0,
                 "last_request_time": None,
                 "last_success": True,
                 "success_rate": 100.0,
@@ -107,6 +109,8 @@ class MetricsStore:
             "avg_generation_tokens_per_second": round(sum(gen_tps) / len(gen_tps), 2) if gen_tps else 0.0,
             "avg_prompt_tokens_per_second": round(sum(prompt_tps) / len(prompt_tps), 2) if prompt_tps else 0.0,
             "avg_total_latency_ms": round(sum(latencies) / len(latencies), 1) if latencies else 0.0,
+            "quickest_generation_tokens_per_second": round(max(gen_tps), 2) if gen_tps else 0.0,
+            "slowest_generation_tokens_per_second": round(min(gen_tps), 2) if gen_tps else 0.0,
             "last_request_time": records[-1].timestamp if records else None,
             "last_success": records[-1].success if records else True,
         }
