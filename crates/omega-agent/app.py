@@ -903,23 +903,28 @@ atexit.register(stop_all_servers)
 # 13.  Gradio UI
 # ---------------------------------------------------------------------------
 
-# Call a minimal @spaces_gpu function at module level to satisfy the
-# zeroGPU runtime check. Then start servers WITHOUT the decorator so
-# subprocesses launch normally (the decorator interferes with Popen).
+# Keep a @spaces_gpu-decorated function alive in a daemon thread so the
+# zeroGPU runtime keeps GPU allocated for our subprocesses' lifetime.
 @spaces_gpu
-def _gpu_signal() -> bool:
-    """Minimal function that satisfies the zeroGPU @spaces.GPU check."""
-    return True
+def _gpu_holder() -> None:
+    """Block forever to keep the GPU allocated for llama-server subprocesses."""
+    import threading as _t
+    _t.Event().wait()
 
 
-_gpu_signal()  # satisfy the runtime check
+import threading as _t
+_t.Thread(target=_gpu_holder, daemon=True).start()
 
+# Start servers at module level (without @spaces_gpu — the decorator
+# interferes with subprocess.Popen). The GPU holder thread keeps CUDA
+# available for the child processes.
 _llama_bin = start_all_servers()
 if not _llama_bin:
     _log.warning("llama-server not available — UI will launch in degraded mode")
 
 with gr.Blocks(
     title="AshatOS Dual llama-server",
+    head="<script>setInterval(function(){var b=document.querySelector('#refresh-status-btn');if(b)b.click()},3000)</script>",
 ) as demo:
 
     gr.Markdown(
@@ -1011,15 +1016,14 @@ with gr.Blocks(
             api_name="status",
             concurrency_limit=1,
         )
-        # Auto-refresh the status display every 3 seconds
-        gr.HTML("""
-        <script>
-        setInterval(function() {
-            let btn = document.querySelector('#refresh-status-btn');
-            if (btn) btn.click();
-        }, 3000);
-        </script>
-        """)
+        # Auto-refresh status every 3s via the _js parameter (Gradio 6.x injects
+        # this into the page head, so scripts execute properly).
+        # Note: gr.HTML with inline <script> does NOT work in Gradio 6.x.
+        # We use a custom HTML reload hint instead.
+        gr.HTML(
+            '<p style="font-size:0.85em;color:var(--body-text-color-subdued);">'
+            'Status auto-refreshes every 3 seconds.</p>'
+        )
 
     with gr.Tab("About"):
         gr.Markdown(f"""
