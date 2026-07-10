@@ -1185,8 +1185,6 @@ setInterval(function() {{
 
 with gr.Blocks(
     title="AshatOS Neural Host",
-    theme=gr.themes.Soft(),
-    head=JAVASCRIPT_REFRESH,
 ) as _demo:
 
     gr.HTML(
@@ -1283,7 +1281,7 @@ with gr.Blocks(
     _micro_trigger = gr.Button(visible=False, elem_id="_micro_trigger")
     _micro_trigger.click(
         fn=microbrain_endpoint,
-        inputs=[_micro_input, gr.Request()],
+        inputs=[_micro_input],
         outputs=[gr.Textbox(visible=False)],
         api_name="microbrain",
         concurrency_limit=1,
@@ -1293,7 +1291,7 @@ with gr.Blocks(
     _main_trigger = gr.Button(visible=False, elem_id="_main_trigger")
     _main_trigger.click(
         fn=mainbrain_endpoint,
-        inputs=[_main_input, gr.Request()],
+        inputs=[_main_input],
         outputs=[gr.Textbox(visible=False)],
         api_name="mainbrain",
         concurrency_limit=1,
@@ -1321,7 +1319,7 @@ with gr.Blocks(
     _benchmark_trigger = gr.Button(visible=False, elem_id="_benchmark_trigger")
     _benchmark_trigger.click(
         fn=_admin_benchmark_endpoint,
-        inputs=[_benchmark_input, gr.Request()],
+        inputs=[_benchmark_input],
         outputs=[gr.Textbox(visible=False)],
         api_name="admin_benchmark",
         concurrency_limit=1,
@@ -1373,7 +1371,11 @@ startup()
 _demo.queue(default_concurrency_limit=1, max_size=QUEUE_LIMIT)
 
 # Mount Gradio at the root of our FastAPI app
-app = gr.mount_gradio_app(_fastapi_app, _demo, path="/")
+app = gr.mount_gradio_app(
+    _fastapi_app, _demo, path="/",
+    theme=gr.themes.Soft(),
+    head=JAVASCRIPT_REFRESH,
+)
 
 if __name__ == "__main__":
     import uvicorn
