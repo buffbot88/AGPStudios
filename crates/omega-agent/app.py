@@ -244,24 +244,34 @@ def _download_prebuilt_llama_server() -> str | None:
 
     _log_install_fmt("latest llama.cpp release: %s", tag)
 
-    # Look for an ubuntu-x64 asset
+    # Look for a Linux x86_64 prebuilt zip among release assets
     assets = release.get("assets", [])
     zip_url = None
     for asset in assets:
         name: str = asset.get("name", "")
-        if "ubuntu" in name.lower() and "x64" in name.lower() and name.endswith(".zip"):
-            zip_url = asset.get("browser_download_url")
-            _log_install_fmt("found prebuilt asset: %s", name)
-            break
+        name_lower = name.lower()
+        if name_lower.endswith(".zip"):
+            # Match: ubuntu-x64, linux-x64, linux-amd64, or just contains "linux" and "x86_64" / "amd64"
+            if ("ubuntu" in name_lower and "x64" in name_lower) or \
+               ("linux" in name_lower and ("amd64" in name_lower or "x86_64" in name_lower or "x64" in name_lower)):
+                zip_url = asset.get("browser_download_url")
+                _log_install_fmt("found prebuilt asset: %s", name)
+                break
 
     if not zip_url:
-        _log_install_fmt("no ubuntu-x64 zip asset found in release %s", tag)
-        fallback_url = (
-            f"https://github.com/ggerganov/llama.cpp/releases/download/"
-            f"{tag}/llama-{tag}-bin-ubuntu-x64.zip"
-        )
-        _log_install_fmt("trying fallback URL: %s", fallback_url)
-        zip_url = fallback_url
+        _log_install_fmt("no Linux x86_64 zip asset found in release %s — listing all assets for debugging", tag)
+        for asset in assets:
+            _log_install_fmt("  available asset: %s", asset.get("name", "?"))
+        # Try a fallback URL pattern that may work across releases
+        fallback_candidates = [
+            f"https://github.com/ggerganov/llama.cpp/releases/download/{tag}/llama-{tag}-bin-ubuntu-x64.zip",
+            f"https://github.com/ggerganov/llama.cpp/releases/download/{tag}/llama-{tag}-bin-linux-x64.zip",
+            f"https://github.com/ggerganov/llama.cpp/releases/download/{tag}/llama-{tag}-bin-linux-amd64.zip",
+        ]
+        for fb in fallback_candidates:
+            _log_install_fmt("trying fallback URL: %s", fb)
+            zip_url = fb
+            break  # try first falling back; if it fails 404, _download_prebuilt will catch the exception and continue to source build
 
     # Download the zip
     try:
@@ -789,7 +799,6 @@ if not _llama_bin:
 
 with gr.Blocks(
     title="AshatOS Dual llama-server",
-    theme=gr.themes.Soft(),
 ) as demo:
 
     gr.Markdown(
@@ -891,4 +900,4 @@ with gr.Blocks(
 demo.queue(default_concurrency_limit=1, max_size=12)
 
 if __name__ == "__main__":
-    demo.launch(server_name="0.0.0.0", server_port=7860)
+    demo.launch(server_name="0.0.0.0", server_port=7860, theme=gr.themes.Soft())
