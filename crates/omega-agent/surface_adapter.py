@@ -114,8 +114,9 @@ def run_surface(
     headers
         HTTP headers extracted from the transport request.
     body
-        Parsed request body dict, or ``None`` if parsing hasn't happened yet
-        (in which case ``body_parse_failed`` controls the response).
+        Parsed request body dict, or ``None`` if parsing failed or body was
+        JSON ``null``. ``None`` is treated as ``INVALID_REQUEST`` regardless
+        of ``body_parse_failed``.
     body_parse_failed
         ``True`` if the transport was unable to parse the request body
         (e.g. invalid JSON). When ``True``, the returned envelope carries
@@ -137,19 +138,19 @@ def run_surface(
         A pipeline envelope dict. The caller marshals it to the transport
         via ``adapter.respond_ok()`` or ``adapter.respond_error()``.
     """
-    if body_parse_failed:
+    if body_parse_failed or body is None:
         return {
             "ok": False,
             "error": {
                 "code": "INVALID_REQUEST",
-                "message": "Invalid JSON",
+                "message": "Invalid or empty request body",
                 "retryable": False,
             },
         }
 
     # ── Resolve lane ─────────────────────────────────────────────────
     resolved_lane = lane
-    if resolved_lane is None and resolver is not None and body is not None:
+    if resolved_lane is None and resolver is not None:
         try:
             resolved_lane = resolver.resolve(body, route_hint=None)
         except InvalidRequestError as exc:

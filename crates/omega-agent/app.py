@@ -88,9 +88,10 @@ PUBLIC_REFRESH_SECONDS = int(os.getenv("PUBLIC_REFRESH_SECONDS", "10"))
 _started_at: float = time.time()
 _RUN_QUEUE = RunQueue(timeout_s=300.0)
 _active_processes: list[subprocess.Popen[str]] = []
-_llama_bin_path: str | None = None        # set by _background_init
-_init_done: bool = False                   # set by _background_init
-_init_error: str | None = None             # set by _background_init
+_llama_bin_path: str | None = None
+_init_done: bool = False
+_init_error: str | None = None
+_init_lock = threading.Lock()  # guards _lazy_init against concurrent calls
 
 
 def _binary_path_getter() -> str | None:
@@ -648,8 +649,22 @@ def _lazy_init() -> str:
     """Called by demo.load — runs in Gradio's queue, not during import."""
     global _llama_bin_path, _init_done, _init_error
 
+    # Thread-safe guard against concurrent demo.load from multiple users.
     if _init_done:
         return "ready"
+    if not _init_lock.acquire(blocking=False):
+        return "init already in progress"
+    try:
+        if _init_done:
+            return "ready"
+        return _lazy_init_body()
+    finally:
+        _init_lock.release()
+
+
+def _lazy_init_body() -> str:
+    """Actual initialization work, called once under _init_lock."""
+    global _llama_bin_path, _init_done, _init_error
 
     _log.info("=" * 60)
     _log.info("AshatOS Neural I/O Host — lazy init start")
