@@ -3,7 +3,7 @@ title: AshatOS Neural Host
 emoji: 🧠
 colorFrom: indigo
 colorTo: purple
-sdk: fastapi
+sdk: gradio
 app_file: app.py
 pinned: false
 ---

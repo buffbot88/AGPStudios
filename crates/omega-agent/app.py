@@ -1378,5 +1378,11 @@ app = gr.mount_gradio_app(
     head=JAVASCRIPT_REFRESH,
 )
 
-# Note: On HF Spaces, the runtime auto-serves the `app` FastAPI+Gradio object on port 7860.
-# For local development, run:  uvicorn app:app --host 0.0.0.0 --port 7860
+# ──────────────────────────────────────────────────────────────────────────
+# 17.  Launch
+# ──────────────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    if not os.getenv("SPACE_ID"):  # HF Spaces auto-serves the app
+        import uvicorn
+        uvicorn.run(app, host="0.0.0.0", port=7860)
