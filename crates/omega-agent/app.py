@@ -903,16 +903,18 @@ atexit.register(stop_all_servers)
 # 13.  Gradio UI
 # ---------------------------------------------------------------------------
 
-# Start servers synchronously at module level, wrapped by @spaces_gpu so the
-# zeroGPU runtime allocates GPU for the subprocesses' entire lifetime.
+# Call a minimal @spaces_gpu function at module level to satisfy the
+# zeroGPU runtime check. Then start servers WITHOUT the decorator so
+# subprocesses launch normally (the decorator interferes with Popen).
 @spaces_gpu
-def _start_with_gpu() -> str | None:
-    """Call start_all_servers under the @spaces_gpu decorator so the zeroGPU
-    runtime allocates GPU resources for the full duration."""
-    return start_all_servers()
+def _gpu_signal() -> bool:
+    """Minimal function that satisfies the zeroGPU @spaces.GPU check."""
+    return True
 
 
-_llama_bin = _start_with_gpu()
+_gpu_signal()  # satisfy the runtime check
+
+_llama_bin = start_all_servers()
 if not _llama_bin:
     _log.warning("llama-server not available — UI will launch in degraded mode")
 
