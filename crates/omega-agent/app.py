@@ -673,41 +673,34 @@ def _background_init() -> None:
         _init_error = f"llama-server install failed: {exc}"
         _log.error(_init_error)
 
-    # 4. Full ZeroGPU startup (config + tensor pack + report)
-    #     The SYNC call above already sent startup_report(), but this
-    #     runs the full spaces.zero.startup() which also calls
-    #     config.get_config() and torch.pack() for proper initialization.
-    try:
-        from spaces.config import Config as _SC
-        if _SC.zero_gpu:
-            import importlib
-            try:
-                _zpkg = importlib.import_module("spaces.zero")
-                if hasattr(_zpkg, "startup"):
-                    _zpkg.startup()
-                    _log.info("Full ZeroGPU startup() completed")
-            except Exception as inner:
-                _log.warning("Full startup() call failed: %s", inner)
-    except Exception as exc:
-        _log.warning("ZeroGPU startup import failed (non-fatal): %s", exc)
+    # 4. torch.pack() is already called by the SYNC startup() above.
+    #     No need to duplicate here — the background thread handles
+    #     only binary install and model readiness, not GPU registration.
 
     _init_done = True
     _log.info("AshatOS background init complete. "
               "binary=%s error=%s", _llama_bin_path, _init_error)
 
 
-# ── Synchronous startup report (fast, non-blocking with timeout) ────
-# The platform checks for @spaces.GPU BEFORE the background init runs.
-# Sending the report immediately (before mount_gradio_app) ensures the
-# platform sees it before its health-check timeout fires.
+# ── Synchronous ZeroGPU full startup ────────────────────────────────
+# The platform checks for the COMPLETE spaces.zero.startup() sequence:
+# config.get_config() + torch.pack() + client.startup_report().
+# Calling just startup_report() is not enough — the platform may check
+# for the side effects of torch.pack() or config.get_config().
 try:
     from spaces.config import Config as _SC
     if _SC.zero_gpu:
-        from spaces.zero import client as _zclient
-        _zclient.startup_report()
-        _log.info("SYNC ZeroGPU startup report sent")
+        import importlib as _il
+        _zpkg = _il.import_module("spaces.zero")
+        if hasattr(_zpkg, "startup"):
+            _zpkg.startup()
+            _log.info("SYNC full spaces.zero.startup() completed")
+        else:
+            from spaces.zero import client as _zclient
+            _zclient.startup_report()
+            _log.info("SYNC startup_report sent (fallback)")
 except Exception as exc:
-    _log.warning("SYNC ZeroGPU startup report failed (non-fatal): %s", exc)
+    _log.warning("SYNC ZeroGPU startup failed (non-fatal): %s", exc)
 
 # Start background init in a daemon thread — never blocks app startup.
 threading.Thread(target=_background_init, daemon=True, name="ashatos-init").start()
