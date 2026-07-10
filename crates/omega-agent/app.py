@@ -688,8 +688,9 @@ def _zerogpu_background_startup():
             from spaces.zero import client as _zc
             _zc.startup_report()
             _log.info("startup_report sent (background, fallback)")
-    except Exception as exc:
-        _log.warning("background ZeroGPU startup failed: %s", exc)
+    except BaseException as exc:
+        _log.warning("background ZeroGPU startup: %s: %s",
+                     type(exc).__name__, exc)
 _th.Thread(target=_zerogpu_background_startup, daemon=True).start()
 
 
