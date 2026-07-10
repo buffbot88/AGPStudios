@@ -50,18 +50,19 @@ from fastapi import FastAPI, Request as FastRequest
 from fastapi.responses import JSONResponse
 from huggingface_hub import hf_hub_download
 
-# ZeroGPU compatibility — supports both @spaces_gpu and @spaces_gpu(duration=N)
+# ZeroGPU compatibility — direct @spaces.GPU decorator (needed for static detection)
 try:
-    from spaces import GPU as _spaces_gpu
-    def spaces_gpu(f=None, **kwargs):
-        if f is not None:
-            return _spaces_gpu(f)
-        return _spaces_gpu(**kwargs)
+    import spaces
 except ImportError:
-    def spaces_gpu(f=None, **kwargs):  # type: ignore[no-redef]
-        if f is not None:
-            return f
-        return lambda f: f
+    import types as _types
+    spaces = _types.ModuleType("spaces")
+    class _GPU:
+        """No-op GPU decorator for non-ZeroGPU environments."""
+        def __call__(self, fn=None, **kwargs):
+            if fn is not None:
+                return fn
+            return lambda f: f
+    spaces.GPU = _GPU()  # type: ignore[assignment]
 
 # ──────────────────────────────────────────────────────────────────────────
 # 1.  Logging
@@ -826,13 +827,13 @@ def execute_lane_inner(lane: str, payload: dict[str, Any]) -> dict[str, Any]:
         }
 
 
-@spaces_gpu(duration=LANES["microbrain"]["gpu_duration"])
+@spaces.GPU(duration=LANES["microbrain"]["gpu_duration"])
 def _execute_microbrain_gpu(payload: dict[str, Any]) -> dict[str, Any]:
     """MicroBrain inference with GPU allocation (called under @spaces.GPU)."""
     return execute_lane_inner("microbrain", payload)
 
 
-@spaces_gpu(duration=LANES["mainbrain"]["gpu_duration"])
+@spaces.GPU(duration=LANES["mainbrain"]["gpu_duration"])
 def _execute_mainbrain_gpu(payload: dict[str, Any]) -> dict[str, Any]:
     """MainBrain inference with GPU allocation (called under @spaces.GPU)."""
     return execute_lane_inner("mainbrain", payload)
