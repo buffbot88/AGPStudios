@@ -742,6 +742,29 @@ with gr.Blocks(title="AshatOS Neural Host") as _demo:
     )
 
 
+def startup() -> None:
+    global _llama_bin_path
+    _log.info("=" * 60)
+    _log.info("AshatOS Neural I/O Host — Dual-Lane Inference")
+    _log.info("=" * 60)
+
+    _llama_bin_path = ensure_llama_server()
+    if _llama_bin_path:
+        _log.info("llama-server binary: %s", _llama_bin_path)
+    else:
+        _log.warning("llama-server binary not available — degraded mode")
+
+    if _llama_bin_path:
+        for lane in (Lane.MICROBRAIN, Lane.MAINBRAIN):
+            try:
+                _BACKEND_LAUNCHER.ensure_model(lane)
+                _log.info("%s model cached: %s", lane.value,
+                          LANE_CONFIG[lane]["model_path"])
+            except Exception as exc:
+                _log.warning("%s model pre-download failed: %s",
+                             lane.value, exc)
+
+
 startup()
 
 # ── Sync startup report (lets ZeroGPU platform confirm readiness) ────
