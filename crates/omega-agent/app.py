@@ -625,8 +625,30 @@ async def http_public_metrics() -> JSONResponse:
 # ── Dashboard helpers ──────────────────────────────────────────────
 
 
+def _build_svg_sparkline(records, w: int = 200, h: int = 50) -> str:
+    """Build an inline SVG sparkline with red (prompt) and green (gen) lines."""
+    points = [(r.prompt_tokens_per_second or 0, r.generation_tokens_per_second or 0) for r in records[-30:]]
+    if not points:
+        return ""
+    max_val = max((max(p) for p in points), default=1) or 1
+    pad = 2
+    step = (w - pad * 2) / max(len(points) - 1, 1)
+    prompt_pts = []
+    gen_pts = []
+    for i, (p, g) in enumerate(points):
+        x = pad + i * step
+        prompt_pts.append(f"{x:.1f},{h - pad - ((p / max_val) * (h - pad * 2)):.1f}")
+        gen_pts.append(f"{x:.1f},{h - pad - ((g / max_val) * (h - pad * 2)):.1f}")
+    prompt_d = "M " + " L ".join(prompt_pts)
+    gen_d = "M " + " L ".join(gen_pts)
+    return f"""<svg width="{w}" height="{h}" viewBox="0 0 {w} {h}" style="display:block;">
+        <polyline points="{prompt_d}" fill="none" stroke="#f87171" stroke-width="1.5" opacity="0.9"/>
+        <polyline points="{gen_d}" fill="none" stroke="#4ade80" stroke-width="1.5" opacity="0.9"/>
+    </svg>"""
+
+
 def _build_card_html(lane_key: str) -> str:
-    """Render a model info card as HTML."""
+    """Render a model info card with inline SVG sparkline."""
     records = METRICS.get_lane_metrics(lane_key)
     lane = Lane.MICROBRAIN if lane_key == "microbrain" else Lane.MAINBRAIN
     cfg = lane_cfg(lane)
@@ -634,7 +656,6 @@ def _build_card_html(lane_key: str) -> str:
     ctx = cfg["ctx"]
     label = cfg["label"]
 
-    # Get latest metrics
     last_prompt_tps = 0.0
     last_gen_tps = 0.0
     total_reqs = 0
@@ -644,47 +665,34 @@ def _build_card_html(lane_key: str) -> str:
         last_gen_tps = r.generation_tokens_per_second or 0.0
         total_reqs = len(records)
 
+    sparkline = _build_svg_sparkline(records)
+
     return f"""<div style="border: 1px solid #334155; border-radius: 12px;
         padding: 16px; background: #1e293b; font-family: monospace;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
             <span style="font-size: 1.2em; font-weight: 700; color: #e2e8f0;">{label}</span>
-            <span style="color: #22c55e; font-size: 0.8em;">&#x25CF; active</span>
+            <span style="color: #22c55e; font-size: 0.75em;">&#x25CF; active</span>
         </div>
-        <div style="color: #94a3b8; font-size: 0.75em; margin-bottom: 12px;">
-            {model_name} &middot; {ctx} ctx &middot; {total_reqs} requests
+        <div style="color: #94a3b8; font-size: 0.75em; margin-bottom: 10px;">
+            {model_name} &middot; {ctx} ctx &middot; {total_reqs} req
         </div>
-        <div style="display: flex; gap: 24px;">
+        <div style="display: flex; gap: 20px; align-items: center;">
             <div>
-                <div style="color: #f87171; font-size: 0.7em;">prompt in</div>
-                <div style="font-size: 1.6em; font-weight: 700; color: #fca5a5;">
-                    {last_prompt_tps:.0f}</div>
-                <div style="color: #64748b; font-size: 0.65em;">tok/s</div>
+                <div style="color: #f87171; font-size: 0.65em;">prompt</div>
+                <div style="font-size: 1.5em; font-weight: 700; color: #fca5a5;">{last_prompt_tps:.0f}</div>
+                <div style="color: #64748b; font-size: 0.6em;">tok/s</div>
             </div>
             <div>
-                <div style="color: #4ade80; font-size: 0.7em;">gen out</div>
-                <div style="font-size: 1.6em; font-weight: 700; color: #86efac;">
-                    {last_gen_tps:.0f}</div>
-                <div style="color: #64748b; font-size: 0.65em;">tok/s</div>
+                <div style="color: #4ade80; font-size: 0.65em;">gen</div>
+                <div style="font-size: 1.5em; font-weight: 700; color: #86efac;">{last_gen_tps:.0f}</div>
+                <div style="color: #64748b; font-size: 0.6em;">tok/s</div>
+            </div>
+            <div style="flex:1; min-width:100px;">
+                {sparkline}
             </div>
         </div>
     </div>"""
 
-
-def _build_bar_df(lane_key: str):
-    """Build a DataFrame for the mini bar chart (prompt_tps, gen_tps)."""
-    import pandas as pd
-    records = METRICS.get_lane_metrics(lane_key)
-    if not records:
-        return pd.DataFrame({"metric": [], "value": []})
-    r = records[-1]
-    prompt = r.prompt_tokens_per_second or 0
-    gen = r.generation_tokens_per_second or 0
-    rows = []
-    if prompt > 0:
-        rows.append({"metric": "prompt", "value": prompt})
-    if gen > 0:
-        rows.append({"metric": "gen", "value": gen})
-    return pd.DataFrame(rows) if rows else pd.DataFrame({"metric": [], "value": []})
 
 # === Gradio dashboard === minimal telemetry view ===
 
@@ -715,18 +723,8 @@ with gr.Blocks(title="AshatOS Neural Host") as _demo:
     with gr.Row(equal_height=True):
         with gr.Column(scale=1, min_width=360):
             micro_card = gr.HTML()
-            micro_bar = gr.BarPlot(
-                x="metric", y="value", color="metric",
-                title="", height=120, show_label=False,
-                y_title="tok/s", x_title="",
-            )
         with gr.Column(scale=1, min_width=360):
             main_card = gr.HTML()
-            main_bar = gr.BarPlot(
-                x="metric", y="value", color="metric",
-                title="", height=120, show_label=False,
-                y_title="tok/s", x_title="",
-            )
 
     with gr.Row():
         gr.Markdown(
@@ -737,18 +735,16 @@ with gr.Blocks(title="AshatOS Neural Host") as _demo:
 
     refresh_btn = gr.Button("Refresh", visible=False, elem_id="auto-refresh-btn")
     refresh_btn.click(
-        fn=lambda: (_build_card_html("microbrain"), _build_card_html("mainbrain"),
-                     _build_bar_df("microbrain"), _build_bar_df("mainbrain")),
+        fn=lambda: (_build_card_html("microbrain"), _build_card_html("mainbrain")),
         inputs=[],
-        outputs=[micro_card, main_card, micro_bar, main_bar],
+        outputs=[micro_card, main_card],
         concurrency_limit=1,
     )
 
     _demo.load(
-        fn=lambda: (_build_card_html("microbrain"), _build_card_html("mainbrain"),
-                     _build_bar_df("microbrain"), _build_bar_df("mainbrain")),
+        fn=lambda: (_build_card_html("microbrain"), _build_card_html("mainbrain")),
         inputs=[],
-        outputs=[micro_card, main_card, micro_bar, main_bar],
+        outputs=[micro_card, main_card],
         concurrency_limit=1,
     )
 
