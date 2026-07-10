@@ -249,44 +249,75 @@ def _find_llama_server_member(names: list[str]) -> str | None:
 
 
 def _extract_archive(archive_path: str, extract_dir: str) -> str | None:
-    """Extract `llama-server` from a .zip or .tar.gz archive.  Returns the
-    path to the extracted executable, or None on failure."""
+    """Extract everything from the prebuilt archive into *extract_dir*, then
+    return the path to a ``llama-server`` executable (wherever it landed).
+    We extract *all* files so that shared libraries (``libllama-server*.so``)
+    end up alongside the binary and can be loaded at runtime."""
     dst = Path(extract_dir) / "llama-server"
+
+    # Determine the top-level directory inside the archive so we can flatten
+    # by stripping it from extracted paths.
+    top_dir: str | None = None
 
     if archive_path.endswith(".zip"):
         with zipfile.ZipFile(archive_path) as zf:
-            all_members = [m for m in zf.namelist() if not m.endswith("/")]
-            member = _find_llama_server_member(all_members)
-            if not member:
-                _log_install("no llama-server found inside zip archive")
+            all_names = [n for n in zf.namelist() if not n.endswith("/")]
+            if not all_names:
+                _log_install("empty zip archive")
                 return None
-            _log_install_fmt("extracting %s from zip", member)
-            extracted = zf.extract(member, extract_dir)
+            # Infer top dir from the first member
+            parts = Path(all_names[0]).parts
+            top_dir = parts[0] if len(parts) > 1 else None
+            for member_name in all_names:
+                # Strip the top-level directory
+                rel = "/".join(Path(member_name).parts[1:]) if top_dir else member_name
+                if not rel:
+                    continue
+                data = zf.read(member_name)
+                target = Path(extract_dir) / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+                os.chmod(target, 0o755 if "llama-server" in rel and not rel.endswith(".so") else 0o644)
+            _log_install_fmt("extracted %d files from zip", len(all_names))
 
     elif archive_path.endswith(".tar.gz") or archive_path.endswith(".tgz"):
         with tarfile.open(archive_path, "r:gz") as tf:
-            all_members = [m.name for m in tf.getmembers() if not m.isdir()]
-            member = _find_llama_server_member(all_members)
-            if not member:
-                _log_install("no llama-server found inside tar.gz archive")
+            members = [m for m in tf.getmembers() if not m.isdir()]
+            if not members:
+                _log_install("empty tar.gz archive")
                 return None
-            _log_install_fmt("extracting %s from tar.gz", member)
-            tf.extract(member, path=extract_dir)
-            extracted = str(Path(extract_dir) / member)
+            parts = Path(members[0].name).parts
+            top_dir = parts[0] if len(parts) > 1 else None
+            for member in members:
+                # Strip the top-level directory
+                rel = "/".join(Path(member.name).parts[1:]) if top_dir else member.name
+                if not rel:
+                    continue
+                target = Path(extract_dir) / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with tf.extractfile(member) as src:
+                    if src is not None:
+                        target.write_bytes(src.read())
+                os.chmod(target, 0o755 if "llama-server" in rel and not rel.endswith(".so") else 0o644)
+            _log_install_fmt("extracted %d files from tar.gz", len(members))
 
     else:
         _log_install_fmt("unsupported archive format: %s", archive_path)
         return None
 
-    extracted_path = Path(extracted)
-    extracted_path.chmod(extracted_path.stat().st_mode | 0o111)
+    # Now find where llama-server ended up and ensure it's at the canonical path
+    if dst.is_file():
+        return str(dst)
 
-    if extracted_path.name != "llama-server":
-        shutil.move(str(extracted_path), str(dst))
-    elif extracted_path != dst:
-        shutil.move(str(extracted_path), str(dst))
+    # Search for it in the extraction dir
+    for f in Path(extract_dir).rglob("*"):
+        if f.is_file() and f.name == "llama-server":
+            os.chmod(f, 0o755)
+            shutil.move(str(f), str(dst))
+            return str(dst)
 
-    return str(dst) if dst.is_file() else None
+    _log_install("llama-server binary not found after extraction")
+    return None
 
 
 def _is_linux_x86_64_asset(name: str) -> bool:
