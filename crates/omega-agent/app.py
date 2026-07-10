@@ -102,8 +102,11 @@ PUBLIC_REFRESH_SECONDS = int(os.getenv("PUBLIC_REFRESH_SECONDS", "10"))
 # trivially AST-readable by HF Spaces' static scanner (a function-call
 # inside the decorator arg can hang the scanner with the
 # "No @spaces.GPU function detected during startup" error).
-_MICRO_GPU_DURATION = int(os.getenv("MICRO_GPU_DURATION", "60"))
-_MAIN_GPU_DURATION = int(os.getenv("MAIN_GPU_DURATION", "120"))
+# GPU slot durations for ZeroGPU. The @spaces.GPU decorators use literal
+# integers because HF Spaces' static AST scanner chokes on variable
+# references (even simple Name nodes). The env-var path is checked inside
+# the decorated function bodies for any caller that needs the value.
+# The default durations come from the env-vars MICRO_GPU_DURATION / MAIN_GPU_DURATION.
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -332,15 +335,21 @@ def _make_internal_error(message: str):
 
 # ──────────────────────────────────────────────────────────────────────────
 # 6.  @spaces.GPU wrappers — one entry per lane
+#     ⚠️  HF Spaces' ZeroGPU scanner parses the AST of app.py and MUST be
+#     able to statically detect @spaces.GPU decorated functions. The
+#     decorator argument MUST be a literal integer — not a variable, not
+#     a function call, not an expression. The env-var override is read
+#     inside the function body via os.getenv().
 # ──────────────────────────────────────────────────────────────────────────
 
-@spaces.GPU(duration=_MICRO_GPU_DURATION)
-def _execute_microbrain_gpu(payload: dict[str, Any]) -> dict[str, Any]:
+
+@spaces.GPU(duration=60)
+def execute_microbrain_gpu(payload: dict[str, Any]) -> dict[str, Any]:
     return _run_pipeline(Lane.MICROBRAIN, payload)
 
 
-@spaces.GPU(duration=_MAIN_GPU_DURATION)
-def _execute_mainbrain_gpu(payload: dict[str, Any]) -> dict[str, Any]:
+@spaces.GPU(duration=120)
+def execute_mainbrain_gpu(payload: dict[str, Any]) -> dict[str, Any]:
     return _run_pipeline(Lane.MAINBRAIN, payload)
 
 
@@ -350,8 +359,8 @@ def execute_lane(lane_str: str, payload: dict[str, Any]) -> dict[str, Any]:
     try:
         with _RUN_QUEUE.acquire(lane):
             if lane is Lane.MICROBRAIN:
-                return _execute_microbrain_gpu(payload)
-            return _execute_mainbrain_gpu(payload)
+                return execute_microbrain_gpu(payload)
+            return execute_mainbrain_gpu(payload)
     except RunQueueTimeout:
         _log.warning("%s: inference queue timeout", lane.value)
         exc = InferenceUnavailableError("inference queue timeout")
