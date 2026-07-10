@@ -97,6 +97,13 @@ N_THREADS = int(os.getenv("N_THREADS", "2"))
 N_BATCH = int(os.getenv("N_BATCH", "128"))
 QUEUE_LIMIT = int(os.getenv("QUEUE_LIMIT", "16"))
 PUBLIC_REFRESH_SECONDS = int(os.getenv("PUBLIC_REFRESH_SECONDS", "10"))
+# GPU slot durations for ZeroGPU. Read once at import time and exposed
+# as plain module-level Names so the @spaces.GPU decorators below are
+# trivially AST-readable by HF Spaces' static scanner (a function-call
+# inside the decorator arg can hang the scanner with the
+# "No @spaces.GPU function detected during startup" error).
+_MICRO_GPU_DURATION = int(os.getenv("MICRO_GPU_DURATION", "60"))
+_MAIN_GPU_DURATION = int(os.getenv("MAIN_GPU_DURATION", "120"))
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -364,12 +371,12 @@ def _make_internal_error(message: str):
 # 7.  @spaces.GPU wrappers — one entry per lane
 # ──────────────────────────────────────────────────────────────────────────
 
-@spaces.GPU(duration=lane_cfg(Lane.MICROBRAIN)["gpu_duration"])
+@spaces.GPU(duration=_MICRO_GPU_DURATION)
 def _execute_microbrain_gpu(payload: dict[str, Any]) -> dict[str, Any]:
     return _run_pipeline(Lane.MICROBRAIN, payload)
 
 
-@spaces.GPU(duration=lane_cfg(Lane.MAINBRAIN)["gpu_duration"])
+@spaces.GPU(duration=_MAIN_GPU_DURATION)
 def _execute_mainbrain_gpu(payload: dict[str, Any]) -> dict[str, Any]:
     return _run_pipeline(Lane.MAINBRAIN, payload)
 
