@@ -2,8 +2,8 @@
 """AshatOS Neural I/O Host — slim orchestrator.
 
 The heavy lifting now lives in purpose-built modules:
-    * :mod:`domain`            — Lane enum + per-lane config + request validation
-    * :mod:`run_errors`        — typed exception hierarchy + RunError->JSON codes
+    * :mod:`domain`            — Lane enum + per-lane config
+    * :mod:`run_errors`        — typed exception hierarchy + RunError→JSON codes
     * :mod:`lane_resolver`     — strict route-or-model lane routing
     * :mod:`lane_keygate`      — single auth authority for both surfaces
     * :mod:`backend_launcher`  — per-request llama-server lifecycle
@@ -11,18 +11,16 @@ The heavy lifting now lives in purpose-built modules:
     * :mod:`run_metrics`       — sanitized metric + event recording
     * :mod:`metrics_store`     — thread-safe in-memory rolling deque
     * :mod:`installer`         — bin installer + GitHub/HF mirror tiers
-    * :mod:`run_queue`         — inference queue with timeout + depth tracking
-    * :mod:`surface_adapter`   — transport-agnostic pipeline seam
-    * :mod:`response_adapter`  — envelope to HTTP response conversion
-    * :mod:`env_scanner`       — ZeroGPU runtime diagnostics probe
-    * :mod:`public_snapshot`   — one canonical projection, three consumers
 
-What stays here: logging, config defaults, the FastAPI and Gradio wiring,
-the :func:`_run_pipeline` orchestrator and envelope builders,
-the @spaces.GPU decorated handlers, the Gradio dashboard,
-:func:`execute_lane` (serialising entry point), and lazy initialization
-(backgrounded so /health responds immediately and the UI renders before
-models or the llama-server binary are ready).
+What stays here: logging, configuration defaults, the FastAPI and Gradio
+wiring, the slim Run pipeline that composes the modules above, request
+validation, response envelope shaping, the atexit cleanup hook, and the
+homepage dashboard.
+
+Both the Gradio API lane endpoints and the FastAPI OpenAI-compatible route
+funnel into a single :func:`_run_pipeline`. There is no copy-paste in
+between; surface differences are encapsulated in two thin adapters that end
+up calling the same orchestrator.
 """
 
 from __future__ import annotations
@@ -45,23 +43,24 @@ from fastapi.responses import JSONResponse
 
 from backend_launcher import BackendLauncher, LiveBackend
 from completion_client import CompletionClient, CompletionResult
-from domain import LANE_CONFIG, Lane, lane_cfg, validate_request
+from domain import LANE_CONFIG, Lane, lane_cfg
 from installer import ensure_llama_server
-from lane_keygate import LaneKeyGate
+from lane_keygate import (
+    AuthError,
+    LaneKeyGate,
+    headers_from_fastapi,
+    headers_from_gradio,
+)
 from lane_resolver import LaneResolver
 from metrics_store import METRICS
 from run_errors import (
+    ERROR_CODE_TO_HTTP_STATUS,
     InferenceUnavailableError,
+    InvalidRequestError,
     RunError,
 )
 from run_metrics import RunMetrics
-from run_queue import RunQueue, RunQueueTimeout
-from surface_adapter import (
-    FastAPISurfaceAdapter,
-    GradioSurfaceAdapter,
-    run_surface,
-)
-from lazy_init import run_lazy_init, bin_path, init_done, init_error
+from response_adapter import envelope_to_response
 
 # ZeroGPU compatibility — direct @spaces.GPU decorator (needed for static detection)
 try:
@@ -98,22 +97,30 @@ N_THREADS = int(os.getenv("N_THREADS", "2"))
 N_BATCH = int(os.getenv("N_BATCH", "128"))
 QUEUE_LIMIT = int(os.getenv("QUEUE_LIMIT", "16"))
 PUBLIC_REFRESH_SECONDS = int(os.getenv("PUBLIC_REFRESH_SECONDS", "10"))
+# GPU slot durations for ZeroGPU. Read once at import time and exposed
+# as plain module-level Names so the @spaces.GPU decorators below are
+# trivially AST-readable by HF Spaces' static scanner (a function-call
+# inside the decorator arg can hang the scanner with the
+# "No @spaces.GPU function detected during startup" error).
+_MICRO_GPU_DURATION = int(os.getenv("MICRO_GPU_DURATION", "60"))
+_MAIN_GPU_DURATION = int(os.getenv("MAIN_GPU_DURATION", "120"))
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# 3.  Global runtime state — all mutable, init'd to safe defaults
+# 3.  Global runtime state
 # ──────────────────────────────────────────────────────────────────────────
 
 _started_at: float = time.time()
-_RUN_QUEUE = RunQueue(timeout_s=300.0)
+_inference_lock = threading.Lock()
 _active_processes: list[subprocess.Popen[str]] = []
+_llama_bin_path: str | None = None
 
 
 def _binary_path_getter() -> str | None:
-    return bin_path()
+    return _llama_bin_path
 
 
-# Pipeline collaborators instantiated once at module import (no I/O).
+# Pipeline collaborators instantiated once at module import.
 _RESOLVER = LaneResolver()
 _KEY_GATE = LaneKeyGate()
 _BACKEND_LAUNCHER = BackendLauncher(
@@ -155,7 +162,44 @@ atexit.register(stop_all_servers)
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# 5.  Run pipeline — the slim orchestrator
+# 5.  Request validation
+# ──────────────────────────────────────────────────────────────────────────
+
+def validate_request(body: dict[str, Any], lane: Lane) -> str | None:
+    cfg = lane_cfg(lane)
+    messages = body.get("messages", [])
+    if not messages or not isinstance(messages, list):
+        return "Missing or invalid 'messages' field"
+    if len(messages) > cfg["max_messages"]:
+        return f"Too many messages (max {cfg['max_messages']})"
+    body_bytes = len(json.dumps(body))
+    if body_bytes > cfg["max_body_bytes"]:
+        return f"Request body too large (max {cfg['max_body_bytes']} bytes)"
+    for msg in messages:
+        if not isinstance(msg, dict):
+            return "Each message must be a dict"
+        role = msg.get("role", "")
+        if role not in ("system", "user", "assistant"):
+            return f"Unsupported role: {role}"
+        content = msg.get("content", "")
+        if not isinstance(content, str) or not content.strip():
+            return "Message content must be a non-empty string"
+    max_tokens = body.get("max_tokens", 0)
+    if max_tokens and (not isinstance(max_tokens, (int, float)) or max_tokens < 1):
+        return "max_tokens must be a positive integer"
+    temperature = body.get("temperature", 0.7)
+    if isinstance(temperature, (int, float)) and (temperature < 0 or temperature > 2):
+        return "temperature must be between 0 and 2"
+    top_p = body.get("top_p", 0.9)
+    if isinstance(top_p, (int, float)) and (top_p < 0 or top_p > 1):
+        return "top_p must be between 0 and 1"
+    if body.get("stream", False):
+        return "Streaming is not yet supported"
+    return None
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# 6.  Run pipeline — the slim orchestrator
 # ──────────────────────────────────────────────────────────────────────────
 
 def _is_cold_start(lane: Lane) -> bool:
@@ -232,14 +276,27 @@ def _build_failure_envelope(
 def _run_pipeline(lane: Lane, payload: dict[str, Any]) -> dict[str, Any]:
     """Slim Run. Composes :class:`BackendLauncher`, :class:`CompletionClient`,
     and :class:`RunMetrics` into one request lifecycle.
+
+    Behavior:
+      * Degraded-mode gate first — INFERENCE_UNAVAILABLE without spawning a
+        subprocess with an empty binary path.
+      * Typed :class:`RunError` subclasses never bubble up; the orchestrator
+        converts them to a uniform failure envelope and records metrics.
+      * ``BackendLauncher`` and ``CompletionClient`` are responsible for all
+        subprocess / HTTP edges; this function is orchestration only.
+      * The outermost ``except Exception`` is the only broad catch — it's
+        the safety boundary. Internally every expected failure is a typed
+        RunError.
     """
     request_id = str(payload.get("request_id") or uuid.uuid4())
+    # Force an id so completion client & metrics see the same one.
     payload.setdefault("request_id", request_id)
 
     started_at = time.perf_counter()
     cold_start = _is_cold_start(lane)
 
-    if not bin_path():
+    # Degraded-mode gate.
+    if not _llama_bin_path:
         _log.warning(
             "%s: inference unavailable — llama-server binary not installed",
             lane.value,
@@ -259,6 +316,8 @@ def _run_pipeline(lane: Lane, payload: dict[str, Any]) -> dict[str, Any]:
             try:
                 completion = _COMPLETION_CLIENT.complete(backend, lane, payload)
             finally:
+                # Maintain back-compat with the pre-refactor _active_processes
+                # list — also helps atexit catch orphans.
                 try:
                     _active_processes.remove(backend.process)
                 except ValueError:
@@ -279,6 +338,8 @@ def _run_pipeline(lane: Lane, payload: dict[str, Any]) -> dict[str, Any]:
         return _build_failure_envelope(lane, request_id, exc)
 
     except Exception as exc:
+        # Outermost safety boundary. We never want a stray runtime error to
+        # kill the request silently. Translate to an INTERNAL_ERROR envelope.
         _log.exception("%s: unhandled exception in run pipeline", lane.value)
         total_ms = round((time.perf_counter() - started_at) * 1000, 1)
         envelope = {
@@ -298,6 +359,7 @@ def _run_pipeline(lane: Lane, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _make_internal_error(message: str):
+    """Construct an ad-hoc RunError for the broadest catch path."""
     err = RunError(message)
     err.code = "INTERNAL_ERROR"
     err.http_status = 500
@@ -306,137 +368,173 @@ def _make_internal_error(message: str):
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# 6.  @spaces.GPU decorated handlers
+# 7.  @spaces.GPU wrappers — one entry per lane
 # ──────────────────────────────────────────────────────────────────────────
 
-_GRADIO_ADAPTER = GradioSurfaceAdapter()
-_FASTAPI_ADAPTER = FastAPISurfaceAdapter()
-
-
-def _gradio_shared(payload_json: str, request: gr.Request, lane: Lane) -> str:
-    headers = _GRADIO_ADAPTER.extract_headers(request)
-    body: dict[str, Any] | None = None
-    parse_failed = False
-    try:
-        body = (
-            json.loads(payload_json) if isinstance(payload_json, str) else payload_json
-        ) or {}
-    except (json.JSONDecodeError, TypeError):
-        parse_failed = True
-
-    envelope = run_surface(
-        headers=headers,
-        body=body,
-        body_parse_failed=parse_failed,
-        key_gate=_KEY_GATE,
-        execute_fn=execute_lane,
-        lane=lane,
-    )
-    if envelope.get("ok", False):
-        return _GRADIO_ADAPTER.respond_ok(envelope)
-    return _GRADIO_ADAPTER.respond_error(400, envelope)
+@spaces.GPU
+def _execute_microbrain_gpu(payload: dict[str, Any]) -> dict[str, Any]:
+    return _run_pipeline(Lane.MICROBRAIN, payload)
 
 
 @spaces.GPU
-def gradio_microbrain(payload_json: str, request: gr.Request) -> str:
-    return _gradio_shared(payload_json, request, Lane.MICROBRAIN)
-
-
-@spaces.GPU
-def gradio_mainbrain(payload_json: str, request: gr.Request) -> str:
-    return _gradio_shared(payload_json, request, Lane.MAINBRAIN)
-
-
-# Dashboard handlers — also @spaces.GPU decorated so the ZeroGPU
-# platform scanner finds a decorated function for every Gradio event.
-@spaces.GPU
-def gradio_status() -> str:
-    return _status_html()
-
-
-@spaces.GPU
-def gradio_metrics_load() -> tuple:
-    return _refresh_metrics_body()
-
-
-@spaces.GPU
-def gradio_lazy_init() -> str:
-    return run_lazy_init(
-        gradio_microbrain=gradio_microbrain,
-        gradio_mainbrain=gradio_mainbrain,
-        _fastapi_sync_inference=_fastapi_sync_inference,
-    )
+def _execute_mainbrain_gpu(payload: dict[str, Any]) -> dict[str, Any]:
+    return _run_pipeline(Lane.MAINBRAIN, payload)
 
 
 def execute_lane(lane_str: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Serializing entry point — one inference at a time across the Space."""
     lane = Lane.parse(lane_str)
-    try:
-        with _RUN_QUEUE.acquire(lane):
-            return _run_pipeline(lane, payload)
-    except RunQueueTimeout:
-        _log.warning("%s: inference queue timeout", lane.value)
-        exc = InferenceUnavailableError("inference queue timeout")
-        return _build_failure_envelope(lane, str(uuid.uuid4()), exc)
+    with _inference_lock:
+        if lane is Lane.MICROBRAIN:
+            return _execute_microbrain_gpu(payload)
+        return _execute_mainbrain_gpu(payload)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# 8.  Surface adapters — fastapi (HTTP) and gradio (queue API)
+# ──────────────────────────────────────────────────────────────────────────
+
+def _envelope_to_response(envelope: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    """Backwards-compat shim — see :func:`response_adapter.envelope_to_response`."""
+    return envelope_to_response(envelope)
+
+
+# ── Gradio adapter ──────────────────────────────────────────────────────
+
+def _gradio_lane_handler(lane: Lane):
+    """Return a Gradio-callable handler for the given lane."""
+
+    def handler(payload_json: str, request: gr.Request) -> str:
+        # 1. Auth
+        try:
+            _KEY_GATE.check(headers_from_gradio(request), lane)
+        except AuthError:
+            return json.dumps({
+                "ok": False,
+                "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "unauthorized",
+                    "retryable": False,
+                },
+            })
+
+        # 2. Parse body
+        try:
+            body = (
+                json.loads(payload_json)
+                if isinstance(payload_json, str)
+                else payload_json
+            ) or {}
+        except (json.JSONDecodeError, TypeError):
+            return json.dumps({
+                "ok": False,
+                "error": {
+                    "code": "INVALID_REQUEST",
+                    "message": "Invalid JSON",
+                    "retryable": False,
+                },
+            })
+
+        # 3. Validate
+        try:
+            err = validate_request(body, lane)
+            if err:
+                raise InvalidRequestError(err)
+        except InvalidRequestError as exc:
+            return json.dumps({
+                "ok": False,
+                "request_id": str(uuid.uuid4()),
+                "lane": lane.value,
+                "error": exc.to_envelope(),
+            })
+
+        # 4. Run pipeline (lane is fixed by the route hint)
+        result = execute_lane(lane.value, body)
+        return json.dumps(result)
+
+    return handler
 
 
 # ── FastAPI adapter ─────────────────────────────────────────────────────
 
+def _make_http_chat_completions():
+    """Factory for :func:`http_chat_completions` so it lazily resolves per request."""
+    resolver = _RESOLVER
 
-@spaces.GPU
-def _fastapi_sync_inference(
-    headers: dict[str, str],
-    body: dict[str, Any] | None,
-    parse_failed: bool,
-) -> dict[str, Any]:
-    return run_surface(
-        headers=headers,
-        body=body,
-        body_parse_failed=parse_failed,
-        key_gate=_KEY_GATE,
-        execute_fn=execute_lane,
-        resolver=_RESOLVER,
-    )
+    async def http_chat_completions(request: FastRequest) -> JSONResponse:
+        # 1. Parse JSON
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse(status_code=400, content={
+                "error": {"message": "Invalid JSON body", "type": "invalid_request_error"},
+            })
 
+        # 2. Lane resolution (no string-sniff — exact alias match)
+        try:
+            lane = resolver.resolve(body, route_hint=None)
+        except InvalidRequestError as exc:
+            status = ERROR_CODE_TO_HTTP_STATUS.get(exc.code, 400)
+            return JSONResponse(status_code=status, content={
+                "error": {"message": exc.message, "type": exc.code.lower()},
+            })
 
-async def _handle_http_chat_completions(request: FastRequest) -> JSONResponse:
-    headers = _FASTAPI_ADAPTER.extract_headers(request)
-    body: dict[str, Any] | None = None
-    parse_failed = False
-    try:
-        body = await request.json()
-    except Exception:
-        parse_failed = True
+        # 3. Auth
+        try:
+            _KEY_GATE.check(headers_from_fastapi(request), lane)
+        except AuthError:
+            return JSONResponse(status_code=401, content={
+                "error": {"message": "unauthorized", "type": "authentication_error"},
+            })
 
-    loop = asyncio.get_event_loop()
-    envelope = await loop.run_in_executor(
-        None,
-        lambda: _fastapi_sync_inference(headers, body, parse_failed),
-    )
-    if envelope.get("ok", False):
-        return _FASTAPI_ADAPTER.respond_ok(envelope)
-    return _FASTAPI_ADAPTER.respond_error(400, envelope)
+        # 4. Validate
+        try:
+            err = validate_request(body, lane)
+            if err:
+                raise InvalidRequestError(err)
+        except InvalidRequestError as exc:
+            return JSONResponse(status_code=400, content={
+                "error": {"message": exc.message, "type": exc.code.lower()},
+            })
+
+        # 5. Run pipeline in executor (avoid blocking the event loop)
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, execute_lane, lane.value, body)
+
+        # 6. Response envelope
+        status, payload = _envelope_to_response(result)
+        return JSONResponse(status_code=status, content=payload)
+
+    return http_chat_completions
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# 7.  Public snapshot — cheap, no I/O
+# 9.  Public status / metrics / dashboard HTML
+# ──────────────────────────────────────────────────────────────────────────
+
+# ──────────────────────────────────────────────────────────────────────────
+# 9.  Public status / metrics / dashboard HTML
+#     All three public surfaces funnel through PublicSnapshot — one
+#     projection, one redaction pass, three HTML/JSON consumers.
 # ──────────────────────────────────────────────────────────────────────────
 
 from public_snapshot import PublicSnapshot, RuntimeState
 
 
 def _snapshot() -> PublicSnapshot:
-    bp = bin_path()
+    """Build a fresh snapshot from current runtime state. Cheap (no I/O)."""
     return PublicSnapshot.from_metrics(
         METRICS,
         RuntimeState(
             started_at=_started_at,
-            llama_server_available=bp is not None,
-            llama_server_path=bp,
+            llama_server_available=_llama_bin_path is not None,
+            llama_server_path=_llama_bin_path,
         ),
         LANE_CONFIG,
     )
 
 
+# Backwards-compat shim for any caller that used the old name:
 def _build_status() -> dict[str, Any]:
     return _snapshot().render_status()
 
@@ -454,42 +552,27 @@ def _status_html() -> str:
 
 
 def _refresh_metrics_body() -> tuple:
+    """Tick callback for the Gradio dashboard — drives plot frames + events."""
     frames = _snapshot().render_frames()
     return (
-        frames["microbrain"],
-        frames["microbrain"],
-        frames["mainbrain"],
-        frames["mainbrain"],
-        frames["events"],
+        frames["microbrain"],       # microbrain gen-plot
+        frames["microbrain"],       # microbrain latency-plot (same data)
+        frames["mainbrain"],        # mainbrain gen-plot
+        frames["mainbrain"],        # mainbrain latency-plot (same data)
+        frames["events"],           # events table
     )
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# 8.  FastAPI / Gradio wiring
-#     ⚠️  Everything below must complete quickly. No blocking I/O.
+# 10.  FastAPI / Gradio wiring
 # ──────────────────────────────────────────────────────────────────────────
 
 _fastapi_app = FastAPI(title="AshatOS Neural Host")
 
 
-# ── /health — must ALWAYS respond immediately, no imports, no I/O ──────
-
-@_fastapi_app.get("/health")
-async def http_health() -> JSONResponse:
-    """Boring, static health check — no I/O, no locks, no imports."""
-    return JSONResponse(content={
-        "status": "ok",
-        "app": "ashat-neural-host",
-        "uptime_seconds": round(time.time() - _started_at, 1),
-        "llama_server_available": bin_path() is not None,
-        "init_done": init_done(),
-        "init_error": init_error(),
-    })
-
-
 @_fastapi_app.post("/v1/chat/completions")
 async def http_chat_completions(request: FastRequest) -> JSONResponse:
-    return await _handle_http_chat_completions(request)
+    return await _make_http_chat_completions()(request)
 
 
 @_fastapi_app.get("/v1/models")
@@ -513,6 +596,23 @@ async def http_list_models() -> JSONResponse:
     })
 
 
+@_fastapi_app.get("/health")
+async def http_health() -> JSONResponse:
+    return JSONResponse(content={
+        "status": "ok",
+        "uptime_seconds": round(time.time() - _started_at, 1),
+        "microbrain_ready": bool(
+            LANE_CONFIG[Lane.MICROBRAIN]["model_path"]
+            and os.path.isfile(LANE_CONFIG[Lane.MICROBRAIN]["model_path"])
+        ),
+        "mainbrain_ready": bool(
+            LANE_CONFIG[Lane.MAINBRAIN]["model_path"]
+            and os.path.isfile(LANE_CONFIG[Lane.MAINBRAIN]["model_path"])
+        ),
+        "llama_server_available": _llama_bin_path is not None,
+    })
+
+
 @_fastapi_app.get("/api/public_status")
 async def http_public_status() -> JSONResponse:
     return JSONResponse(content=_build_status())
@@ -533,8 +633,6 @@ setInterval(function() {{
 }}, {PUBLIC_REFRESH_SECONDS * 1000});
 </script>
 """
-
-
 
 with gr.Blocks(title="AshatOS Neural Host") as _demo:
     gr.HTML(
@@ -604,19 +702,15 @@ with gr.Blocks(title="AshatOS Neural Host") as _demo:
         """)
 
     refresh_btn.click(
-        fn=gradio_status,
+        fn=lambda: _status_html(),
         inputs=[],
         outputs=status_display,
         api_name="status",
         concurrency_limit=1,
     )
 
-    # Lazy init — runs in Gradio's queue when UI loads.
-    # Must be @spaces.GPU-decorated so the ZeroGPU scanner finds it.
-    _demo.load(fn=gradio_lazy_init, inputs=None, outputs=None, concurrency_limit=1)
-
     _demo.load(
-        fn=gradio_metrics_load,
+        fn=_refresh_metrics_body,
         inputs=[],
         outputs=[
             micro_gen_plot, micro_latency_plot,
@@ -626,10 +720,14 @@ with gr.Blocks(title="AshatOS Neural Host") as _demo:
         concurrency_limit=1,
     )
 
+    # -- Private Gradio API endpoints (AshatOS communication only) --
+    # Note: BOTH funnels into _run_pipeline; the only difference is the
+    # fixed lane (route_hint) for routing and the response shape
+    # (json.dumps for Gradio queue API vs. JSONResponse for FastAPI).
     _micro_input = gr.Textbox(visible=False, value="{}", label="microbrain_payload")
     _micro_trigger = gr.Button(visible=False, elem_id="_micro_trigger")
     _micro_trigger.click(
-        fn=gradio_microbrain,
+        fn=_gradio_lane_handler(Lane.MICROBRAIN),
         inputs=[_micro_input],
         outputs=[gr.Textbox(visible=False)],
         api_name="microbrain",
@@ -639,7 +737,7 @@ with gr.Blocks(title="AshatOS Neural Host") as _demo:
     _main_input = gr.Textbox(visible=False, value="{}", label="mainbrain_payload")
     _main_trigger = gr.Button(visible=False, elem_id="_main_trigger")
     _main_trigger.click(
-        fn=gradio_mainbrain,
+        fn=_gradio_lane_handler(Lane.MAINBRAIN),
         inputs=[_main_input],
         outputs=[gr.Textbox(visible=False)],
         api_name="mainbrain",
@@ -665,19 +763,38 @@ with gr.Blocks(title="AshatOS Neural Host") as _demo:
     )
 
 
-# ── Sync startup report (fast, lets platform confirm @spaces.GPU) ────
+# ──────────────────────────────────────────────────────────────────────────
+# 11.  Startup
+# ──────────────────────────────────────────────────────────────────────────
+
+def startup() -> None:
+    global _llama_bin_path
+    _log.info("=" * 60)
+    _log.info("AshatOS Neural I/O Host — Dual-Lane Inference")
+    _log.info("=" * 60)
+
+    _llama_bin_path = ensure_llama_server()
+    if _llama_bin_path:
+        _log.info("llama-server binary: %s", _llama_bin_path)
+    else:
+        _log.warning("llama-server binary not available — degraded mode")
+
+
+startup()
+
+# ── Sync startup report (lets ZeroGPU platform confirm readiness) ────
 try:
     from spaces.config import Config as _SC
     if _SC.zero_gpu:
         from spaces.zero import client as _zclient
         _zclient.startup_report()
-        _log.info("sync startup_report sent")
+        _log.info("startup_report sent")
 except Exception as exc:
-    _log.warning("sync startup_report failed: %s", exc)
+    _log.warning("startup_report failed: %s", exc)
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# 10.  Mount Gradio on FastAPI — completes quickly, no blocking I/O.
+# 12.  Mount Gradio on FastAPI and launch
 # ──────────────────────────────────────────────────────────────────────────
 
 _demo.queue(default_concurrency_limit=1, max_size=QUEUE_LIMIT)
@@ -692,6 +809,4 @@ app = gr.mount_gradio_app(
 if __name__ == "__main__":
     if not os.getenv("SPACE_ID"):  # HF Spaces auto-serves the app
         import uvicorn
-        # Note: on HF Spaces the platform manages the server.
-        # This block only runs in local dev.
         uvicorn.run(app, host="0.0.0.0", port=7860)
