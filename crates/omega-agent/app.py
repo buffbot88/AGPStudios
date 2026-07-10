@@ -14,15 +14,17 @@ The heavy lifting now lives in purpose-built modules:
     * :mod:`run_queue`         — inference queue with timeout + depth tracking
     * :mod:`surface_adapter`   — transport-agnostic pipeline seam
     * :mod:`response_adapter`  — envelope → HTTP response conversion
+    * :mod:`env_scanner`       — runtime probe for ZeroGPU compat diagnostics
 
 What stays here: logging, configuration defaults, the FastAPI and Gradio
 wiring, the :func:`_run_pipeline` orchestrator and envelope builders,
 the @spaces.GPU wrappers, the Gradio dashboard, :func:`execute_lane`
-(serialising entry point), and the startup / mount logic.
+(serialising entry point), env-scanner diagnostics, and startup / mount.
 
-Both surface adapters (Gradio + FastAPI) now call the shared
-:func:`surface_adapter.run_surface` pipeline instead of duplicating
-auth → parse → validate → execute inline.
+The @spaces.GPU decorator is on module-level handler functions that are
+wired directly to ``.click(fn=...)`` so the ZeroGPU static scanner can
+detect them. A belt-and-suspenders path also manually registers them
+with the ``spaces`` package's ``decorated_cache`` via :mod:`env_scanner`.
 """
 
 from __future__ import annotations
@@ -61,6 +63,7 @@ from surface_adapter import (
     GradioSurfaceAdapter,
     run_surface,
 )
+from env_scanner import scan_and_report, ensure_gpu_registration
 
 # ZeroGPU compatibility — direct @spaces.GPU decorator (needed for static detection)
 try:
@@ -334,88 +337,89 @@ def _make_internal_error(message: str):
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# 6.  @spaces.GPU entry point — covers both Gradio and FastAPI paths.
-#     The HF ZeroGPU scanner must statically detect @spaces.GPU on a
-#     module-level function. A single decorator on execute_lane covers
-#     both lanes (the larger 120s duration is used as a safe default).
+# 6.  @spaces.GPU decorated handlers — one per lane, one for FastAPI.
+#     HF ZeroGPU scanner MUST find @spaces.GPU on functions that:
+#       (a) are defined at MODULE LEVEL (not closures),
+#       (b) are DIRECTLY wired to Gradio .click(fn=...), and
+#       (c) accept / return Gradio-compatible types (str, gr.Request).
 # ──────────────────────────────────────────────────────────────────────────
+
+_GRADIO_ADAPTER = GradioSurfaceAdapter()
+_FASTAPI_ADAPTER = FastAPISurfaceAdapter()
+
+
+def _gradio_shared(payload_json: str, request: gr.Request, lane: Lane) -> str:
+    """Shared Gradio pipeline body — not decorated, called by the decorated handlers."""
+    headers = _GRADIO_ADAPTER.extract_headers(request)
+    body: dict[str, Any] | None = None
+    parse_failed = False
+    try:
+        body = (
+            json.loads(payload_json) if isinstance(payload_json, str) else payload_json
+        ) or {}
+    except (json.JSONDecodeError, TypeError):
+        parse_failed = True
+
+    envelope = run_surface(
+        headers=headers,
+        body=body,
+        body_parse_failed=parse_failed,
+        key_gate=_KEY_GATE,
+        execute_fn=execute_lane,
+        lane=lane,
+    )
+    if envelope.get("ok", False):
+        return _GRADIO_ADAPTER.respond_ok(envelope)
+    return _GRADIO_ADAPTER.respond_error(400, envelope)
+
+
+@spaces.GPU(duration=60)
+def gradio_microbrain(payload_json: str, request: gr.Request) -> str:
+    """MicroBrain Gradio handler — @spaces.GPU decorated, wired directly to .click()."""
+    return _gradio_shared(payload_json, request, Lane.MICROBRAIN)
 
 
 @spaces.GPU(duration=120)
-def execute_lane(lane_str: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Serializing entry point — one inference at a time across the Space.
+def gradio_mainbrain(payload_json: str, request: gr.Request) -> str:
+    """MainBrain Gradio handler — @spaces.GPU decorated, wired directly to .click()."""
+    return _gradio_shared(payload_json, request, Lane.MAINBRAIN)
 
-    The @spaces.GPU decorator ensures ZeroGPU allocates a slot before
-    the inference starts. The 120s duration covers both MicroBrain and
-    MainBrain (MicroBrain uses less but is bounded by the same timeout).
-    """
+
+def execute_lane(lane_str: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Serializing entry point — one inference at a time across the Space."""
     lane = Lane.parse(lane_str)
     try:
         with _RUN_QUEUE.acquire(lane):
-            return _run_pipeline(lane, payload)
+            lane_obj = lane
+            return _run_pipeline(lane_obj, payload)
     except RunQueueTimeout:
         _log.warning("%s: inference queue timeout", lane.value)
         exc = InferenceUnavailableError("inference queue timeout")
         return _build_failure_envelope(lane, str(uuid.uuid4()), exc)
 
 
-# ──────────────────────────────────────────────────────────────────────────
-# 7.  Surface adapters — fastapi (HTTP) and gradio (queue API)
-#     Both call :func:`surface_adapter.run_surface` for the shared pipeline.
-# ──────────────────────────────────────────────────────────────────────────
-
-
-# ── Gradio adapter ──────────────────────────────────────────────────────
-
-_GRADIO_ADAPTER = GradioSurfaceAdapter()
-
-
-def _gradio_lane_handler(lane: Lane):
-    """Return a Gradio-callable handler for the given lane.
-
-    The @spaces.GPU decorator is on execute_lane (called indirectly
-    through run_surface), so the scanner finds it at module level.
-    """
-
-    def handler(payload_json: str, request: gr.Request) -> str:
-        headers = _GRADIO_ADAPTER.extract_headers(request)
-        body: dict[str, Any] | None = None
-        parse_failed = False
-        try:
-            body = (
-                json.loads(payload_json)
-                if isinstance(payload_json, str)
-                else payload_json
-            ) or {}
-        except (json.JSONDecodeError, TypeError):
-            parse_failed = True
-
-        envelope = run_surface(
-            headers=headers,
-            body=body,
-            body_parse_failed=parse_failed,
-            key_gate=_KEY_GATE,
-            execute_fn=execute_lane,
-            lane=lane,
-        )
-        if envelope.get("ok", False):
-            return _GRADIO_ADAPTER.respond_ok(envelope)
-        return _GRADIO_ADAPTER.respond_error(400, envelope)
-
-    return handler
-
-
 # ── FastAPI adapter ─────────────────────────────────────────────────────
 
-_FASTAPI_ADAPTER = FastAPISurfaceAdapter()
+
+@spaces.GPU(duration=120)
+def _fastapi_sync_inference(
+    headers: dict[str, str],
+    body: dict[str, Any] | None,
+    parse_failed: bool,
+) -> dict[str, Any]:
+    """Synchronous FastAPI inference — @spaces.GPU decorated, runs in executor."""
+    return run_surface(
+        headers=headers,
+        body=body,
+        body_parse_failed=parse_failed,
+        key_gate=_KEY_GATE,
+        execute_fn=execute_lane,
+        resolver=_RESOLVER,
+    )
 
 
 async def _handle_http_chat_completions(request: FastRequest) -> JSONResponse:
-    """Handle ``POST /v1/chat/completions`` via the shared pipeline.
-
-    GPU allocation happens synchronously inside execute_lane (decorated
-    with @spaces.GPU), which runs in an executor thread.
-    """
+    """Handle ``POST /v1/chat/completions`` via the shared pipeline."""
     headers = _FASTAPI_ADAPTER.extract_headers(request)
     body: dict[str, Any] | None = None
     parse_failed = False
@@ -427,14 +431,7 @@ async def _handle_http_chat_completions(request: FastRequest) -> JSONResponse:
     loop = asyncio.get_event_loop()
     envelope = await loop.run_in_executor(
         None,
-        lambda: run_surface(
-            headers=headers,
-            body=body,
-            body_parse_failed=parse_failed,
-            key_gate=_KEY_GATE,
-            execute_fn=execute_lane,
-            resolver=_RESOLVER,
-        ),
+        lambda: _fastapi_sync_inference(headers, body, parse_failed),
     )
     if envelope.get("ok", False):
         return _FASTAPI_ADAPTER.respond_ok(envelope)
@@ -656,7 +653,7 @@ with gr.Blocks(title="AshatOS Neural Host") as _demo:
     _micro_input = gr.Textbox(visible=False, value="{}", label="microbrain_payload")
     _micro_trigger = gr.Button(visible=False, elem_id="_micro_trigger")
     _micro_trigger.click(
-        fn=_gradio_lane_handler(Lane.MICROBRAIN),
+        fn=gradio_microbrain,
         inputs=[_micro_input],
         outputs=[gr.Textbox(visible=False)],
         api_name="microbrain",
@@ -666,7 +663,7 @@ with gr.Blocks(title="AshatOS Neural Host") as _demo:
     _main_input = gr.Textbox(visible=False, value="{}", label="mainbrain_payload")
     _main_trigger = gr.Button(visible=False, elem_id="_main_trigger")
     _main_trigger.click(
-        fn=_gradio_lane_handler(Lane.MAINBRAIN),
+        fn=gradio_mainbrain,
         inputs=[_main_input],
         outputs=[gr.Textbox(visible=False)],
         api_name="mainbrain",
@@ -701,6 +698,27 @@ def startup() -> None:
     _log.info("=" * 60)
     _log.info("AshatOS Neural I/O Host — Dual-Lane Inference")
     _log.info("=" * 60)
+
+    # Probe the runtime environment for diagnostics (non-fatal).
+    try:
+        scan_and_report()
+    except Exception as exc:
+        _log.warning("env_scanner failed: %s", exc)
+
+    # Belt-and-suspenders: manually register GPU functions so the
+    # ZeroGPU runtime can find them even if the static scan misses.
+    try:
+        ensure_gpu_registration(gradio_microbrain, duration=60)
+    except Exception:
+        pass
+    try:
+        ensure_gpu_registration(gradio_mainbrain, duration=120)
+    except Exception:
+        pass
+    try:
+        ensure_gpu_registration(_fastapi_sync_inference, duration=120)
+    except Exception:
+        pass
 
     _llama_bin_path = ensure_llama_server()
     if _llama_bin_path:
