@@ -334,33 +334,25 @@ def _make_internal_error(message: str):
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# 6.  @spaces.GPU wrappers — one entry per lane
-#     ⚠️  HF Spaces' ZeroGPU scanner parses the AST of app.py and MUST be
-#     able to statically detect @spaces.GPU decorated functions. The
-#     decorator argument MUST be a literal integer — not a variable, not
-#     a function call, not an expression. The env-var override is read
-#     inside the function body via os.getenv().
+# 6.  @spaces.GPU entry point — covers both Gradio and FastAPI paths.
+#     The HF ZeroGPU scanner must statically detect @spaces.GPU on a
+#     module-level function. A single decorator on execute_lane covers
+#     both lanes (the larger 120s duration is used as a safe default).
 # ──────────────────────────────────────────────────────────────────────────
 
 
-@spaces.GPU(duration=60)
-def execute_microbrain_gpu(payload: dict[str, Any]) -> dict[str, Any]:
-    return _run_pipeline(Lane.MICROBRAIN, payload)
-
-
 @spaces.GPU(duration=120)
-def execute_mainbrain_gpu(payload: dict[str, Any]) -> dict[str, Any]:
-    return _run_pipeline(Lane.MAINBRAIN, payload)
-
-
 def execute_lane(lane_str: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Serializing entry point — one inference at a time across the Space."""
+    """Serializing entry point — one inference at a time across the Space.
+
+    The @spaces.GPU decorator ensures ZeroGPU allocates a slot before
+    the inference starts. The 120s duration covers both MicroBrain and
+    MainBrain (MicroBrain uses less but is bounded by the same timeout).
+    """
     lane = Lane.parse(lane_str)
     try:
         with _RUN_QUEUE.acquire(lane):
-            if lane is Lane.MICROBRAIN:
-                return execute_microbrain_gpu(payload)
-            return execute_mainbrain_gpu(payload)
+            return _run_pipeline(lane, payload)
     except RunQueueTimeout:
         _log.warning("%s: inference queue timeout", lane.value)
         exc = InferenceUnavailableError("inference queue timeout")
@@ -379,7 +371,11 @@ _GRADIO_ADAPTER = GradioSurfaceAdapter()
 
 
 def _gradio_lane_handler(lane: Lane):
-    """Return a Gradio-callable handler for the given lane."""
+    """Return a Gradio-callable handler for the given lane.
+
+    The @spaces.GPU decorator is on execute_lane (called indirectly
+    through run_surface), so the scanner finds it at module level.
+    """
 
     def handler(payload_json: str, request: gr.Request) -> str:
         headers = _GRADIO_ADAPTER.extract_headers(request)
@@ -415,7 +411,11 @@ _FASTAPI_ADAPTER = FastAPISurfaceAdapter()
 
 
 async def _handle_http_chat_completions(request: FastRequest) -> JSONResponse:
-    """Handle ``POST /v1/chat/completions`` via the shared pipeline."""
+    """Handle ``POST /v1/chat/completions`` via the shared pipeline.
+
+    GPU allocation happens synchronously inside execute_lane (decorated
+    with @spaces.GPU), which runs in an executor thread.
+    """
     headers = _FASTAPI_ADAPTER.extract_headers(request)
     body: dict[str, Any] | None = None
     parse_failed = False
@@ -424,7 +424,6 @@ async def _handle_http_chat_completions(request: FastRequest) -> JSONResponse:
     except Exception:
         parse_failed = True
 
-    # Run the shared pipeline in executor (avoids blocking the event loop).
     loop = asyncio.get_event_loop()
     envelope = await loop.run_in_executor(
         None,
