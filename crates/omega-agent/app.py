@@ -10,12 +10,12 @@ from huggingface_hub import hf_hub_download
 from llama_cpp import Llama
 
 # Fast-lane model
-FAST_MODEL_REPO = os.getenv("RipBuffy/LFM2.5-Q6_K", "").strip()
-FAST_MODEL_FILE = os.getenv("LFM2.5-350M-Q6_K.gguf", "").strip()
+FAST_MODEL_REPO = os.getenv("FAST_MODEL_REPO", "RipBuffy/LFM2.5-Q6_K").strip()
+FAST_MODEL_FILE = os.getenv("FAST_MODEL_FILE", "LFM2.5-350M-Q6_K.gguf").strip()
 
 # Slow/reasoning-lane model
-SLOW_MODEL_REPO = os.getenv("RipBuffy/LFM2.5-Q6_K", "").strip()
-SLOW_MODEL_FILE = os.getenv("LFM2.5-1.2B-Instruct-Q6_K.gguf", "").strip()
+SLOW_MODEL_REPO = os.getenv("SLOW_MODEL_REPO", "RipBuffy/LFM2.5-Q6_K").strip()
+SLOW_MODEL_FILE = os.getenv("SLOW_MODEL_FILE", "LFM2.5-1.2B-Instruct-Q6_K.gguf").strip()
 
 MODEL_REVISION = os.getenv("MODEL_REVISION", "main").strip()
 HF_TOKEN = os.getenv("HF_TOKEN") or None
@@ -39,7 +39,7 @@ SLOW_SYSTEM_PROMPT = os.getenv(
 _models: dict[str, Llama | None] = {"fast": None, "slow": None}
 _model_paths: dict[str, str | None] = {"fast": None, "slow": None}
 
-# One global inference lock: free CPU Basic only has two vCPUs.
+# One global inference lock: zeroGPU shares a single A10G between lanes; serializing avoids GPU-context contention.
 _inference_lock = threading.Lock()
 _load_locks = {"fast": threading.Lock(), "slow": threading.Lock()}
 _started_at = time.time()
@@ -80,7 +80,7 @@ def load_model(lane: Literal["fast", "slow"]) -> Llama:
             n_threads=N_THREADS,
             n_threads_batch=N_THREADS,
             n_batch=N_BATCH,
-            n_gpu_layers=0,
+            n_gpu_layers=99,  # offload all available layers to the zeroGPU A10G; safe upper bound that works for any small/medium GGUF
             use_mmap=True,
             use_mlock=False,
             verbose=False,
@@ -248,12 +248,12 @@ def unload(lane: Literal["fast", "slow", "both"]) -> dict[str, Any]:
     }
 
 
-with gr.Blocks(title="AshatOS Dual GGUF Host") as demo:
+with gr.Blocks(title="AshatOS Dual GGUF Host (zeroGPU)") as demo:
     gr.Markdown(
         """
-        # AshatOS Dual GGUF Host
+        # AshatOS Dual GGUF Host (zeroGPU)
 
-        Two CPU GGUF lanes:
+        Two GGUF lanes running on ZeroGPU:
 
         - `/fast_chat` — short conversational responses
         - `/slow_chat` — deeper reasoning responses

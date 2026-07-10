@@ -1,0 +1,5 @@
+build-essential
+cmake
+nvidia-cuda-toolkit
+cuda-cudart-dev
+cuda-cublas-dev
