@@ -622,13 +622,87 @@ async def http_public_metrics() -> JSONResponse:
 
 
 
-# ── Dashboard helpers ──────────────────────────────────────────────
 
+AUTO_REFRESH_JS = """<script>
+function updateCards() {
+    fetch('/api/public_metrics')
+        .then(r => r.json())
+        .then(data => {
+            var mb = data.summaries.microbrain || {};
+            var M = data.summaries.mainbrain || {};
+            document.getElementById('mb-prompt').textContent = Math.round(mb.avg_prompt_tokens_per_second || 0);
+            document.getElementById('mb-gen').textContent = Math.round(mb.avg_generation_tokens_per_second || 0);
+            document.getElementById('mb-req').textContent = mb.total_requests || 0;
+            document.getElementById('M-prompt').textContent = Math.round(M.avg_prompt_tokens_per_second || 0);
+            document.getElementById('M-gen').textContent = Math.round(M.avg_generation_tokens_per_second || 0);
+            document.getElementById('M-req').textContent = M.total_requests || 0;
+        }).catch(function(){});
+}
+document.addEventListener('DOMContentLoaded', function() { updateCards(); });
+setInterval(updateCards, 10000);
+</script>"""
 
-    # -- Private Gradio API endpoints (AshatOS communication only) --    # -- Private Gradio API endpoints (AshatOS communication only) --    # -- Private Gradio API endpoints (AshatOS communication only) --    # -- Private Gradio API endpoints (AshatOS communication only) --    # -- Private Gradio API endpoints (AshatOS communication only) --
-    # Note: BOTH funnels into _run_pipeline; the only difference is the
-    # fixed lane (route_hint) for routing and the response shape
-    # (json.dumps for Gradio queue API vs. JSONResponse for FastAPI).
+with gr.Blocks(title="AshatOS Neural Host") as _demo:
+    gr.HTML(
+        """
+        <div style="text-align: center; padding: 24px 20px 8px;">
+            <h1 style="margin: 0; font-size: 2em; font-weight: 700;
+                background: linear-gradient(135deg, #a78bfa, #67e8f9);
+                -webkit-background-clip: text;">
+                🧠 ASHAT NEURAL HOST</h1>
+            <p style="color: #94a3b8; font-size: 0.9em; margin: 4px 0 0;">
+                Dual-Lane Inference</p>
+        </div>
+        """
+    )
+
+    with gr.Row(equal_height=True):
+        with gr.Column(scale=1, min_width=360):
+            gr.HTML(
+                """
+                <div style="border:1px solid #334155;border-radius:12px;padding:16px;background:#1e293b;font-family:monospace;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                        <span style="font-size:1.2em;font-weight:700;color:#e2e8f0;">MicroBrain</span>
+                        <span style="color:#22c55e;font-size:0.75em;">&#x25CF; active</span>
+                    </div>
+                    <div style="color:#94a3b8;font-size:0.75em;margin-bottom:10px;">
+                        LFM2.5-350M-Q6_K.gguf &middot; 4096 ctx &middot; <span id="mb-req">0</span> req
+                    </div>
+                    <div style="display:flex;gap:20px;">
+                        <div><div style="color:#f87171;font-size:0.65em;">prompt</div>
+                            <div style="font-size:1.5em;font-weight:700;color:#fca5a5;" id="mb-prompt">0</div>
+                            <div style="color:#64748b;font-size:0.6em;">tok/s</div></div>
+                        <div><div style="color:#4ade80;font-size:0.65em;">gen</div>
+                            <div style="font-size:1.5em;font-weight:700;color:#86efac;" id="mb-gen">0</div>
+                            <div style="color:#64748b;font-size:0.6em;">tok/s</div></div>
+                    </div>
+                </div>
+                """
+            )
+        with gr.Column(scale=1, min_width=360):
+            gr.HTML(
+                """
+                <div style="border:1px solid #334155;border-radius:12px;padding:16px;background:#1e293b;font-family:monospace;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                        <span style="font-size:1.2em;font-weight:700;color:#e2e8f0;">MainBrain</span>
+                        <span style="color:#22c55e;font-size:0.75em;">&#x25CF; active</span>
+                    </div>
+                    <div style="color:#94a3b8;font-size:0.75em;margin-bottom:10px;">
+                        LFM2.5-1.2B-Instruct-Q6_K.gguf &middot; 8192 ctx &middot; <span id="M-req">0</span> req
+                    </div>
+                    <div style="display:flex;gap:20px;">
+                        <div><div style="color:#f87171;font-size:0.65em;">prompt</div>
+                            <div style="font-size:1.5em;font-weight:700;color:#fca5a5;" id="M-prompt">0</div>
+                            <div style="color:#64748b;font-size:0.6em;">tok/s</div></div>
+                        <div><div style="color:#4ade80;font-size:0.65em;">gen</div>
+                            <div style="font-size:1.5em;font-weight:700;color:#86efac;" id="M-gen">0</div>
+                            <div style="color:#64748b;font-size:0.6em;">tok/s</div></div>
+                    </div>
+                </div>
+                """
+            )
+
+    # -- Private Gradio API endpoints (AshatOS communication only) --
     _micro_input = gr.Textbox(visible=False, value="{}", label="microbrain_payload")
     _micro_trigger = gr.Button(visible=False, elem_id="_micro_trigger")
     _micro_trigger.click(
@@ -666,35 +740,6 @@ async def http_public_metrics() -> JSONResponse:
         api_name="public_metrics",
         concurrency_limit=1,
     )
-
-
-# ──────────────────────────────────────────────────────────────────────────
-# 11.  Startup
-# ──────────────────────────────────────────────────────────────────────────
-
-def startup() -> None:
-    global _llama_bin_path
-    _log.info("=" * 60)
-    _log.info("AshatOS Neural I/O Host — Dual-Lane Inference")
-    _log.info("=" * 60)
-
-    _llama_bin_path = ensure_llama_server()
-    if _llama_bin_path:
-        _log.info("llama-server binary: %s", _llama_bin_path)
-    else:
-        _log.warning("llama-server binary not available — degraded mode")
-
-    # Pre-download models so they are ready on first request.
-    # Models are cached by huggingface_hub after first download.
-    if _llama_bin_path:
-        for lane in (Lane.MICROBRAIN, Lane.MAINBRAIN):
-            try:
-                _BACKEND_LAUNCHER.ensure_model(lane)
-                _log.info("%s model cached: %s", lane.value,
-                          LANE_CONFIG[lane]["model_path"])
-            except Exception as exc:
-                _log.warning("%s model pre-download failed: %s",
-                             lane.value, exc)
 
 
 startup()
