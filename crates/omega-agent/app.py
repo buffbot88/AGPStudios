@@ -1,30 +1,9 @@
 #!/usr/bin/env python3
 """AshatOS Neural I/O Host — slim orchestrator.
 
-The heavy lifting now lives in purpose-built modules:
-    * :mod:`domain`            — Lane enum + per-lane config
-    * :mod:`run_errors`        — typed exception hierarchy + RunError→JSON codes
-    * :mod:`lane_resolver`     — strict route-or-model lane routing
-    * :mod:`lane_keygate`      — single auth authority for both surfaces
-    * :mod:`backend_launcher`  — per-request llama-server lifecycle
-    * :mod:`completion_client` — HTTP-only client to the live backend
-    * :mod:`run_metrics`       — sanitized metric + event recording
-    * :mod:`metrics_store`     — thread-safe in-memory rolling deque
-    * :mod:`installer`         — bin installer + GitHub/HF mirror tiers
-    * :mod:`run_queue`         — inference queue with timeout + depth tracking
-    * :mod:`surface_adapter`   — transport-agnostic pipeline seam
-    * :mod:`response_adapter`  — envelope → HTTP response conversion
-    * :mod:`env_scanner`       — runtime probe for ZeroGPU compat diagnostics
-
-What stays here: logging, configuration defaults, the FastAPI and Gradio
-wiring, the :func:`_run_pipeline` orchestrator and envelope builders,
-the @spaces.GPU wrappers, the Gradio dashboard, :func:`execute_lane`
-(serialising entry point), env-scanner diagnostics, and startup / mount.
-
-The @spaces.GPU decorator is on module-level handler functions that are
-wired directly to ``.click(fn=...)`` so the ZeroGPU static scanner can
-detect them. A belt-and-suspenders path also manually registers them
-with the ``spaces`` package's ``decorated_cache`` via :mod:`env_scanner`.
+Preserves the new Ashat Neural Host UI and Live Benchmark dashboard.
+Startup work is backgrounded so /health responds immediately and the
+Gradio UI renders before models or the llama-server binary are ready.
 """
 
 from __future__ import annotations
@@ -100,33 +79,25 @@ N_THREADS = int(os.getenv("N_THREADS", "2"))
 N_BATCH = int(os.getenv("N_BATCH", "128"))
 QUEUE_LIMIT = int(os.getenv("QUEUE_LIMIT", "16"))
 PUBLIC_REFRESH_SECONDS = int(os.getenv("PUBLIC_REFRESH_SECONDS", "10"))
-# GPU slot durations for ZeroGPU. Read once at import time and exposed
-# as plain module-level Names so the @spaces.GPU decorators below are
-# trivially AST-readable by HF Spaces' static scanner (a function-call
-# inside the decorator arg can hang the scanner with the
-# "No @spaces.GPU function detected during startup" error).
-# GPU slot durations for ZeroGPU. The @spaces.GPU decorators use literal
-# integers because HF Spaces' static AST scanner chokes on variable
-# references (even simple Name nodes). The env-var path is checked inside
-# the decorated function bodies for any caller that needs the value.
-# The default durations come from the env-vars MICRO_GPU_DURATION / MAIN_GPU_DURATION.
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# 3.  Global runtime state
+# 3.  Global runtime state — all mutable, init'd to safe defaults
 # ──────────────────────────────────────────────────────────────────────────
 
 _started_at: float = time.time()
 _RUN_QUEUE = RunQueue(timeout_s=300.0)
 _active_processes: list[subprocess.Popen[str]] = []
-_llama_bin_path: str | None = None
+_llama_bin_path: str | None = None        # set by _background_init
+_init_done: bool = False                   # set by _background_init
+_init_error: str | None = None             # set by _background_init
 
 
 def _binary_path_getter() -> str | None:
     return _llama_bin_path
 
 
-# Pipeline collaborators instantiated once at module import.
+# Pipeline collaborators instantiated once at module import (no I/O).
 _RESOLVER = LaneResolver()
 _KEY_GATE = LaneKeyGate()
 _BACKEND_LAUNCHER = BackendLauncher(
@@ -245,26 +216,13 @@ def _build_failure_envelope(
 def _run_pipeline(lane: Lane, payload: dict[str, Any]) -> dict[str, Any]:
     """Slim Run. Composes :class:`BackendLauncher`, :class:`CompletionClient`,
     and :class:`RunMetrics` into one request lifecycle.
-
-    Behavior:
-      * Degraded-mode gate first — INFERENCE_UNAVAILABLE without spawning a
-        subprocess with an empty binary path.
-      * Typed :class:`RunError` subclasses never bubble up; the orchestrator
-        converts them to a uniform failure envelope and records metrics.
-      * ``BackendLauncher`` and ``CompletionClient`` are responsible for all
-        subprocess / HTTP edges; this function is orchestration only.
-      * The outermost ``except Exception`` is the only broad catch — it's
-        the safety boundary. Internally every expected failure is a typed
-        RunError.
     """
     request_id = str(payload.get("request_id") or uuid.uuid4())
-    # Force an id so completion client & metrics see the same one.
     payload.setdefault("request_id", request_id)
 
     started_at = time.perf_counter()
     cold_start = _is_cold_start(lane)
 
-    # Degraded-mode gate.
     if not _llama_bin_path:
         _log.warning(
             "%s: inference unavailable — llama-server binary not installed",
@@ -285,8 +243,6 @@ def _run_pipeline(lane: Lane, payload: dict[str, Any]) -> dict[str, Any]:
             try:
                 completion = _COMPLETION_CLIENT.complete(backend, lane, payload)
             finally:
-                # Maintain back-compat with the pre-refactor _active_processes
-                # list — also helps atexit catch orphans.
                 try:
                     _active_processes.remove(backend.process)
                 except ValueError:
@@ -307,8 +263,6 @@ def _run_pipeline(lane: Lane, payload: dict[str, Any]) -> dict[str, Any]:
         return _build_failure_envelope(lane, request_id, exc)
 
     except Exception as exc:
-        # Outermost safety boundary. We never want a stray runtime error to
-        # kill the request silently. Translate to an INTERNAL_ERROR envelope.
         _log.exception("%s: unhandled exception in run pipeline", lane.value)
         total_ms = round((time.perf_counter() - started_at) * 1000, 1)
         envelope = {
@@ -328,7 +282,6 @@ def _run_pipeline(lane: Lane, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _make_internal_error(message: str):
-    """Construct an ad-hoc RunError for the broadest catch path."""
     err = RunError(message)
     err.code = "INTERNAL_ERROR"
     err.http_status = 500
@@ -337,11 +290,7 @@ def _make_internal_error(message: str):
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# 6.  @spaces.GPU decorated handlers — one per lane, one for FastAPI.
-#     HF ZeroGPU scanner MUST find @spaces.GPU on functions that:
-#       (a) are defined at MODULE LEVEL (not closures),
-#       (b) are DIRECTLY wired to Gradio .click(fn=...), and
-#       (c) accept / return Gradio-compatible types (str, gr.Request).
+# 6.  @spaces.GPU decorated handlers
 # ──────────────────────────────────────────────────────────────────────────
 
 _GRADIO_ADAPTER = GradioSurfaceAdapter()
@@ -349,7 +298,6 @@ _FASTAPI_ADAPTER = FastAPISurfaceAdapter()
 
 
 def _gradio_shared(payload_json: str, request: gr.Request, lane: Lane) -> str:
-    """Shared Gradio pipeline body — not decorated, called by the decorated handlers."""
     headers = _GRADIO_ADAPTER.extract_headers(request)
     body: dict[str, Any] | None = None
     parse_failed = False
@@ -375,23 +323,19 @@ def _gradio_shared(payload_json: str, request: gr.Request, lane: Lane) -> str:
 
 @spaces.GPU(duration=60)
 def gradio_microbrain(payload_json: str, request: gr.Request) -> str:
-    """MicroBrain Gradio handler — @spaces.GPU decorated, wired directly to .click()."""
     return _gradio_shared(payload_json, request, Lane.MICROBRAIN)
 
 
 @spaces.GPU(duration=120)
 def gradio_mainbrain(payload_json: str, request: gr.Request) -> str:
-    """MainBrain Gradio handler — @spaces.GPU decorated, wired directly to .click()."""
     return _gradio_shared(payload_json, request, Lane.MAINBRAIN)
 
 
 def execute_lane(lane_str: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Serializing entry point — one inference at a time across the Space."""
     lane = Lane.parse(lane_str)
     try:
         with _RUN_QUEUE.acquire(lane):
-            lane_obj = lane
-            return _run_pipeline(lane_obj, payload)
+            return _run_pipeline(lane, payload)
     except RunQueueTimeout:
         _log.warning("%s: inference queue timeout", lane.value)
         exc = InferenceUnavailableError("inference queue timeout")
@@ -407,7 +351,6 @@ def _fastapi_sync_inference(
     body: dict[str, Any] | None,
     parse_failed: bool,
 ) -> dict[str, Any]:
-    """Synchronous FastAPI inference — @spaces.GPU decorated, runs in executor."""
     return run_surface(
         headers=headers,
         body=body,
@@ -419,7 +362,6 @@ def _fastapi_sync_inference(
 
 
 async def _handle_http_chat_completions(request: FastRequest) -> JSONResponse:
-    """Handle ``POST /v1/chat/completions`` via the shared pipeline."""
     headers = _FASTAPI_ADAPTER.extract_headers(request)
     body: dict[str, Any] | None = None
     parse_failed = False
@@ -439,16 +381,13 @@ async def _handle_http_chat_completions(request: FastRequest) -> JSONResponse:
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# 8.  Public status / metrics / dashboard HTML
-#     All three public surfaces funnel through PublicSnapshot — one
-#     projection, one redaction pass, three HTML/JSON consumers.
+# 7.  Public snapshot — cheap, no I/O
 # ──────────────────────────────────────────────────────────────────────────
 
 from public_snapshot import PublicSnapshot, RuntimeState
 
 
 def _snapshot() -> PublicSnapshot:
-    """Build a fresh snapshot from current runtime state. Cheap (no I/O)."""
     return PublicSnapshot.from_metrics(
         METRICS,
         RuntimeState(
@@ -460,7 +399,6 @@ def _snapshot() -> PublicSnapshot:
     )
 
 
-# Backwards-compat shim for any caller that used the old name:
 def _build_status() -> dict[str, Any]:
     return _snapshot().render_status()
 
@@ -478,22 +416,36 @@ def _status_html() -> str:
 
 
 def _refresh_metrics_body() -> tuple:
-    """Tick callback for the Gradio dashboard — drives plot frames + events."""
     frames = _snapshot().render_frames()
     return (
-        frames["microbrain"],       # microbrain gen-plot
-        frames["microbrain"],       # microbrain latency-plot (same data)
-        frames["mainbrain"],        # mainbrain gen-plot
-        frames["mainbrain"],        # mainbrain latency-plot (same data)
-        frames["events"],           # events table
+        frames["microbrain"],
+        frames["microbrain"],
+        frames["mainbrain"],
+        frames["mainbrain"],
+        frames["events"],
     )
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# 9.  FastAPI / Gradio wiring
+# 8.  FastAPI / Gradio wiring
+#     ⚠️  Everything below must complete quickly. No blocking I/O.
 # ──────────────────────────────────────────────────────────────────────────
 
 _fastapi_app = FastAPI(title="AshatOS Neural Host")
+
+
+# ── /health — must ALWAYS respond immediately, no imports, no I/O ──────
+
+@_fastapi_app.get("/health")
+async def http_health() -> JSONResponse:
+    return JSONResponse(content={
+        "status": "ok",
+        "app": "ashat-neural-host",
+        "uptime_seconds": round(time.time() - _started_at, 1),
+        "llama_server_available": _llama_bin_path is not None,
+        "init_done": _init_done,
+        "init_error": _init_error,
+    })
 
 
 @_fastapi_app.post("/v1/chat/completions")
@@ -519,23 +471,6 @@ async def http_list_models() -> JSONResponse:
                 "owned_by": "ashatos",
             },
         ],
-    })
-
-
-@_fastapi_app.get("/health")
-async def http_health() -> JSONResponse:
-    return JSONResponse(content={
-        "status": "ok",
-        "uptime_seconds": round(time.time() - _started_at, 1),
-        "microbrain_ready": bool(
-            LANE_CONFIG[Lane.MICROBRAIN]["model_path"]
-            and os.path.isfile(LANE_CONFIG[Lane.MICROBRAIN]["model_path"])
-        ),
-        "mainbrain_ready": bool(
-            LANE_CONFIG[Lane.MAINBRAIN]["model_path"]
-            and os.path.isfile(LANE_CONFIG[Lane.MAINBRAIN]["model_path"])
-        ),
-        "llama_server_available": _llama_bin_path is not None,
     })
 
 
@@ -646,10 +581,6 @@ with gr.Blocks(title="AshatOS Neural Host") as _demo:
         concurrency_limit=1,
     )
 
-    # -- Private Gradio API endpoints (AshatOS communication only) --
-    # Note: BOTH funnels into _run_pipeline; the only difference is the
-    # fixed lane (route_hint) for routing and the response shape
-    # (json.dumps for Gradio queue API vs. JSONResponse for FastAPI).
     _micro_input = gr.Textbox(visible=False, value="{}", label="microbrain_payload")
     _micro_trigger = gr.Button(visible=False, elem_id="_micro_trigger")
     _micro_trigger.click(
@@ -690,77 +621,7 @@ with gr.Blocks(title="AshatOS Neural Host") as _demo:
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# 10.  Startup
-# ──────────────────────────────────────────────────────────────────────────
-
-def _report_zero_gpu_ready() -> None:
-    """Send the ZeroGPU startup report manually.
-
-    The ``spaces`` package normally does this via a patch on
-    ``gr.Blocks.launch``, but ``mount_gradio_app`` never calls launch().
-    The platform times out without this report, even when ``@spaces.GPU``
-    decorated functions exist and are in the ``decorated_cache``.
-    """
-    try:
-        # Only attempt on ZeroGPU (import guard).
-        from spaces.config import Config as _SC
-        if not _SC.zero_gpu:
-            _log.info("skip ZeroGPU startup report (not a ZeroGPU env)")
-            return
-        from spaces.zero import client as _zclient
-        _zclient.startup_report()
-        _log.info("ZeroGPU startup report sent successfully")
-    except Exception as exc:
-        _log.warning("ZeroGPU startup report failed (non-fatal): %s", exc)
-
-
-def startup() -> None:
-    global _llama_bin_path
-    _log.info("=" * 60)
-    _log.info("AshatOS Neural I/O Host — Dual-Lane Inference")
-    _log.info("=" * 60)
-
-    # Probe the runtime environment for diagnostics (non-fatal).
-    try:
-        scan_and_report()
-    except Exception as exc:
-        _log.warning("env_scanner failed: %s", exc)
-
-    # Belt-and-suspenders: manually register GPU functions so the
-    # ZeroGPU runtime can find them even if the static scan misses.
-    try:
-        ensure_gpu_registration(gradio_microbrain, duration=60)
-    except Exception:
-        pass
-    try:
-        ensure_gpu_registration(gradio_mainbrain, duration=120)
-    except Exception:
-        pass
-    try:
-        ensure_gpu_registration(_fastapi_sync_inference, duration=120)
-    except Exception:
-        pass
-
-    _llama_bin_path = ensure_llama_server()
-    if _llama_bin_path:
-        _log.info("llama-server binary: %s", _llama_bin_path)
-    else:
-        _log.warning("llama-server binary not available — degraded mode")
-
-    # Signal ZeroGPU that the app is ready with GPU-decorated functions.
-    # Normally ``spaces.zero.startup()`` does this via a ``gr.Blocks.launch``
-    # patch, but ``mount_gradio_app`` never calls ``launch()``, so the startup
-    # report is never sent and the platform times out with
-    # "No @spaces.GPU function detected during startup".
-    # We call it manually here.
-    _report_zero_gpu_ready()
-
-
-startup()
-
-
-# ──────────────────────────────────────────────────────────────────────────
-# 11.  Mount Gradio on FastAPI and launch
+# 9.  Mount Gradio on FastAPI — completes quickly, no blocking I/O
 # ──────────────────────────────────────────────────────────────────────────
 
 _demo.queue(default_concurrency_limit=1, max_size=QUEUE_LIMIT)
@@ -770,6 +631,65 @@ app = gr.mount_gradio_app(
     theme=gr.themes.Soft(),
     head=JAVASCRIPT_REFRESH,
 )
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# 10.  Background initialization — runs AFTER app construction
+#      Everything that does I/O: llama-server install, startup_report, etc.
+# ──────────────────────────────────────────────────────────────────────────
+
+def _background_init() -> None:
+    """Run expensive startup work in a daemon thread so /health isn't blocked."""
+    global _llama_bin_path, _init_done, _init_error
+    _log.info("=" * 60)
+    _log.info("AshatOS Neural I/O Host — background init start")
+    _log.info("=" * 60)
+
+    # 1. Probe environment (fast, no network)
+    try:
+        scan_and_report()
+    except Exception as exc:
+        _log.warning("env_scanner failed: %s", exc)
+
+    # 2. Register GPU functions with spaces package
+    for fn, dur in [
+        (gradio_microbrain, 60),
+        (gradio_mainbrain, 120),
+        (_fastapi_sync_inference, 120),
+    ]:
+        try:
+            ensure_gpu_registration(fn, duration=dur)
+        except Exception:
+            pass
+
+    # 3. Install / detect llama-server binary (network I/O)
+    try:
+        _llama_bin_path = ensure_llama_server()
+        if _llama_bin_path:
+            _log.info("llama-server binary: %s", _llama_bin_path)
+        else:
+            _log.warning("llama-server binary not available — degraded mode")
+    except Exception as exc:
+        _init_error = f"llama-server install failed: {exc}"
+        _log.error(_init_error)
+
+    # 4. Send ZeroGPU startup report (non-blocking in this thread)
+    try:
+        from spaces.config import Config as _SC
+        if _SC.zero_gpu:
+            from spaces.zero import client as _zclient
+            _zclient.startup_report()
+            _log.info("ZeroGPU startup report sent successfully")
+    except Exception as exc:
+        _log.warning("ZeroGPU startup report failed (non-fatal): %s", exc)
+
+    _init_done = True
+    _log.info("AshatOS background init complete. "
+              "binary=%s error=%s", _llama_bin_path, _init_error)
+
+
+# Start background init in a daemon thread — never blocks app startup.
+threading.Thread(target=_background_init, daemon=True, name="ashatos-init").start()
 
 
 if __name__ == "__main__":
