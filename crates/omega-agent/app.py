@@ -830,11 +830,14 @@ def status_text() -> str:
 # 11.  Gradio event handlers
 # ---------------------------------------------------------------------------
 
-def handle_chat(model_name: str, message: str, max_tokens: int,
-                temperature: float, top_p: float) -> str:
-    """Process a chat message and return the response text."""
+def handle_chat(model_name: str, message: str, chat_history: list[list[str]],
+                max_tokens: int, temperature: float, top_p: float) -> tuple[list[list[str]], str]:
+    """Process a chat message, append to history, return (updated_history, "")."""
     if not message or not message.strip():
-        return "Please enter a message."
+        return chat_history, ""
+
+    # Append user message to history
+    chat_history.append([message, None])
 
     result = call_llama_server(
         model_name=model_name,
@@ -845,9 +848,13 @@ def handle_chat(model_name: str, message: str, max_tokens: int,
     )
 
     if result.get("ok"):
-        return result["response"]
+        response = result["response"]
     else:
-        return f"**Error:** {result.get('error', 'unknown error')}"
+        response = f"**Error:** {result.get('error', 'unknown error')}"
+
+    # Update the last entry with the response
+    chat_history[-1][1] = response
+    return chat_history, ""
 
 
 def refresh_status() -> str:
@@ -883,24 +890,30 @@ with gr.Blocks(
     )
 
     with gr.Tab("Chat"):
+        chatbot = gr.Chatbot(
+            label="Conversation",
+            placeholder="Select a model and start chatting...",
+            height=400,
+        )
+
         with gr.Row():
             model_selector = gr.Dropdown(
                 choices=list(MODELS.keys()),
                 value="MainBrain",
                 label="Model",
+                scale=1,
                 interactive=True,
             )
-        with gr.Row():
-            with gr.Column(scale=3):
+            with gr.Column(scale=4):
                 prompt_box = gr.Textbox(
                     label="Your message",
-                    placeholder="Type your message here ...",
-                    lines=4,
+                    placeholder="Type your message here and press Enter or click Send...",
+                    lines=2,
                 )
-                with gr.Row():
-                    submit_btn = gr.Button("Submit", variant="primary", scale=2)
-                    clear_btn = gr.Button("Clear", scale=1)
-            with gr.Column(scale=2):
+            submit_btn = gr.Button("Send", variant="primary", scale=1, min_width=80)
+
+        with gr.Accordion("Parameters", open=False):
+            with gr.Row():
                 max_tokens_slider = gr.Slider(
                     1, 2048, value=512, step=1, label="Max tokens"
                 )
@@ -911,25 +924,41 @@ with gr.Blocks(
                     0.0, 1.0, value=0.9, step=0.05, label="Top-p"
                 )
 
-        with gr.Row():
-            response_box = gr.Markdown(
-                label="Response", value="*Waiting for input ...*"
-            )
+        clear_btn = gr.Button("🗑 Clear conversation", variant="secondary", size="sm")
+
+        # State to hold conversation history
+        chat_state = gr.State([])
 
         submit_btn.click(
             fn=handle_chat,
             inputs=[
-                model_selector, prompt_box,
+                model_selector, prompt_box, chat_state,
                 max_tokens_slider, temperature_slider, top_p_slider,
             ],
-            outputs=response_box,
+            outputs=[chatbot, prompt_box],
             api_name="chat",
             concurrency_limit=1,
-        )
-        clear_btn.click(
-            fn=lambda: ("", "*Waiting for input ...*"),
+        ).then(
+            fn=lambda: "",
             inputs=[],
-            outputs=[prompt_box, response_box],
+            outputs=prompt_box,
+        )
+
+        # Also trigger on Enter key in the textbox
+        prompt_box.submit(
+            fn=handle_chat,
+            inputs=[
+                model_selector, prompt_box, chat_state,
+                max_tokens_slider, temperature_slider, top_p_slider,
+            ],
+            outputs=[chatbot, prompt_box],
+            concurrency_limit=1,
+        )
+
+        clear_btn.click(
+            fn=lambda: ([], ""),
+            inputs=[],
+            outputs=[chat_state, chatbot],
         )
 
     with gr.Tab("Server Status"):
