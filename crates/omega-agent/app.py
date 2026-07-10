@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AshatOS Dual-Lane ZeroGPU Inference Host
+AshatOS Neural I/O Host
 
 A Hugging Face Space providing two private inference lanes (MicroBrain /
 MainBrain) behind authenticated API endpoints, with a public read-only
@@ -32,7 +32,6 @@ import socket
 import subprocess
 import sys
 import tarfile
-import tempfile
 import threading
 import time
 import urllib.request
@@ -65,7 +64,7 @@ except ImportError:
     spaces.GPU = _GPU()  # type: ignore[assignment]
 
 # ──────────────────────────────────────────────────────────────────────────
-# 1.  Logging
+# 1.  Logging (stdout only — no disk writes)
 # ──────────────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
@@ -78,7 +77,7 @@ _log = logging.getLogger("ashatos")
 # 2.  Configuration (all overridable via env vars / Space secrets)
 # ──────────────────────────────────────────────────────────────────────────
 
-# Models
+# Models (downloaded from HF Hub on first inference)
 MAIN_MODEL_REPO = os.getenv("MAIN_MODEL_REPO", "RipBuffy/LFM2.5-Q6_K")
 MAIN_MODEL_FILE = os.getenv("MAIN_MODEL_FILE", "LFM2.5-1.2B-Instruct-Q6_K.gguf")
 MICRO_MODEL_REPO = os.getenv("MICRO_MODEL_REPO", "RipBuffy/LFM2.5-Q6_K")
@@ -87,7 +86,7 @@ MODEL_REVISION = os.getenv("MODEL_REVISION", "main")
 HF_TOKEN: str | None = os.getenv("HF_TOKEN") or None
 
 # Runtime
-INTERNAL_PORT = int(os.getenv("INTERNAL_PORT", "18080"))
+LLAMA_SERVER_PORT = int(os.getenv("LLAMA_SERVER_PORT", "18080"))
 N_THREADS = int(os.getenv("N_THREADS", "2"))
 N_BATCH = int(os.getenv("N_BATCH", "128"))
 MAIN_CTX = int(os.getenv("MAIN_CTX", "1536"))
@@ -98,13 +97,7 @@ MAIN_GPU_DURATION = int(os.getenv("MAIN_GPU_DURATION", "120"))
 MICRO_GPU_DURATION = int(os.getenv("MICRO_GPU_DURATION", "60"))
 QUEUE_LIMIT = int(os.getenv("QUEUE_LIMIT", "16"))
 PUBLIC_REFRESH_SECONDS = int(os.getenv("PUBLIC_REFRESH_SECONDS", "10"))
-LLAMA_SERVER_VERSION = os.getenv("LLAMA_SERVER_VERSION", "")
-
-# Paths
-RUNTIME_DIR = Path("./.runtime")
-CACHE_BIN_DIR = RUNTIME_DIR / "bin"
-LOGS_DIR = Path("./logs")
-LLAMA_CPP_SRC = RUNTIME_DIR / "llama.cpp"
+LLAMA_SERVER_VERSION = os.getenv("LLAMA_SERVER_VERSION", "latest")
 
 # Lane definitions
 LANES: dict[str, dict[str, Any]] = {
@@ -132,21 +125,9 @@ LANES: dict[str, dict[str, Any]] = {
     },
 }
 
-# Authentication keys (Space secrets)
+# Authentication keys (Space secrets — all communication via AshatOS)
 _ASHAT_MICRO_KEY: str = os.getenv("ASHAT_MICROBRAIN_KEY", "")
 _ASHAT_MAIN_KEY: str = os.getenv("ASHAT_MAINBRAIN_KEY", "")
-_ASHAT_ADMIN_KEY: str = os.getenv("ASHAT_ADMIN_KEY", "")
-
-# Benchmark prompts
-_BENCHMARK_PROMPTS: dict[str, str] = {
-    "microbrain": "Write exactly three concise facts about the Moon.",
-    "mainbrain": (
-        "Analyze a simplified software deadlock scenario:\n"
-        "Thread A holds lock X and waits for lock Y.\n"
-        "Thread B holds lock Y and waits for lock X.\n"
-        "Identify the likely cause and resolution."
-    ),
-}
 
 # ──────────────────────────────────────────────────────────────────────────
 # 3.  Global state
@@ -160,7 +141,7 @@ _llama_bin_path: str | None = None
 _active_processes: list[subprocess.Popen[str]] = []
 
 # ──────────────────────────────────────────────────────────────────────────
-# 4.  Metrics store (thread-safe, rolling deque)
+# 4.  Metrics store (thread-safe, in-memory rolling deque — no disk writes)
 # ──────────────────────────────────────────────────────────────────────────
 
 @dataclass
@@ -184,7 +165,7 @@ class MetricRecord:
 
 
 class MetricsStore:
-    """Thread-safe in-memory rolling metrics store."""
+    """Thread-safe in-memory rolling metrics store (no disk writes)."""
 
     def __init__(self, maxlen: int = 500, event_maxlen: int = 200) -> None:
         self._maxlen = maxlen
@@ -272,16 +253,6 @@ def is_port_open(port: int, host: str = "127.0.0.1") -> bool:
         return sock.connect_ex((host, port)) == 0
 
 
-def _tail_log(path: Path, n: int = 30) -> str:
-    if not path.is_file():
-        return ""
-    try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-        return "\n".join(lines[-n:])
-    except Exception:
-        return "(unreadable)"
-
-
 def _terminate_process(proc: subprocess.Popen[str] | None, name: str) -> None:
     if proc is None or proc.poll() is not None:
         return
@@ -306,17 +277,8 @@ def stop_all_servers() -> None:
 atexit.register(stop_all_servers)
 
 
-def _print_key_gen_help() -> None:
-    _log.info("=" * 60)
-    _log.info("Key Generation (run on your local machine):")
-    _log.info("  python -c \"import secrets; print('MICRO:', secrets.token_urlsafe(48))\"")
-    _log.info("  python -c \"import secrets; print('MAIN: ', secrets.token_urlsafe(48))\"")
-    _log.info("  python -c \"import secrets; print('ADMIN:', secrets.token_urlsafe(48))\"")
-    _log.info("=" * 60)
-
-
 # ──────────────────────────────────────────────────────────────────────────
-# 6.  Authentication
+# 6.  Authentication (AshatOS keys only — no admin)
 # ──────────────────────────────────────────────────────────────────────────
 
 class AuthError(Exception):
@@ -337,7 +299,7 @@ def require_key(request: gr.Request, lane: str) -> None:
     """Raise AuthError if the request does not carry a valid X-Ashat-Key."""
     expected = _resolve_key(lane)
     if not expected:
-        return  # no key configured → open (discouraged for prod)
+        return
     supplied = (request.headers.get("x-ashat-key") or "").strip()
     if not hmac.compare_digest(supplied, expected):
         raise AuthError("Unauthorized")
@@ -354,35 +316,30 @@ def require_key_http(headers: dict[str, str], lane: str) -> None:
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# 7.  llama-server install / detect
+# 7.  llama-server binary — download prebuilt from GitHub (no source build)
 # ──────────────────────────────────────────────────────────────────────────
+
+def _llama_cache_dir() -> Path:
+    p = Path.home() / ".cache" / "ashatos" / "bin"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
 
 def _find_existing_llama_server() -> str | None:
     which = shutil.which("llama-server")
     if which:
-        _log.info("install: found llama-server on PATH: %s", which)
         return which
-    candidates = [
-        "./llama-server", "./llama-server.exe",
-        "./bin/llama-server", "/usr/local/bin/llama-server",
-    ]
-    for c in candidates:
-        p = Path(c)
-        if p.is_file() and os.access(p, os.X_OK):
-            return str(p.resolve())
     return None
 
 
-def _find_cached_llama_server() -> str | None:
-    candidates = [CACHE_BIN_DIR / "llama-server", CACHE_BIN_DIR / "llama-server.exe"]
-    for c in candidates:
+def _find_cached_llama_server(cache_dir: Path) -> str | None:
+    for c in [cache_dir / "llama-server", cache_dir / "llama-server.exe"]:
         if c.is_file() and os.access(c, os.X_OK):
             return str(c)
     return None
 
 
-def _extract_archive(archive_path: str, extract_dir: str) -> str | None:
-    """Extract all files flat into extract_dir and return the binary path."""
+def _extract_llama_archive(archive_path: str, extract_dir: str) -> str | None:
     dst = Path(extract_dir) / "llama-server"
     extracted: dict[str, bytes] = {}
 
@@ -401,128 +358,78 @@ def _extract_archive(archive_path: str, extract_dir: str) -> str | None:
                 if src is not None:
                     extracted[Path(m.name).name] = src.read()
     else:
-        _log.warning("install: unsupported archive format: %s", archive_path)
         return None
 
-    if not extracted:
-        return None
-
-    _log.info("install: extracted %d files from archive", len(extracted))
     for fname, content in extracted.items():
         target = Path(extract_dir) / fname
         target.write_bytes(content)
         target.chmod(0o755)
 
-    if dst.is_file():
-        return str(dst)
-    if "llama-server" in extracted:
-        src_path = Path(extract_dir) / "llama-server"
-        if src_path != dst:
-            shutil.move(str(src_path), str(dst))
-        return str(dst)
+    candidate = Path(extract_dir) / "llama-server"
+    if candidate.is_file():
+        return str(candidate)
     for f in Path(extract_dir).iterdir():
         if f.is_file() and "llama-server" in f.name and os.access(f, os.X_OK):
-            if f != dst:
-                shutil.copy2(str(f), str(dst))
-                dst.chmod(0o755)
-            return str(dst)
+            path = Path(extract_dir) / "llama-server"
+            shutil.copy2(str(f), str(path))
+            path.chmod(0o755)
+            return str(path)
     return None
 
 
-def _get_latest_release_tag() -> str | None:
-    try:
-        req = urllib.request.Request(
-            "https://api.github.com/repos/ggerganov/llama.cpp/releases/latest",
-            headers={"Accept": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            release = json.loads(resp.read().decode())
-            return release.get("tag_name", "")
-    except Exception as exc:
-        _log.warning("install: GitHub API error: %s", exc)
-        return None
+def _download_llama_server() -> str | None:
+    cache = _llama_cache_dir()
+    cached = _find_cached_llama_server(cache)
+    if cached:
+        return cached
 
+    _log.info("llama: downloading prebuilt binary from GitHub ...")
 
-def _download_prebuilt_llama_server() -> str | None:
-    _log.info("install: downloading prebuilt llama-server from GitHub ...")
-    dst = CACHE_BIN_DIR / "llama-server"
-    if dst.is_file():
-        return str(dst)
+    tag = LLAMA_SERVER_VERSION
+    if not tag or tag == "latest":
+        try:
+            req = urllib.request.Request(
+                "https://api.github.com/repos/ggerganov/llama.cpp/releases/latest",
+                headers={"Accept": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                release = json.loads(resp.read().decode())
+                tag = release.get("tag_name", "")
+        except Exception as exc:
+            _log.warning("llama: GitHub API error: %s", exc)
+            return None
 
-    tag = LLAMA_SERVER_VERSION or _get_latest_release_tag()
     if not tag:
         return None
-    _log.info("install: llama.cpp release: %s", tag)
+    _log.info("llama: release tag: %s", tag)
 
-    candidates: list[tuple[str, str]] = []
     for suffix in [".tar.gz", ".zip"]:
         for os_name in ["ubuntu-x64", "linux-x64", "linux-amd64"]:
             fname = f"llama-{tag}-bin-{os_name}{suffix}"
             url = f"https://github.com/ggerganov/llama.cpp/releases/download/{tag}/{fname}"
-            candidates.append((fname, url))
-
-    for fname, url in candidates:
-        suffix = ".tar.gz" if fname.endswith(".tar.gz") else ".zip"
-        try:
-            CACHE_BIN_DIR.mkdir(parents=True, exist_ok=True)
-            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            try:
+                tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
                 tmp_path = tmp.name
-                req = urllib.request.Request(url, headers={"Accept": "application/octet-stream"})
-                with urllib.request.urlopen(req, timeout=120) as resp:
-                    tmp.write(resp.read())
-            result = _extract_archive(tmp_path, str(CACHE_BIN_DIR))
-            os.unlink(tmp_path)
-            if result:
-                _log.info("install: llama-server ready at %s", result)
-                return result
-        except Exception:
-            continue
-    return None
+                tmp.close()
+                try:
+                    req = urllib.request.Request(url, headers={"Accept": "application/octet-stream"})
+                    with urllib.request.urlopen(req, timeout=120) as resp:
+                        with open(tmp_path, "wb") as f:
+                            f.write(resp.read())
+                    result = _extract_llama_archive(tmp_path, str(cache))
+                    os.unlink(tmp_path)
+                    if result:
+                        _log.info("llama: ready at %s", result)
+                        return result
+                except Exception:
+                    try:
+                        os.unlink(tmp_path)
+                    except Exception:
+                        pass
+            except Exception:
+                continue
 
-
-def _build_llama_server_from_source() -> str | None:
-    _log.info("install: building llama-server from source (CPU fallback) ...")
-    LLAMA_CPP_SRC.mkdir(parents=True, exist_ok=True)
-
-    if not (LLAMA_CPP_SRC / "CMakeLists.txt").is_file():
-        result = subprocess.run(
-            ["git", "clone", "--depth", "1",
-             "https://github.com/ggerganov/llama.cpp.git", str(LLAMA_CPP_SRC)],
-            capture_output=True, text=True, timeout=300,
-        )
-        if result.returncode != 0:
-            _log.warning("install: git clone failed: %s", result.stderr[:500])
-            return None
-
-    build_dir = LLAMA_CPP_SRC / "build"
-    build_dir.mkdir(parents=True, exist_ok=True)
-
-    result = subprocess.run(
-        ["cmake", "-B", "build", "-DGGML_CUDA=OFF", "-DGGML_NATIVE=OFF"],
-        capture_output=True, text=True, timeout=120, cwd=str(LLAMA_CPP_SRC),
-    )
-    if result.returncode != 0:
-        _log.warning("install: cmake configure failed: %s", result.stderr[:500])
-        return None
-
-    result = subprocess.run(
-        ["cmake", "--build", "build", "--config", "Release", "-j"],
-        capture_output=True, text=True, timeout=600, cwd=str(LLAMA_CPP_SRC),
-    )
-    if result.returncode != 0:
-        _log.warning("install: cmake build failed: %s", result.stderr[:500])
-        return None
-
-    for c in [
-        build_dir / "bin" / "llama-server",
-        build_dir / "bin" / "Release" / "llama-server",
-    ]:
-        if c.is_file():
-            CACHE_BIN_DIR.mkdir(parents=True, exist_ok=True)
-            cached = CACHE_BIN_DIR / c.name
-            shutil.copy2(str(c), str(cached))
-            cached.chmod(0o755)
-            return str(cached)
+    _log.error("llama: ALL DOWNLOAD STRATEGIES FAILED")
     return None
 
 
@@ -536,39 +443,29 @@ def ensure_llama_server() -> str | None:
     found = _find_existing_llama_server()
     if found:
         return found
-    found = _find_cached_llama_server()
-    if found:
-        return found
 
-    if os.getenv("AUTO_BUILD_LLAMA_SERVER", "1") not in ("1", "true", "yes"):
-        return None
-
-    found = _download_prebuilt_llama_server()
-    if found:
-        return found
-    found = _build_llama_server_from_source()
-    if found:
-        return found
-
-    _log.error("install: ALL INSTALL STRATEGIES FAILED")
-    return None
+    return _download_llama_server()
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# 8.  Model download
+# 8.  Model download from HF Hub
 # ──────────────────────────────────────────────────────────────────────────
 
 def ensure_model(lane: str) -> str:
     cfg = LANES[lane]
-    env_key = f"{lane.upper()}_MODEL_PATH"
-    local_path = os.getenv(env_key, "").strip()
-    if local_path and os.path.isfile(local_path):
-        _log.info("%s: using local path %s", lane, local_path)
-        return local_path
 
+    # Use env override if set
+    env_key = f"{lane.upper()}_MODEL_PATH"
+    env_path = os.getenv(env_key, "").strip()
+    if env_path and os.path.isfile(env_path):
+        cfg["model_path"] = env_path
+        return env_path
+
+    # Use cached path
     if cfg["model_path"] and os.path.isfile(cfg["model_path"]):
         return cfg["model_path"]
 
+    # Download from HF Hub
     _log.info("%s: downloading %s/%s ...", lane, cfg["repo"], cfg["file"])
     path = hf_hub_download(
         repo_id=cfg["repo"],
@@ -586,12 +483,12 @@ def ensure_model(lane: str) -> str:
 # ──────────────────────────────────────────────────────────────────────────
 
 def _build_server_cmd(
-    binary: str, model_path: str, port: int, ctx: int,
+    binary: str, model_path: str, ctx: int,
 ) -> list[str]:
     return [
         binary,
         "--host", "127.0.0.1",
-        "--port", str(port),
+        "--port", str(LLAMA_SERVER_PORT),
         "-m", model_path,
         "-c", str(ctx),
         "-t", str(N_THREADS),
@@ -615,77 +512,58 @@ def _wait_for_health(port: int, timeout: float = 30.0, interval: float = 0.25) -
     return False
 
 
-def _verify_gpu_from_logs(err_log: Path) -> tuple[str, bool]:
-    tail = _tail_log(err_log)
-    if not tail:
-        return "unknown", False
-    has_cuda = any(marker in tail.lower() for marker in
-                   ["ggml_cuda_init", "found cuda device", "cuda0", "offloaded layers"])
-    if has_cuda:
-        return "cuda", True
-    return "cpu", False
-
-
 def execute_lane_inner(lane: str, payload: dict[str, Any]) -> dict[str, Any]:
     """
     Execute a single inference request against the given lane.
-    This is the inner function called from the @spaces.GPU wrapper.
+    No disk writes — all metrics are in-memory, llama-server output to DEVNULL.
     """
     request_id = payload.get("request_id", str(uuid.uuid4()))
     lane_cfg = LANES[lane]
     is_cold_start = not _downloaded_models.get(lane)
-    t0 = time.perf_counter()  # initialized before try
+    t0 = time.perf_counter()
 
     try:
         model_path = ensure_model(lane)
         _downloaded_models[lane] = model_path
 
-        # Start llama-server
+        # Start llama-server (stdout/stderr → DEVNULL, no disk logs)
         cmd = _build_server_cmd(
-            str(_llama_bin_path or ""), model_path,
-            INTERNAL_PORT, lane_cfg["ctx"],
+            str(_llama_bin_path or ""), model_path, lane_cfg["ctx"],
         )
-        LOGS_DIR.mkdir(parents=True, exist_ok=True)
-        err_log = LOGS_DIR / f"{lane}.err.log"
-        out_log = LOGS_DIR / f"{lane}.out.log"
 
-        _log.info("%s: starting server on port %d ...", lane, INTERNAL_PORT)
+        _log.info("%s: starting server on port %d ...", lane, LLAMA_SERVER_PORT)
         server_proc = subprocess.Popen(
             cmd,
-            stdout=open(out_log, "w", encoding="utf-8"),
-            stderr=open(err_log, "w", encoding="utf-8"),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
         _active_processes.append(server_proc)
         server_start_time = time.perf_counter()
         load_ms = round((server_start_time - t0) * 1000, 1)
 
-        # Wait for health
-        healthy = _wait_for_health(INTERNAL_PORT, timeout=30.0)
+        healthy = _wait_for_health(LLAMA_SERVER_PORT, timeout=30.0)
         health_time = time.perf_counter()
         server_start_ms = round((health_time - t0) * 1000, 1)
 
         if not healthy:
-            err_tail = _tail_log(err_log)
             _log.error("%s: server health check failed", lane)
             _terminate_process(server_proc, lane)
-            METRICS.add_event(f"{lane}: server start failed")
-            # Try to remove from active processes
             try:
                 _active_processes.remove(server_proc)
             except ValueError:
                 pass
+            METRICS.add_event(f"{lane}: server start failed")
             return {
                 "ok": False, "request_id": request_id, "lane": lane,
                 "error": {"code": "SERVER_START_FAILED",
-                          "message": f"llama-server did not become healthy",
+                          "message": "llama-server did not become healthy",
                           "retryable": True},
             }
 
-        # Verify GPU offload
-        backend, gpu_ok = _verify_gpu_from_logs(err_log)
+        backend = "cuda" if os.getenv("CUDA_VISIBLE_DEVICES") else "cpu"
+        gpu_ok = (backend == "cuda")
         _log.info("%s: backend=%s gpu_offload=%s", lane, backend, gpu_ok)
 
-        # Build messages
         messages = payload.get("messages", [])
         if not messages:
             _terminate_process(server_proc, lane)
@@ -699,7 +577,6 @@ def execute_lane_inner(lane: str, payload: dict[str, Any]) -> dict[str, Any]:
                           "message": "No messages provided", "retryable": False},
             }
 
-        # Send completion request
         completion_payload = {
             "model": lane_cfg["file"],
             "messages": messages,
@@ -714,7 +591,7 @@ def execute_lane_inner(lane: str, payload: dict[str, Any]) -> dict[str, Any]:
 
         inference_start = time.perf_counter()
         resp = requests.post(
-            f"http://127.0.0.1:{INTERNAL_PORT}/v1/chat/completions",
+            f"http://127.0.0.1:{LLAMA_SERVER_PORT}/v1/chat/completions",
             json=completion_payload,
             timeout=120,
         )
@@ -743,7 +620,6 @@ def execute_lane_inner(lane: str, payload: dict[str, Any]) -> dict[str, Any]:
         except (KeyError, IndexError):
             text = ""
 
-        # Build OpenAI-compatible response
         gen_ms = max(1.0, total_latency_ms - server_start_ms)
         prompt_tps = round(prompt_tokens / (gen_ms / 1000), 2) if gen_ms > 0 else 0.0
         gen_tps = round(completion_tokens / (gen_ms / 1000), 2) if gen_ms > 0 else 0.0
@@ -781,7 +657,7 @@ def execute_lane_inner(lane: str, payload: dict[str, Any]) -> dict[str, Any]:
             "ok": True,
         }
 
-        # Record metrics
+        # Record metrics (in-memory only)
         METRICS.record(MetricRecord(
             timestamp=datetime.now(timezone.utc).isoformat(),
             lane=lane,
@@ -800,7 +676,6 @@ def execute_lane_inner(lane: str, payload: dict[str, Any]) -> dict[str, Any]:
         ))
         METRICS.add_event(f"{lane}: inference completed ({prompt_tokens}+{completion_tokens} tokens)")
 
-        # Terminate server before returning
         _terminate_process(server_proc, lane)
         try:
             _active_processes.remove(server_proc)
@@ -958,39 +833,6 @@ def _public_metrics_json() -> str:
     })
 
 
-def _admin_benchmark_endpoint(lane: str, request: gr.Request) -> str:
-    try:
-        expected = _ASHAT_ADMIN_KEY
-        if not expected:
-            raise AuthError("Admin endpoint not configured")
-        supplied = (request.headers.get("x-ashat-key") or "").strip()
-        if not hmac.compare_digest(supplied, expected):
-            raise AuthError("Unauthorized")
-    except AuthError as e:
-        return json.dumps({"ok": False, "error": {"code": "UNAUTHORIZED", "message": e.message}})
-
-    target = lane.strip().lower()
-    if target not in ("microbrain", "mainbrain", "both"):
-        return json.dumps({"ok": False, "error": "Specify 'microbrain', 'mainbrain', or 'both'"})
-
-    results: dict[str, dict[str, Any]] = {}
-    if target in ("microbrain", "both"):
-        payload = {
-            "request_id": f"bench-{uuid.uuid4()}",
-            "messages": [{"role": "user", "content": _BENCHMARK_PROMPTS["microbrain"]}],
-            "max_tokens": 64, "temperature": 0.1,
-        }
-        results["microbrain"] = execute_lane("microbrain", payload)
-    if target in ("mainbrain", "both"):
-        payload = {
-            "request_id": f"bench-{uuid.uuid4()}",
-            "messages": [{"role": "user", "content": _BENCHMARK_PROMPTS["mainbrain"]}],
-            "max_tokens": 96, "temperature": 0.1,
-        }
-        results["mainbrain"] = execute_lane("mainbrain", payload)
-    return json.dumps({"ok": True, "results": results})
-
-
 def _build_status() -> dict[str, Any]:
     micro_avail = bool(_downloaded_models.get("microbrain"))
     main_avail = bool(_downloaded_models.get("mainbrain"))
@@ -1070,7 +912,6 @@ def _to_frame(records: list[MetricRecord]) -> list[dict[str, Any]]:
 # 13.  FastAPI app and Gradio dashboard
 # ──────────────────────────────────────────────────────────────────────────
 
-# Create the FastAPI app first (for custom routes)
 _fastapi_app = FastAPI(title="AshatOS Neural Host")
 
 
@@ -1108,12 +949,10 @@ async def http_chat_completions(request: FastRequest) -> JSONResponse:
             "error": {"message": err, "type": "invalid_request_error"},
         })
 
-    # Run blocking inference in executor (don't block event loop)
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(None, execute_lane, lane, body)
 
     if result.get("ok"):
-        # Return standard OpenAI-compatible response, keeping extra metadata
         resp = {k: v for k, v in result.items() if k not in ("ok",)}
         return JSONResponse(content=resp)
 
@@ -1173,7 +1012,7 @@ async def http_public_metrics() -> JSONResponse:
     })
 
 
-# === Gradio dashboard ===
+# === Gradio dashboard (single page — live telemetry only) ===
 
 JAVASCRIPT_REFRESH = f"""
 <script>
@@ -1227,7 +1066,7 @@ with gr.Blocks(
                 title="Total Latency (MainBrain)",
             )
 
-    gr.Markdown("## Recent Health Events")
+    gr.Markdown("## Recent Events")
     events_display = gr.Dataframe(
         headers=["Event"],
         label="Recent Events",
@@ -1241,14 +1080,13 @@ with gr.Blocks(
         | Setting | MicroBrain | MainBrain |
         |---|---|---|
         | Model | `{LANES['microbrain']['file']}` | `{LANES['mainbrain']['file']}` |
-        | Repository | `{LANES['microbrain']['repo']}` | `{LANES['mainbrain']['repo']}` |
         | Context | {LANES['microbrain']['ctx']} | {LANES['mainbrain']['ctx']} |
         | Max tokens | {LANES['microbrain']['max_tokens']} | {LANES['mainbrain']['max_tokens']} |
         | GPU duration | {LANES['microbrain']['gpu_duration']}s | {LANES['mainbrain']['gpu_duration']}s |
 
         ### Runtime
 
-        - `INTERNAL_PORT`: {INTERNAL_PORT}
+        - `LLAMA_SERVER_PORT`: {LLAMA_SERVER_PORT}
         - `N_THREADS`: {N_THREADS} | `N_BATCH`: {N_BATCH}
         - `PUBLIC_REFRESH_SECONDS`: {PUBLIC_REFRESH_SECONDS}
         - `QUEUE_LIMIT`: {QUEUE_LIMIT}
@@ -1277,7 +1115,7 @@ with gr.Blocks(
         concurrency_limit=1,
     )
 
-    # -- Register private Gradio API endpoints (hidden triggers inside Blocks) --
+    # -- Private Gradio API endpoints (AshatOS communication only) --
     _micro_input = gr.Textbox(visible=False, value="{}", label="microbrain_payload")
     _micro_trigger = gr.Button(visible=False, elem_id="_micro_trigger")
     _micro_trigger.click(
@@ -1316,71 +1154,41 @@ with gr.Blocks(
         concurrency_limit=1,
     )
 
-    _benchmark_input = gr.Textbox(visible=False, value="both", label="benchmark_lane")
-    _benchmark_trigger = gr.Button(visible=False, elem_id="_benchmark_trigger")
-    _benchmark_trigger.click(
-        fn=_admin_benchmark_endpoint,
-        inputs=[_benchmark_input],
-        outputs=[gr.Textbox(visible=False)],
-        api_name="admin_benchmark",
-        concurrency_limit=1,
-    )
-
 
 # ──────────────────────────────────────────────────────────────────────────
-# 15.  Startup
+# 14.  Startup
 # ──────────────────────────────────────────────────────────────────────────
 
 def startup() -> None:
     global _llama_bin_path
     _log.info("=" * 60)
-    _log.info("AshatOS Dual-Lane ZeroGPU Inference Host")
+    _log.info("AshatOS Neural I/O Host — Dual-Lane Inference")
     _log.info("=" * 60)
 
-    LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    _print_key_gen_help()
-
+    # Ensure llama-server binary
     _llama_bin_path = ensure_llama_server()
     if _llama_bin_path:
         _log.info("llama-server binary: %s", _llama_bin_path)
     else:
         _log.warning("llama-server binary not available — degraded mode")
 
-    def _dl(lane: str) -> None:
-        try:
-            ensure_model(lane)
-            _log.info("%s: model cached at startup", lane)
-            METRICS.add_event(f"{lane}: model cached")
-        except Exception as exc:
-            _log.warning("%s: model download failed: %s", lane, exc)
-            METRICS.add_event(f"{lane}: model download failed")
-
-    t1 = threading.Thread(target=_dl, args=("microbrain",), daemon=True)
-    t2 = threading.Thread(target=_dl, args=("mainbrain",), daemon=True)
-    t1.start()
-    t2.start()
+    # Models will download on first inference (ensures up-to-date on HF Hub)
 
 
 startup()
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# 16.  Mount Gradio on FastAPI and launch
+# 15.  Mount Gradio on FastAPI and launch
 # ──────────────────────────────────────────────────────────────────────────
 
-# Queue configuration
 _demo.queue(default_concurrency_limit=1, max_size=QUEUE_LIMIT)
 
-# Mount Gradio at the root of our FastAPI app
 app = gr.mount_gradio_app(
     _fastapi_app, _demo, path="/",
     theme=gr.themes.Soft(),
     head=JAVASCRIPT_REFRESH,
 )
-
-# ──────────────────────────────────────────────────────────────────────────
-# 17.  Launch
-# ──────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     if not os.getenv("SPACE_ID"):  # HF Spaces auto-serves the app

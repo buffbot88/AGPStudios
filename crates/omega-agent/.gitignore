@@ -4,8 +4,8 @@ __pycache__/
 venv/
 runtime/
 .runtime/
-models/
 cache/
+logs/
 *.log
 .env
 .env.*
