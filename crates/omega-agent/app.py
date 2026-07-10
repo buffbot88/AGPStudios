@@ -321,12 +321,12 @@ def _gradio_shared(payload_json: str, request: gr.Request, lane: Lane) -> str:
     return _GRADIO_ADAPTER.respond_error(400, envelope)
 
 
-@spaces.GPU(duration=60)
+@spaces.GPU
 def gradio_microbrain(payload_json: str, request: gr.Request) -> str:
     return _gradio_shared(payload_json, request, Lane.MICROBRAIN)
 
 
-@spaces.GPU(duration=120)
+@spaces.GPU
 def gradio_mainbrain(payload_json: str, request: gr.Request) -> str:
     return _gradio_shared(payload_json, request, Lane.MAINBRAIN)
 
@@ -345,7 +345,7 @@ def execute_lane(lane_str: str, payload: dict[str, Any]) -> dict[str, Any]:
 # ── FastAPI adapter ─────────────────────────────────────────────────────
 
 
-@spaces.GPU(duration=120)
+@spaces.GPU
 def _fastapi_sync_inference(
     headers: dict[str, str],
     body: dict[str, Any] | None,
@@ -673,20 +673,41 @@ def _background_init() -> None:
         _init_error = f"llama-server install failed: {exc}"
         _log.error(_init_error)
 
-    # 4. Send ZeroGPU startup report (non-blocking in this thread)
+    # 4. Full ZeroGPU startup (config + tensor pack + report)
+    #     The SYNC call above already sent startup_report(), but this
+    #     runs the full spaces.zero.startup() which also calls
+    #     config.get_config() and torch.pack() for proper initialization.
     try:
         from spaces.config import Config as _SC
         if _SC.zero_gpu:
-            from spaces.zero import client as _zclient
-            _zclient.startup_report()
-            _log.info("ZeroGPU startup report sent successfully")
+            import importlib
+            try:
+                _zpkg = importlib.import_module("spaces.zero")
+                if hasattr(_zpkg, "startup"):
+                    _zpkg.startup()
+                    _log.info("Full ZeroGPU startup() completed")
+            except Exception as inner:
+                _log.warning("Full startup() call failed: %s", inner)
     except Exception as exc:
-        _log.warning("ZeroGPU startup report failed (non-fatal): %s", exc)
+        _log.warning("ZeroGPU startup import failed (non-fatal): %s", exc)
 
     _init_done = True
     _log.info("AshatOS background init complete. "
               "binary=%s error=%s", _llama_bin_path, _init_error)
 
+
+# ── Synchronous startup report (fast, non-blocking with timeout) ────
+# The platform checks for @spaces.GPU BEFORE the background init runs.
+# Sending the report immediately (before mount_gradio_app) ensures the
+# platform sees it before its health-check timeout fires.
+try:
+    from spaces.config import Config as _SC
+    if _SC.zero_gpu:
+        from spaces.zero import client as _zclient
+        _zclient.startup_report()
+        _log.info("SYNC ZeroGPU startup report sent")
+except Exception as exc:
+    _log.warning("SYNC ZeroGPU startup report failed (non-fatal): %s", exc)
 
 # Start background init in a daemon thread — never blocks app startup.
 threading.Thread(target=_background_init, daemon=True, name="ashatos-init").start()
