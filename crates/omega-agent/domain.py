@@ -53,7 +53,7 @@ def _build_lane_config() -> dict[Lane, dict[str, Any]]:
     return {
         Lane.MICROBRAIN: {
             "label": "MicroBrain",
-            "repo": os.getenv("MICRO_MODEL_REPO", "RipBuffy/LFM2.5-Q6_K"),
+            "repo": os.getenv("MICRO_MODEL_REPO", "stressthismess/LFM2.5-Q6_K"),
             "file": os.getenv("MICRO_MODEL_FILE", "LFM2.5-350M-Q6_K.gguf"),
             "ctx": int(os.getenv("MICRO_CTX", "1024")),
             "max_tokens": int(os.getenv("MICRO_MAX_TOKENS", "128")),
@@ -64,7 +64,7 @@ def _build_lane_config() -> dict[Lane, dict[str, Any]]:
         },
         Lane.MAINBRAIN: {
             "label": "MainBrain",
-            "repo": os.getenv("MAIN_MODEL_REPO", "RipBuffy/LFM2.5-Q6_K"),
+            "repo": os.getenv("MAIN_MODEL_REPO", "stressthismess/LFM2.5-Q6_K"),
             "file": os.getenv("MAIN_MODEL_FILE", "LFM2.5-1.2B-Instruct-Q6_K.gguf"),
             "ctx": int(os.getenv("MAIN_CTX", "1536")),
             "max_tokens": int(os.getenv("MAIN_MAX_TOKENS", "256")),

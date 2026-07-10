@@ -52,9 +52,9 @@ and displays a sanitized public dashboard.
 
 | Variable | Default | Description |
 |---|---|---|
-| `MAIN_MODEL_REPO` | `RipBuffy/LFM2.5-Q6_K` | MainBrain model repository |
+| `MAIN_MODEL_REPO` | `stressthismess/LFM2.5-Q6_K` | MainBrain model repository |
 | `MAIN_MODEL_FILE` | `LFM2.5-1.2B-Instruct-Q6_K.gguf` | MainBrain GGUF filename |
-| `MICRO_MODEL_REPO` | `RipBuffy/LFM2.5-Q6_K` | MicroBrain model repository |
+| `MICRO_MODEL_REPO` | `stressthismess/LFM2.5-Q6_K` | MicroBrain model repository |
 | `MICRO_MODEL_FILE` | `LFM2.5-350M-Q6_K.gguf` | MicroBrain GGUF filename |
 | `MODEL_REVISION` | `main` | Hugging Face model revision |
 
@@ -75,7 +75,7 @@ and displays a sanitized public dashboard.
 | `PUBLIC_REFRESH_SECONDS` | `10` | Dashboard auto-refresh interval |
 | `LOG_LEVEL` | `INFO` | Logging level |
 | `LLAMA_SERVER_VERSION` | `b9945` | Specific llama.cpp release tag (pinned for reproducible installs). Set to `"latest"` to track upstream. |
-| `LLAMA_SERVER_HF_REPO` | `RipBuffy/llama-server-mirror` | HF mirror repo consulted if every GitHub-release strategy fails. |
+| `LLAMA_SERVER_HF_REPO` | `stressthismess/llama-server-mirror` | HF mirror repo consulted if every GitHub-release strategy fails. |
 | `LLAMA_SERVER_HF_FILE` | `llama-server-{tag}` | Filename in the mirror repo (auto-derived from the pinned tag if left blank). |
 | `LLAMA_SERVER_PATH` | *(none)* | Manual path to llama-server binary |
 
@@ -124,7 +124,7 @@ import json
 
 # OpenAI-compatible endpoint (requires HF auth for zeroGPU Space)
 resp = httpx.post(
-    "https://RipBuffy-ashatos.hf.space/v1/chat/completions",
+    "https://stressthismess-ashatos.hf.space/v1/chat/completions",
     headers={
         "Authorization": "Bearer <HF_TOKEN>",
         "X-Ashat-Key": "<ASHAT_MICROBRAIN_KEY>",
