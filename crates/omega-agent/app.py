@@ -221,6 +221,36 @@ def _find_cached_llama_server() -> str | None:
     return None
 
 
+def _find_llama_server_member(names: list[str]) -> str | None:
+    """From a list of archive member paths, pick the best `llama-server`
+    candidate.  Priority:
+    1. Basename is exactly ``llama-server`` (no extension)
+    2. Basename is exactly ``llama-server.exe``
+    3. Any member whose *filename* (last path component) is ``llama-server``
+    4. Any member containing ``llama-server`` that is NOT a ``.so`` library
+    5. Any member containing ``llama-server`` (last resort)
+    """
+    candidates: list[tuple[int, str]] = []
+
+    for n in names:
+        fname = Path(n).name  # last path component
+        if fname == "llama-server":
+            candidates.append((1, n))
+        elif fname == "llama-server.exe":
+            candidates.append((2, n))
+        elif fname.endswith("/llama-server"):
+            candidates.append((3, n))
+        elif "llama-server" in n and not n.endswith(".so"):
+            candidates.append((4, n))
+        elif "llama-server" in n:
+            candidates.append((5, n))
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: x[0])
+    return candidates[0][1]
+
+
 def _extract_archive(archive_path: str, extract_dir: str) -> str | None:
     """Extract `llama-server` from a .zip or .tar.gz archive.  Returns the
     path to the extracted executable, or None on failure."""
@@ -228,30 +258,24 @@ def _extract_archive(archive_path: str, extract_dir: str) -> str | None:
 
     if archive_path.endswith(".zip"):
         with zipfile.ZipFile(archive_path) as zf:
-            members = [
-                m for m in zf.namelist()
-                if "llama-server" in m and not m.endswith("/")
-            ]
-            if not members:
+            all_members = [m for m in zf.namelist() if not m.endswith("/")]
+            member = _find_llama_server_member(all_members)
+            if not member:
                 _log_install("no llama-server found inside zip archive")
                 return None
-            member = members[0]
             _log_install_fmt("extracting %s from zip", member)
             extracted = zf.extract(member, extract_dir)
 
     elif archive_path.endswith(".tar.gz") or archive_path.endswith(".tgz"):
         with tarfile.open(archive_path, "r:gz") as tf:
-            members = [
-                m for m in tf.getmembers()
-                if "llama-server" in m.name and not m.isdir()
-            ]
-            if not members:
+            all_members = [m.name for m in tf.getmembers() if not m.isdir()]
+            member = _find_llama_server_member(all_members)
+            if not member:
                 _log_install("no llama-server found inside tar.gz archive")
                 return None
-            member = members[0]
-            _log_install_fmt("extracting %s from tar.gz", member.name)
+            _log_install_fmt("extracting %s from tar.gz", member)
             tf.extract(member, path=extract_dir)
-            extracted = str(Path(extract_dir) / member.name)
+            extracted = str(Path(extract_dir) / member)
 
     else:
         _log_install_fmt("unsupported archive format: %s", archive_path)
