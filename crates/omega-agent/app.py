@@ -802,6 +802,8 @@ except Exception as exc:
 
 # ──────────────────────────────────────────────────────────────────────────
 # 12.  Standard Gradio launch — HF Spaces serves the demo directly
+#      Using demo.launch() instead of mount_gradio_app() for ZeroGPU compat.
+#      The FastAPI routes are not served — use Gradio API endpoints instead.
 # ──────────────────────────────────────────────────────────────────────────
 
 _demo.queue(default_concurrency_limit=1, max_size=QUEUE_LIMIT)
