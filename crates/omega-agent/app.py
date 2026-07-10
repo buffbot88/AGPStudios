@@ -552,14 +552,21 @@ def _status_html() -> str:
 
 
 def _refresh_metrics_body() -> tuple:
-    """Tick callback for the Gradio dashboard — drives plot frames + events."""
+    """Tick callback — drives plot frames + events. Returns DataFrames for Gradio 6.x."""
+    import pandas as pd
     frames = _snapshot().render_frames()
+    def _to_df(data):
+        return pd.DataFrame(data) if data else pd.DataFrame({
+            "timestamp": [], "generation_tokens_per_second": [],
+            "total_latency_ms": [], "prompt_tokens_per_second": [],
+            "success": [],
+        })
     return (
-        frames["microbrain"],       # microbrain gen-plot
-        frames["microbrain"],       # microbrain latency-plot (same data)
-        frames["mainbrain"],        # mainbrain gen-plot
-        frames["mainbrain"],        # mainbrain latency-plot (same data)
-        frames["events"],           # events table
+        _to_df(frames["microbrain"]),
+        _to_df(frames["microbrain"]),
+        _to_df(frames["mainbrain"]),
+        _to_df(frames["mainbrain"]),
+        pd.DataFrame(frames["events"]),
     )
 
 
