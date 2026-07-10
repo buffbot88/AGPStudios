@@ -693,6 +693,27 @@ with gr.Blocks(title="AshatOS Neural Host") as _demo:
 # 10.  Startup
 # ──────────────────────────────────────────────────────────────────────────
 
+def _report_zero_gpu_ready() -> None:
+    """Send the ZeroGPU startup report manually.
+
+    The ``spaces`` package normally does this via a patch on
+    ``gr.Blocks.launch``, but ``mount_gradio_app`` never calls launch().
+    The platform times out without this report, even when ``@spaces.GPU``
+    decorated functions exist and are in the ``decorated_cache``.
+    """
+    try:
+        # Only attempt on ZeroGPU (import guard).
+        from spaces.config import Config as _SC
+        if not _SC.zero_gpu:
+            _log.info("skip ZeroGPU startup report (not a ZeroGPU env)")
+            return
+        from spaces.zero import client as _zclient
+        _zclient.startup_report()
+        _log.info("ZeroGPU startup report sent successfully")
+    except Exception as exc:
+        _log.warning("ZeroGPU startup report failed (non-fatal): %s", exc)
+
+
 def startup() -> None:
     global _llama_bin_path
     _log.info("=" * 60)
@@ -725,6 +746,14 @@ def startup() -> None:
         _log.info("llama-server binary: %s", _llama_bin_path)
     else:
         _log.warning("llama-server binary not available — degraded mode")
+
+    # Signal ZeroGPU that the app is ready with GPU-decorated functions.
+    # Normally ``spaces.zero.startup()`` does this via a ``gr.Blocks.launch``
+    # patch, but ``mount_gradio_app`` never calls ``launch()``, so the startup
+    # report is never sent and the platform times out with
+    # "No @spaces.GPU function detected during startup".
+    # We call it manually here.
+    _report_zero_gpu_ready()
 
 
 startup()
