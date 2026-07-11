@@ -516,10 +516,6 @@ def _make_http_chat_completions():
 
 # ──────────────────────────────────────────────────────────────────────────
 # 9.  Public status / metrics / dashboard HTML
-# ──────────────────────────────────────────────────────────────────────────
-
-# ──────────────────────────────────────────────────────────────────────────
-# 9.  Public status / metrics / dashboard HTML
 #     All three public surfaces funnel through PublicSnapshot — one
 #     projection, one redaction pass, three HTML/JSON consumers.
 # ──────────────────────────────────────────────────────────────────────────
@@ -622,103 +618,39 @@ async def http_public_metrics() -> JSONResponse:
 
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# 11.  Dashboard — redesigned neural host homepage (spec §4–§15)
+# ──────────────────────────────────────────────────────────────────────────
 
-AUTO_REFRESH_JS = """<script>
-function updateCards() {
-    fetch('/api/public_metrics')
-        .then(r => r.json())
-        .then(data => {
-            var mb = data.summaries.microbrain || {};
-            var M = data.summaries.mainbrain || {};
-            document.getElementById('mb-prompt').textContent = Math.round(mb.avg_prompt_tokens_per_second || 0);
-            document.getElementById('mb-gen').textContent = Math.round(mb.avg_generation_tokens_per_second || 0);
-            document.getElementById('mb-req').textContent = mb.total_requests || 0;
-            document.getElementById('mb-quickest').textContent = (mb.quickest_generation_tokens_per_second || 0).toFixed(1);
-            document.getElementById('mb-slowest').textContent = (mb.slowest_generation_tokens_per_second || 0).toFixed(1);
-            document.getElementById('M-prompt').textContent = Math.round(M.avg_prompt_tokens_per_second || 0);
-            document.getElementById('M-gen').textContent = Math.round(M.avg_generation_tokens_per_second || 0);
-            document.getElementById('M-req').textContent = M.total_requests || 0;
-            document.getElementById('M-quickest').textContent = (M.quickest_generation_tokens_per_second || 0).toFixed(1);
-            document.getElementById('M-slowest').textContent = (M.slowest_generation_tokens_per_second || 0).toFixed(1);
-        }).catch(function(){});
-}
-document.addEventListener('DOMContentLoaded', function() { updateCards(); });
-setInterval(updateCards, 10000);
-</script>"""
+from dashboard import build_dashboard
 
-with gr.Blocks(title="AshatOS Neural Host") as _demo:
+with gr.Blocks(title="AshatOS Neural Host", theme=gr.themes.Soft()) as _demo:
+    _dashboard = build_dashboard(
+        snapshot_provider=_snapshot,
+        refresh_seconds=PUBLIC_REFRESH_SECONDS,
+    )
+
+    # Header
+    _dashboard.header.render()
+    _dashboard.status_row.render()
+
+    # Two-lane card layout (spec §3)
+    with gr.Row(equal_height=True, variant="panel"):
+        with gr.Column(scale=1, min_width=320):
+            _dashboard.micro_card.render()
+        with gr.Column(scale=1, min_width=320):
+            _dashboard.main_card.render()
+
+    # Footer
     gr.HTML(
         """
-        <div style="text-align: center; padding: 24px 20px 8px;">
-            <h1 style="margin: 0; font-size: 2em; font-weight: 700;
-                background: linear-gradient(135deg, #a78bfa, #67e8f9);
-                -webkit-background-clip: text;">
-                🧠 ASHAT NEURAL HOST</h1>
-            <p style="color: #94a3b8; font-size: 0.9em; margin: 4px 0 0;">
-                Dual-Lane Inference</p>
+        <div style="text-align: center; padding: 16px 20px 24px;">
+          <span style="font-size: 0.68em; color: #64748B; font-family: sans-serif;
+               letter-spacing: 0.03em;">
+            Private inference lanes · Public telemetry only</span>
         </div>
         """
     )
-
-    with gr.Row(equal_height=True):
-        with gr.Column(scale=1, min_width=360):
-            gr.HTML(
-                """
-                <div style="border:1px solid #334155;border-radius:12px;padding:16px;background:#1e293b;font-family:monospace;">
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-                        <span style="font-size:1.2em;font-weight:700;color:#e2e8f0;">MicroBrain</span>
-                        <span style="color:#22c55e;font-size:0.75em;">&#x25CF; active</span>
-                    </div>
-                    <div style="color:#94a3b8;font-size:0.75em;margin-bottom:10px;">
-                        LFM2.5-350M-Q6_K.gguf &middot; 4096 ctx &middot; <span id="mb-req">0</span> req
-                    </div>
-                    <div style="display:flex;gap:20px;">
-                        <div><div style="color:#f87171;font-size:0.65em;">prompt</div>
-                            <div style="font-size:1.5em;font-weight:700;color:#fca5a5;" id="mb-prompt">0</div>
-                            <div style="color:#64748b;font-size:0.6em;">tok/s</div></div>
-                        <div><div style="color:#4ade80;font-size:0.65em;">gen</div>
-                            <div style="font-size:1.5em;font-weight:700;color:#86efac;" id="mb-gen">0</div>
-                            <div style="color:#64748b;font-size:0.6em;">tok/s</div></div>
-                    <div style="display:flex;gap:20px;margin-top:10px;padding-top:8px;border-top:1px solid #334155;">
-                        <div><div style="color:#c084fc;font-size:0.65em;">quickest</div>
-                            <div style="font-size:1.1em;font-weight:600;color:#d8b4fe;" id="mb-quickest">0</div>
-                            <div style="color:#64748b;font-size:0.6em;">tok/s</div></div>
-                        <div><div style="color:#fbbf24;font-size:0.65em;">slowest</div>
-                            <div style="font-size:1.1em;font-weight:600;color:#fcd34d;" id="mb-slowest">0</div>
-                            <div style="color:#64748b;font-size:0.6em;">tok/s</div></div>
-                    </div>
-                </div>
-                """
-            )
-        with gr.Column(scale=1, min_width=360):
-            gr.HTML(
-                """
-                <div style="border:1px solid #334155;border-radius:12px;padding:16px;background:#1e293b;font-family:monospace;">
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-                        <span style="font-size:1.2em;font-weight:700;color:#e2e8f0;">MainBrain</span>
-                        <span style="color:#22c55e;font-size:0.75em;">&#x25CF; active</span>
-                    </div>
-                    <div style="color:#94a3b8;font-size:0.75em;margin-bottom:10px;">
-                        LFM2.5-1.2B-Instruct-Q6_K.gguf &middot; 8192 ctx &middot; <span id="M-req">0</span> req
-                    </div>
-                    <div style="display:flex;gap:20px;">
-                        <div><div style="color:#f87171;font-size:0.65em;">prompt</div>
-                            <div style="font-size:1.5em;font-weight:700;color:#fca5a5;" id="M-prompt">0</div>
-                            <div style="color:#64748b;font-size:0.6em;">tok/s</div></div>
-                        <div><div style="color:#4ade80;font-size:0.65em;">gen</div>
-                            <div style="font-size:1.5em;font-weight:700;color:#86efac;" id="M-gen">0</div>
-                            <div style="color:#64748b;font-size:0.6em;">tok/s</div></div>
-                    <div style="display:flex;gap:20px;margin-top:10px;padding-top:8px;border-top:1px solid #334155;">
-                        <div><div style="color:#c084fc;font-size:0.65em;">quickest</div>
-                            <div style="font-size:1.1em;font-weight:600;color:#d8b4fe;" id="M-quickest">0</div>
-                            <div style="color:#64748b;font-size:0.6em;">tok/s</div></div>
-                        <div><div style="color:#fbbf24;font-size:0.65em;">slowest</div>
-                            <div style="font-size:1.1em;font-weight:600;color:#fcd34d;" id="M-slowest">0</div>
-                            <div style="color:#64748b;font-size:0.6em;">tok/s</div></div>
-                    </div>
-                </div>
-                """
-            )
 
     # -- Private Gradio API endpoints (AshatOS communication only) --
     _micro_input = gr.Textbox(visible=False, value="{}", label="microbrain_payload")
@@ -822,5 +754,4 @@ app = _demo
 
 if __name__ == "__main__":
     _demo.launch(server_name="0.0.0.0", server_port=7860,
-                   show_error=True, head=AUTO_REFRESH_JS,
-                   theme=gr.themes.Soft())
+                   show_error=True, theme=gr.themes.Soft())

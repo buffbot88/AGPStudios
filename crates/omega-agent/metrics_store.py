@@ -101,6 +101,7 @@ class MetricsStore:
         prompt_tps = [r.prompt_tokens_per_second for r in successes if r.prompt_tokens_per_second > 0]
         latencies = [r.total_latency_ms for r in successes]
         total = len(records)
+        last_success = successes[-1] if successes else None
         return {
             "total_requests": total,
             "success_count": len(successes),
@@ -113,6 +114,16 @@ class MetricsStore:
             "slowest_generation_tokens_per_second": round(min(gen_tps), 2) if gen_tps else 0.0,
             "last_request_time": records[-1].timestamp if records else None,
             "last_success": records[-1].success if records else True,
+            # Cumulative token totals (spec §9)
+            "total_prompt_tokens": sum(r.prompt_tokens for r in successes),
+            "total_completion_tokens": sum(r.completion_tokens for r in successes),
+            "last_prompt_tokens": last_success.prompt_tokens if last_success else 0,
+            "last_completion_tokens": last_success.completion_tokens if last_success else 0,
+            "latest_generation_tokens_per_second": (
+                round(last_success.generation_tokens_per_second, 2)
+                if last_success and last_success.generation_tokens_per_second > 0
+                else 0.0
+            ),
         }
 
 

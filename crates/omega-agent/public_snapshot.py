@@ -32,11 +32,54 @@ What it must never expose (enforced by tests):
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
 from domain import Lane, lane_cfg
 from metrics_store import MetricRecord, MetricsStore
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# LaneActivity — observable runtime state per lane (spec §12)
+# ──────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class LaneActivity:
+    """Lightweight, thread-safe lane-activity record.
+
+    Updated by the inference pipeline whenever a lane runs or fails.
+    """
+    state: str = "online"  # online | busy | waking | degraded | offline
+    active_request_started_at: float | None = None
+    last_success_at: str | None = None
+    last_error_code: str | None = None
+
+
+LANE_ACTIVITY: dict[str, LaneActivity] = {
+    "microbrain": LaneActivity(),
+    "mainbrain": LaneActivity(),
+}
+
+
+def _derive_lane_state(
+    lane: str,
+    model_available: bool,
+    summary: dict[str, Any],
+    llama_available: bool,
+) -> str:
+    """Derive a human-readable lane state from available signals."""
+    if not llama_available:
+        return "offline"
+    if not model_available:
+        return "waking"
+    total = summary.get("total_requests", 0)
+    if total == 0:
+        return "online"  # cached but idle
+    last_success = summary.get("last_success", True)
+    if not last_success:
+        return "degraded"
+    return "online"
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -54,7 +97,6 @@ class RuntimeState:
 
     @property
     def uptime_seconds(self) -> float:
-        import time
         return round(time.time() - self.started_at, 1)
 
 
@@ -141,12 +183,17 @@ class PublicSnapshot:
             model_path = cfg.get("model_path", "")
             available = bool(model_path and os.path.isfile(model_path))
             summary = self.metrics.get_summary(lane.value)
+            lane_state = _derive_lane_state(
+                lane.value, available, summary,
+                self.runtime.llama_server_available,
+            )
             lanes[lane.value] = {
                 "label": cfg.get("label", lane.value),
                 "model": cfg.get("file", ""),
                 "ctx": cfg.get("ctx", 0),
                 "available": available,
                 "ready": available,
+                "lane_state": lane_state,
                 **summary,
             }
         return {
