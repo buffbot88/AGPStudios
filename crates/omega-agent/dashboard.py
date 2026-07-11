@@ -406,13 +406,14 @@ def _short_model_name(filename: str) -> str:
 # ──────────────────────────────────────────────────────────────────────────
 
 @dataclass
-class DashboardComponents:
-    """Gradio components wireable into a gr.Blocks context."""
-    header: gr.HTML
-    status_row: gr.HTML
-    micro_card: gr.HTML
-    main_card: gr.HTML
-    timer: gr.Timer
+class DashboardTemplate:
+    """Strings and a refresh callable -- safe to create outside Blocks."""
+    header_html: str
+    status_html: str
+    micro_html: str
+    main_html: str
+    refresh_fn: Callable[[], tuple[str, str, str]]
+    refresh_seconds: int
 
 
 def _build_header_html() -> str:

@@ -625,21 +625,33 @@ async def http_public_metrics() -> JSONResponse:
 from dashboard import build_dashboard
 
 with gr.Blocks(title="AshatOS Neural Host") as _demo:
-    _dashboard = build_dashboard(
+    _tpl = build_dashboard(
         snapshot_provider=_snapshot,
         refresh_seconds=PUBLIC_REFRESH_SECONDS,
     )
 
-    # Header
-    _dashboard.header.render()
-    _dashboard.status_row.render()
+    # Header (static, no refresh needed)
+    gr.HTML(_tpl.header_html)
 
-    # Two-lane card layout (spec §3)
+    # Status row (refreshed by timer)
+    _status = gr.HTML(_tpl.status_html)
+
+    # Two-lane card layout (spec §3) — both cards refreshed by timer
     with gr.Row(equal_height=True, variant="panel"):
         with gr.Column(scale=1, min_width=320):
-            _dashboard.micro_card.render()
+            _micro = gr.HTML(_tpl.micro_html)
         with gr.Column(scale=1, min_width=320):
-            _dashboard.main_card.render()
+            _main = gr.HTML(_tpl.main_html)
+
+    # Live refresh via Gradio Timer (spec §10)
+    _timer = gr.Timer(value=_tpl.refresh_seconds, active=True)
+    _timer.tick(
+        fn=_tpl.refresh_fn,
+        inputs=None,
+        outputs=[_status, _micro, _main],
+        queue=False,
+        show_progress="hidden",
+    )
 
     # Footer
     gr.HTML(
