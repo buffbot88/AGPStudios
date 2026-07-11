@@ -195,14 +195,14 @@ def _status_pill_html(state: str) -> str:
     }
     color, label = colors.get(state, (_MUTED, state.upper()))
     return (
-        '<span style="display: inline-flex; align-items: center; gap: 4px; '
-        'padding: 2px 10px; border-radius: 10px; font-size: 0.7em; '
-        'font-weight: 600; font-family: sans-serif; '
-        'letter-spacing: 0.04em; '
-        'background: %s20; color: %s; border: 1px solid %s40;">'
-        '<span style="width: 6px; height: 6px; border-radius: 50%; '
-        'background: %s;"></span>%s</span>'
-    ) % (color, color, color, color, label)
+        f'<span style="display: inline-flex; align-items: center; gap: 4px; '
+        f'padding: 2px 10px; border-radius: 10px; font-size: 0.7em; '
+        f'font-weight: 600; font-family: sans-serif; '
+        f'letter-spacing: 0.04em; '
+        f'background: {color}20; color: {color}; border: 1px solid {color}40;">'
+        f'<span style="width: 6px; height: 6px; border-radius: 50%; '
+        f'background: {color};"></span>{label}</span>'
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────

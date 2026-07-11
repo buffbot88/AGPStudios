@@ -624,7 +624,7 @@ async def http_public_metrics() -> JSONResponse:
 
 from dashboard import build_dashboard
 
-with gr.Blocks(title="AshatOS Neural Host", theme=gr.themes.Soft()) as _demo:
+with gr.Blocks(title="AshatOS Neural Host") as _demo:
     _dashboard = build_dashboard(
         snapshot_provider=_snapshot,
         refresh_seconds=PUBLIC_REFRESH_SECONDS,
