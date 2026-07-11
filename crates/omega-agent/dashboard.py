@@ -23,7 +23,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-import gradio as gr
 
 from public_snapshot import PublicSnapshot
 
@@ -535,7 +534,7 @@ def _build_footer_html() -> str:
 def build_dashboard(
     snapshot_provider: Callable[[], PublicSnapshot],
     refresh_seconds: int = 8,
-) -> DashboardComponents:
+) -> DashboardTemplate:
     """Create the full dashboard within a Gradio Blocks context.
 
     Usage in ``app.py``::
@@ -552,17 +551,9 @@ def build_dashboard(
     """
     initial_snapshot = snapshot_provider()
 
-    # Build initial HTML
     header_html = _build_header_html()
     status_html = _build_status_row_html(initial_snapshot)
     micro_html, main_html = _build_cards_html(initial_snapshot)
-
-    header = gr.HTML(header_html)
-    status_row = gr.HTML(status_html)
-    micro_card = gr.HTML(micro_html)
-    main_card = gr.HTML(main_html)
-
-    # ── Refresh handler (spec §10 — Gradio Timer) ──────────────────────
 
     def _refresh() -> tuple[str, str, str]:
         """Called by gr.Timer on each tick."""
@@ -571,19 +562,11 @@ def build_dashboard(
         micro, main = _build_cards_html(snap)
         return status, micro, main
 
-    timer = gr.Timer(value=refresh_seconds, active=True)
-    timer.tick(
-        fn=_refresh,
-        inputs=[],
-        outputs=[status_row, micro_card, main_card],
-        queue=False,
-        show_progress="hidden",
-    )
-
-    return DashboardComponents(
-        header=header,
-        status_row=status_row,
-        micro_card=micro_card,
-        main_card=main_card,
-        timer=timer,
+    return DashboardTemplate(
+        header_html=header_html,
+        status_html=status_html,
+        micro_html=micro_html,
+        main_html=main_html,
+        refresh_fn=_refresh,
+        refresh_seconds=refresh_seconds,
     )
