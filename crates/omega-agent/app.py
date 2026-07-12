@@ -704,6 +704,25 @@ with gr.Blocks(title="AshatOS Neural Host") as _demo:
     )
 
 
+def _detect_backend_mode() -> tuple[str, bool]:
+    """Detect the likely backend mode from the environment.
+
+    Returns (backend_mode, gpu_offload_verified). This is a pre-launch
+    heuristic — the true mode is confirmed once llama-server actually
+    starts during the first inference. On ZeroGPU the server is forced
+    to CPU mode.
+    """
+    if bool(int(os.environ.get("SPACES_ZERO_GPU", "0"))):
+        return "cpu", False
+    cvd = os.environ.get("CUDA_VISIBLE_DEVICES", "").strip()
+    if cvd and cvd != "-1":
+        return "cuda", True
+    # ROCm detection
+    if os.environ.get("HIP_VISIBLE_DEVICES", "").strip():
+        return "rocm", True
+    return "cpu", False
+
+
 def startup() -> None:
     global _llama_bin_path
     _log.info("=" * 60)
@@ -716,12 +735,21 @@ def startup() -> None:
     else:
         _log.warning("llama-server binary not available — degraded mode")
 
+    backend_mode, gpu_offload = _detect_backend_mode()
+
     if _llama_bin_path:
         for lane in (Lane.MICROBRAIN, Lane.MAINBRAIN):
             try:
                 _BACKEND_LAUNCHER.ensure_model(lane)
                 _log.info("%s model cached: %s", lane.value,
                           LANE_CONFIG[lane]["model_path"])
+                # Seed boot-time metric so the dashboard has data before
+                # the first inference request (fixes "Waiting for inference").
+                _RUN_METRICS.record_boot(
+                    lane,
+                    backend_mode=backend_mode,
+                    gpu_offload_verified=gpu_offload,
+                )
             except Exception as exc:
                 _log.warning("%s model pre-download failed: %s",
                              lane.value, exc)

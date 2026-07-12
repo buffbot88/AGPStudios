@@ -92,6 +92,46 @@ class RunMetrics:
             f"({rec.prompt_tokens}+{rec.completion_tokens} tokens)"
         )
 
+    def record_boot(
+        self,
+        lane: Lane,
+        *,
+        backend_mode: str = "cpu",
+        gpu_offload_verified: bool = False,
+        server_start_ms: float = 0.0,
+        model_load_ms: float = 0.0,
+        total_latency_ms: float = 0.0,
+    ) -> None:
+        """Seed an initial metric record at boot time.
+
+        Called during startup after the binary and model are confirmed
+        available. Gives the dashboard data to display (model name,
+        backend mode, GPU status) before any inference request arrives.
+        All token counts default to 0 since no inference has run yet.
+        """
+        rec = metrics_store_module.MetricRecord(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            lane=lane.value,
+            success=True,
+            cold_start=True,
+            server_start_ms=server_start_ms,
+            model_load_ms=model_load_ms,
+            prompt_tokens=0,
+            completion_tokens=0,
+            prompt_tokens_per_second=0.0,
+            generation_tokens_per_second=0.0,
+            time_to_first_token_ms=None,
+            total_latency_ms=total_latency_ms,
+            backend=backend_mode,
+            gpu_offload_verified=gpu_offload_verified,
+            finish_reason="n/a",
+        )
+        self._store.record(rec)
+        self._store.add_event(
+            f"{lane.value}: server ready (backend={backend_mode}, "
+            f"gpu_offload={gpu_offload_verified})"
+        )
+
     def record_failure(
         self,
         lane: Lane | None,

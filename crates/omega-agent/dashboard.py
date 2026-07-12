@@ -64,18 +64,19 @@ def _build_sparkline(
     height: int = 52,
 ) -> str:
     """Render a no-clutter SVG polyline of recent generation speeds."""
-    if not values or lane_state in ("offline", "waking", "degraded"):
+    if lane_state in ("offline", "waking", "degraded"):
+        labels = {"offline": "Offline", "waking": "Starting...", "degraded": "Degraded"}
         return (
             '<div style="color: %s; font-size: 0.75em; font-family: '
-            'sans-serif; padding: 8px 0;">Waiting for first inference</div>'
-        ) % _MUTED
+            'sans-serif; padding: 8px 0;">%s</div>'
+        ) % (_MUTED, labels.get(lane_state, "Unavailable"))
 
     # Use last N values, cap at 30
     samples = [v for v in values if v > 0][-30:]
     if not samples:
         return (
             '<div style="color: %s; font-size: 0.75em; font-family: '
-            'sans-serif; padding: 8px 0;">Waiting for first inference</div>'
+            'sans-serif; padding: 8px 0;">Online \u2014 ready</div>'
         ) % _MUTED
 
     min_v = min(samples)
