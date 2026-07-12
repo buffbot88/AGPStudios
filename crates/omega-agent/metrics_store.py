@@ -101,7 +101,7 @@ class MetricsStore:
         prompt_tps = [r.prompt_tokens_per_second for r in successes if r.prompt_tokens_per_second > 0]
         latencies = [r.total_latency_ms for r in successes]
         total = len(records)
-        last_success = successes[-1] if successes else None
+        last_success_record = successes[-1] if successes else None
         return {
             "total_requests": total,
             "success_count": len(successes),
@@ -117,17 +117,17 @@ class MetricsStore:
             # Cumulative token totals (spec §9)
             "total_prompt_tokens": sum(r.prompt_tokens for r in successes),
             "total_completion_tokens": sum(r.completion_tokens for r in successes),
-            "last_prompt_tokens": last_success.prompt_tokens if last_success else 0,
-            "last_completion_tokens": last_success.completion_tokens if last_success else 0,
+            "last_prompt_tokens": last_success_record.prompt_tokens if last_success_record else 0,
+            "last_completion_tokens": last_success_record.completion_tokens if last_success_record else 0,
             "latest_generation_tokens_per_second": (
-                round(last_success.generation_tokens_per_second, 2)
-                if last_success and last_success.generation_tokens_per_second > 0
+                round(last_success_record.generation_tokens_per_second, 2)
+                if last_success_record and last_success_record.generation_tokens_per_second > 0
                 else 0.0
             ),
             # Server-side timing from llama-server pipeline (spec §9)
             "last_time_to_first_token_ms": (
-                round(last_success.time_to_first_token_ms, 1)
-                if last_success and last_success.time_to_first_token_ms is not None
+                round(last_success_record.time_to_first_token_ms, 1)
+                if last_success_record and last_success_record.time_to_first_token_ms is not None
                 else None
             ),
             "avg_time_to_first_token_ms": (

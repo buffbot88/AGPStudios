@@ -35,6 +35,7 @@ import sys
 import threading
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 import gradio as gr
@@ -52,7 +53,7 @@ from lane_keygate import (
     headers_from_gradio,
 )
 from lane_resolver import LaneResolver
-from metrics_store import METRICS
+from metrics_store import METRICS, MetricRecord
 from run_errors import (
     ERROR_CODE_TO_HTTP_STATUS,
     InferenceUnavailableError,
@@ -200,6 +201,11 @@ def validate_request(body: dict[str, Any], lane: Lane) -> str | None:
 
 # ──────────────────────────────────────────────────────────────────────────
 # 6.  Run pipeline — the slim orchestrator
+#     NOTE: This function runs inside the ZeroGPU worker process when
+#     called via @spaces.GPU. It must NOT record metrics — those writes
+#     would be lost because the worker's in-memory METRICS singleton is
+#     process-local.  Metrics are recorded in the main process by
+#     :func:`_record_returned_result` after the GPU function returns.
 # ──────────────────────────────────────────────────────────────────────────
 
 def _is_cold_start(lane: Lane) -> bool:
@@ -274,22 +280,29 @@ def _build_failure_envelope(
 
 
 def _run_pipeline(lane: Lane, payload: dict[str, Any]) -> dict[str, Any]:
-    """Slim Run. Composes :class:`BackendLauncher`, :class:`CompletionClient`,
-    and :class:`RunMetrics` into one request lifecycle.
+    """Slim Run. Composes :class:`BackendLauncher`, :class:`CompletionClient`
+    into one request lifecycle.
+
+    .. caution::
+
+       This function is called from inside ``@spaces.GPU`` which may run
+       in an isolated worker process.  **It must not record metrics** —
+       those writes would land in a process-local copy of ``METRICS``
+       that the main Gradio process never sees.  Metrics are recorded in
+       the main process by :func:`_record_returned_result` after the GPU
+       function returns.
 
     Behavior:
       * Degraded-mode gate first — INFERENCE_UNAVAILABLE without spawning a
         subprocess with an empty binary path.
       * Typed :class:`RunError` subclasses never bubble up; the orchestrator
-        converts them to a uniform failure envelope and records metrics.
+        converts them to a uniform failure envelope.
       * ``BackendLauncher`` and ``CompletionClient`` are responsible for all
         subprocess / HTTP edges; this function is orchestration only.
       * The outermost ``except Exception`` is the only broad catch — it's
-        the safety boundary. Internally every expected failure is a typed
-        RunError.
+        the safety boundary.
     """
     request_id = str(payload.get("request_id") or uuid.uuid4())
-    # Force an id so completion client & metrics see the same one.
     payload.setdefault("request_id", request_id)
 
     started_at = time.perf_counter()
@@ -304,15 +317,10 @@ def _run_pipeline(lane: Lane, payload: dict[str, Any]) -> dict[str, Any]:
         exc = InferenceUnavailableError(
             "llama-server binary not installed (degraded mode)"
         )
-        elapsed = round((time.perf_counter() - started_at) * 1000, 1)
-        _RUN_METRICS.record_failure(
-            lane, request_id, exc, elapsed, cold_start=cold_start,
-        )
         return _build_failure_envelope(lane, request_id, exc)
 
-    # On ZeroGPU, CUDA is managed by the spaces package at the Python
-    # level. The llama-server subprocess must not request GPU offload
-    # (the -ngl flag) because it runs in a non-CUDA environment.
+    # On ZeroGPU, CUDA is managed by the spaces package. The llama-server
+    # subprocess must not request GPU offload (the -ngl flag).
     _is_zerogpu = bool(int(os.environ.get("SPACES_ZERO_GPU", "0")))
     try:
         with _BACKEND_LAUNCHER.launch(
@@ -322,42 +330,27 @@ def _run_pipeline(lane: Lane, payload: dict[str, Any]) -> dict[str, Any]:
             try:
                 completion = _COMPLETION_CLIENT.complete(backend, lane, payload)
             finally:
-                # Maintain back-compat with the pre-refactor _active_processes
-                # list — also helps atexit catch orphans.
                 try:
                     _active_processes.remove(backend.process)
                 except ValueError:
                     pass
         total_ms = round((time.perf_counter() - started_at) * 1000, 1)
-        _RUN_METRICS.record_success(
-            lane, backend, completion, total_ms, cold_start=cold_start,
-        )
         return _build_success_envelope(
             lane, request_id, backend, completion, total_ms, cold_start,
         )
 
     except RunError as exc:
-        total_ms = round((time.perf_counter() - started_at) * 1000, 1)
-        _RUN_METRICS.record_failure(
-            lane, request_id, exc, total_ms, cold_start=cold_start,
-        )
         return _build_failure_envelope(lane, request_id, exc)
 
     except Exception as exc:
-        # Outermost safety boundary. We never want a stray runtime error to
-        # kill the request silently. Translate to an INTERNAL_ERROR envelope.
+        # Outermost safety boundary. Never let a stray runtime error kill
+        # the request silently.
         _log.exception("%s: unhandled exception in run pipeline", lane.value)
-        total_ms = round((time.perf_counter() - started_at) * 1000, 1)
         envelope = {
             "code": "INTERNAL_ERROR",
             "message": str(exc)[:200],
             "retryable": True,
         }
-        _RUN_METRICS.record_failure(
-            lane, request_id,
-            _make_internal_error(str(exc)),
-            total_ms, cold_start=cold_start,
-        )
         return {
             "ok": False, "request_id": request_id, "lane": lane.value,
             "error": envelope,
@@ -387,13 +380,129 @@ def _execute_mainbrain_gpu(payload: dict[str, Any]) -> dict[str, Any]:
     return _run_pipeline(Lane.MAINBRAIN, payload)
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# 7b.  Metric recording in the main process
+#      The functions above may run in a ZeroGPU worker (separate process).
+#      We record metrics HERE, after the result crosses back to the main
+#      Gradio/FastAPI process, so the dashboard timer can read them.
+# ──────────────────────────────────────────────────────────────────────────
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        parsed = float(value)
+        return parsed if parsed >= 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        parsed = int(value)
+        return parsed if parsed >= 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _record_returned_result(
+    lane: Lane,
+    result: dict[str, Any],
+) -> None:
+    """
+    Record a sanitized ZeroGPU result in the main dashboard process.
+
+    Called by :func:`execute_lane` after the ``@spaces.GPU`` function
+    returns.  Never stores prompts, generated text, request IDs, keys,
+    or headers — only sanitized aggregates.
+    """
+    if not isinstance(result, dict):
+        METRICS.record(
+            MetricRecord(
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                lane=lane.value,
+                success=False,
+                error_category="INVALID_MODEL_RESPONSE",
+            )
+        )
+        METRICS.add_event(f"{lane.value}: INVALID_MODEL_RESPONSE")
+        return
+
+    ok = bool(result.get("ok"))
+    performance = result.get("performance") or {}
+    usage = result.get("usage") or {}
+    error = result.get("error") or {}
+
+    if not isinstance(performance, dict):
+        performance = {}
+    if not isinstance(usage, dict):
+        usage = {}
+    if not isinstance(error, dict):
+        error = {}
+
+    ttft_raw = performance.get("time_to_first_token_ms")
+    # Treat zero or negative TTFT as unmeasured (same as None).
+    ttft_parsed = _safe_float(ttft_raw) if ttft_raw is not None else None
+
+    rec = MetricRecord(
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        lane=lane.value,
+        success=ok,
+        cold_start=bool(performance.get("cold_start", False)),
+        server_start_ms=_safe_float(performance.get("server_start_ms")),
+        model_load_ms=_safe_float(performance.get("model_load_ms")),
+        prompt_tokens=_safe_int(usage.get("prompt_tokens")),
+        completion_tokens=_safe_int(usage.get("completion_tokens")),
+        prompt_tokens_per_second=_safe_float(
+            performance.get("prompt_tokens_per_second")
+        ),
+        generation_tokens_per_second=_safe_float(
+            performance.get("generation_tokens_per_second")
+        ),
+        time_to_first_token_ms=(
+            ttft_parsed if (ttft_parsed is not None and ttft_parsed > 0) else None
+        ),
+        total_latency_ms=_safe_float(performance.get("total_latency_ms")),
+        backend=str(performance.get("backend", "unknown")),
+        gpu_offload_verified=bool(
+            performance.get("gpu_offload_verified", False)
+        ),
+        finish_reason=(
+            str(result.get("choices", [{}])[0].get("finish_reason", "stop"))
+            if ok
+            else ""
+        ),
+        error_category=(
+            None if ok else str(error.get("code", "INFERENCE_FAILED"))
+        ),
+    )
+
+    METRICS.record(rec)
+
+    if ok:
+        METRICS.add_event(
+            f"{lane.value}: inference completed "
+            f"({rec.prompt_tokens}+{rec.completion_tokens} tokens)"
+        )
+    else:
+        METRICS.add_event(f"{lane.value}: {rec.error_category}")
+
+
 def execute_lane(lane_str: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Serializing entry point — one inference at a time across the Space."""
+    """Serializing entry point — one inference at a time across the Space.
+
+    The ``@spaces.GPU`` functions run in an isolated worker process (on
+    HF Spaces with ZeroGPU).  We record metrics here, in the *main*
+    process, after the result returns, so the dashboard timer can read
+    them from the same in-memory ``METRICS`` singleton.
+    """
     lane = Lane.parse(lane_str)
     with _inference_lock:
         if lane is Lane.MICROBRAIN:
-            return _execute_microbrain_gpu(payload)
-        return _execute_mainbrain_gpu(payload)
+            result = _execute_microbrain_gpu(payload)
+        else:
+            result = _execute_mainbrain_gpu(payload)
+
+    _record_returned_result(lane, result)
+    return result
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -704,25 +813,6 @@ with gr.Blocks(title="AshatOS Neural Host") as _demo:
     )
 
 
-def _detect_backend_mode() -> tuple[str, bool]:
-    """Detect the likely backend mode from the environment.
-
-    Returns (backend_mode, gpu_offload_verified). This is a pre-launch
-    heuristic — the true mode is confirmed once llama-server actually
-    starts during the first inference. On ZeroGPU the server is forced
-    to CPU mode.
-    """
-    if bool(int(os.environ.get("SPACES_ZERO_GPU", "0"))):
-        return "cpu", False
-    cvd = os.environ.get("CUDA_VISIBLE_DEVICES", "").strip()
-    if cvd and cvd != "-1":
-        return "cuda", True
-    # ROCm detection
-    if os.environ.get("HIP_VISIBLE_DEVICES", "").strip():
-        return "rocm", True
-    return "cpu", False
-
-
 def startup() -> None:
     global _llama_bin_path
     _log.info("=" * 60)
@@ -735,21 +825,12 @@ def startup() -> None:
     else:
         _log.warning("llama-server binary not available — degraded mode")
 
-    backend_mode, gpu_offload = _detect_backend_mode()
-
     if _llama_bin_path:
         for lane in (Lane.MICROBRAIN, Lane.MAINBRAIN):
             try:
                 _BACKEND_LAUNCHER.ensure_model(lane)
                 _log.info("%s model cached: %s", lane.value,
                           LANE_CONFIG[lane]["model_path"])
-                # Seed boot-time metric so the dashboard has data before
-                # the first inference request (fixes "Waiting for inference").
-                _RUN_METRICS.record_boot(
-                    lane,
-                    backend_mode=backend_mode,
-                    gpu_offload_verified=gpu_offload,
-                )
             except Exception as exc:
                 _log.warning("%s model pre-download failed: %s",
                              lane.value, exc)
