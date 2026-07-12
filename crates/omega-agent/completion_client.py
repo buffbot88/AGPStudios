@@ -109,17 +109,41 @@ class CompletionClient:
             else usage.get("total_tokens")
         )
 
-        # Tokens/sec are derived assuming inference_ms is mostly the
-        # generation phase (after boot). The orchestrator may refine.
-        gen_ms = max(1.0, inference_ms)
-        prompt_tps = (
-            round(prompt_tokens / (gen_ms / 1000), 2)
-            if prompt_tokens else None
-        )
-        gen_tps = (
-            round(completion_tokens / (gen_ms / 1000), 2)
-            if completion_tokens else None
-        )
+        # ── Server-side timing (llama-server's ``timings`` object) ──
+        # The timings field is a non-standard extension that contains
+        # real measurements from the server itself (not client-side HTTP
+        # round-trip estimates). We use server values when available and
+        # fall back to client-side inference_ms for prompt_tps/gen_tps.
+        timings = data.get("timings", {}) or {}
+        server_total_ms = timings.get("total_ms")
+        prompt_ms = timings.get("prompt_ms")          # time to process prompt (prefill)
+        predicted_ms = timings.get("predicted_ms")    # time to generate response tokens
+        server_prompt_per_second = timings.get("prompt_per_second")
+        server_predicted_per_second = timings.get("predicted_per_second")
+
+        # Prefer server-side token/s; fall back to client-side inference_ms
+        if server_prompt_per_second is not None:
+            prompt_tps = round(server_prompt_per_second, 2)
+        elif prompt_tokens and server_total_ms:
+            prompt_tps = round(prompt_tokens / (server_total_ms / 1000), 2)
+        elif prompt_tokens:
+            gen_ms = max(1.0, inference_ms)
+            prompt_tps = round(prompt_tokens / (gen_ms / 1000), 2)
+        else:
+            prompt_tps = None
+
+        if server_predicted_per_second is not None:
+            gen_tps = round(server_predicted_per_second, 2)
+        elif completion_tokens and server_total_ms:
+            gen_tps = round(completion_tokens / (server_total_ms / 1000), 2)
+        elif completion_tokens:
+            gen_ms = max(1.0, inference_ms)
+            gen_tps = round(completion_tokens / (gen_ms / 1000), 2)
+        else:
+            gen_tps = None
+
+        # time_to_first_token_ms = prompt_ms (server-side prefill time)
+        ttft_ms = round(prompt_ms, 1) if prompt_ms is not None else None
 
         return CompletionResult(
             text=text,
@@ -129,5 +153,6 @@ class CompletionClient:
             finish_reason=finish_reason,
             prompt_tokens_per_second=prompt_tps,
             generation_tokens_per_second=gen_tps,
+            time_to_first_token_ms=ttft_ms,
             raw_response=data,
         )

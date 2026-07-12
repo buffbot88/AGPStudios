@@ -298,8 +298,9 @@ class PublicSnapshot:
             {
                 "timestamp": r.timestamp,
                 "generation_tokens_per_second": r.generation_tokens_per_second,
-                "total_latency_ms": r.total_latency_ms,
                 "prompt_tokens_per_second": r.prompt_tokens_per_second,
+                "total_latency_ms": r.total_latency_ms,
+                "time_to_first_token_ms": r.time_to_first_token_ms,
                 "success": r.success,
             }
             for r in records[-50:]

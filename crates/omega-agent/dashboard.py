@@ -134,15 +134,24 @@ def _build_sparkline(
 def _fmt_count(n: int) -> str:
     """Format a count with commas (e.g. 12482 → '12,482')."""
     if n == 0:
-        return "—"
+        return "\u2014"
     return f"{n:,}"
 
 
 def _fmt_speed(v: float) -> str:
-    """Format a tokens/sec value; show — for unmeasured."""
+    """Format a tokens/sec value; show \u2014 for unmeasured."""
     if v is None or v <= 0:
-        return "—"
+        return "\u2014"
     return f"{v:.1f}"
+
+
+def _fmt_ms(v: float | None) -> str:
+    """Format a milliseconds value; show \u2014 for unmeasured."""
+    if v is None or v <= 0:
+        return "\u2014"
+    if v < 10:
+        return f"{v:.1f}"
+    return f"{int(v)}"
 
 
 def _fmt_since(ts_iso: str | None) -> str:
@@ -222,16 +231,20 @@ def _build_card_html(
     is_online = state == "online"
 
     model = info.get("model", "")
-    # Short display name: extract "LFM2.5 · 350M · Q6_K" from filename
+    # Short display name: extract "LFM2.5 \u00b7 350M \u00b7 Q6_K" from filename
     short_model = _short_model_name(model)
     ctx = info.get("ctx", 0)
-    ctx_fmt = f"{ctx:,}" if ctx else "—"
+    ctx_fmt = f"{ctx:,}" if ctx else "\u2014"
 
     # Metrics
     total_prompt = _fmt_count(info.get("total_prompt_tokens", 0))
     total_completion = _fmt_count(info.get("total_completion_tokens", 0))
     fastest = _fmt_speed(info.get("quickest_generation_tokens_per_second", 0.0))
     slowest = _fmt_speed(info.get("slowest_generation_tokens_per_second", 0.0))
+
+    # Server-side timing from llama-server pipeline
+    last_ttft = _fmt_ms(info.get("last_time_to_first_token_ms"))
+    avg_ttft = _fmt_ms(info.get("avg_time_to_first_token_ms"))
 
     total_req = info.get("total_requests", 0)
     success_rate = info.get("success_rate", 100.0)
@@ -262,12 +275,12 @@ def _build_card_html(
             '<span style="color: %s;">%s%% success</span>' %
             (_GREEN if last_success else _CORAL, success_rate)
         )
-        footer = " · ".join(footer_parts)
+        footer = " \u00b7 ".join(footer_parts)
 
     # Full model filename as tooltip
     model_tooltip = model or ""
 
-    return f"""\
+    return f"""\\
 <div style="background: linear-gradient(180deg, {_PANEL} 0%, {_RAISED} 100%);
      border: 1px solid {_BORDER};
      border-radius: 20px;
@@ -302,11 +315,11 @@ def _build_card_html(
       {short_model}</div>
     <div style="font-size: 0.75em; color: {_MUTED}; margin-top: 3px;
          font-family: monospace;">
-      Context {ctx_fmt} · <span title="{model_tooltip}" style="cursor: help; border-bottom: 1px dotted {_MUTED};">{model}</span>
+      Context {ctx_fmt} \u00b7 <span title="{model_tooltip}" style="cursor: help; border-bottom: 1px dotted {_MUTED};">{model}</span>
     </div>
   </div>
 
-  <!-- 2×2 metric grid (spec §6) -->
+  <!-- 2\u00d72 metric grid (spec \u00a76) -->
   <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; margin-bottom: 14px;">
     <div>
       <div style="font-size: 0.65em; color: {_MUTED}; letter-spacing: 0.06em;
@@ -342,7 +355,28 @@ def _build_card_html(
     </div>
   </div>
 
-  <!-- Sparkline (spec §7) -->
+  <!-- Server-side timing row (spec \u00a79 \u2014 llama-server pipeline) -->
+  <div style="display: flex; gap: 20px; margin-bottom: 12px; padding: 8px 0;
+       border-bottom: 1px solid {_BORDER};">
+    <div>
+      <div style="font-size: 0.6em; color: {_MUTED}; letter-spacing: 0.06em;
+           font-weight: 600; font-family: sans-serif; text-transform: uppercase;">
+        TTFT \u2014 Last</div>
+      <div style="font-size: 1.1em; font-weight: 700; color: {accent};
+           font-family: monospace; line-height: 1.3;">{last_ttft}</div>
+      <div style="font-size: 0.6em; color: {_MUTED};">ms (server-side)</div>
+    </div>
+    <div>
+      <div style="font-size: 0.6em; color: {_MUTED}; letter-spacing: 0.06em;
+           font-weight: 600; font-family: sans-serif; text-transform: uppercase;">
+        TTFT \u2014 Avg</div>
+      <div style="font-size: 1.1em; font-weight: 700; color: {accent};
+           font-family: monospace; line-height: 1.3;">{avg_ttft}</div>
+      <div style="font-size: 0.6em; color: {_MUTED};">ms (server-side)</div>
+    </div>
+  </div>
+
+  <!-- Sparkline (spec \u00a77) -->
   <div style="margin-bottom: 10px;">
     <div style="font-size: 0.6em; color: {_MUTED}; letter-spacing: 0.06em;
          font-weight: 600; font-family: sans-serif; text-transform: uppercase;
@@ -351,7 +385,7 @@ def _build_card_html(
     {sparkline}
   </div>
 
-  <!-- Footer (spec §7) -->
+  <!-- Footer (spec \u00a77) -->
   <div style="font-size: 0.7em; padding-top: 8px; border-top: 1px solid {_BORDER};
        display: flex; justify-content: space-between; align-items: center;">
     {footer}
@@ -366,7 +400,7 @@ def _short_model_name(filename: str) -> str:
     'LFM2.5-1.2B-Instruct-Q6_K.gguf' → 'LFM2.5 Instruct · 1.2B · Q6_K'
     """
     if not filename:
-        return "—"
+        return "\u2014"
     name = filename.replace(".gguf", "")
     parts = name.split("-")
 
@@ -396,7 +430,7 @@ def _short_model_name(filename: str) -> str:
         if other_parts:
             result_parts.append(other_parts[0])
 
-        return " · ".join(result_parts)
+        return " \u00b7 ".join(result_parts)
     return name
 
 
@@ -417,7 +451,7 @@ class DashboardTemplate:
 
 def _build_header_html() -> str:
     """Static brand header with glowing brain badge."""
-    return f"""\
+    return f"""\\
 <style>
   @media (prefers-reduced-motion: no-preference) {{
     @keyframes brain-pulse {{
@@ -437,14 +471,14 @@ def _build_header_html() -> str:
   }}
 </style>
 <div style="text-align: center; padding: 28px 20px 6px;">
-  <div class="brain-badge">🧠</div>
+  <div class="brain-badge">\U0001f9e0</div>
   <h1 style="margin: 4px 0 0; font-size: 1.7em; font-weight: 700;
       color: {_PRIMARY}; letter-spacing: 0.04em;
       font-family: sans-serif;">
     ASHAT NEURAL HOST</h1>
   <p style="color: {_SECONDARY}; font-size: 0.82em; margin: 2px 0 0;
       font-family: sans-serif; letter-spacing: 0.02em;">
-    Private Neural Inference · Public Telemetry</p>
+    Private Neural Inference \u00b7 Public Telemetry</p>
 </div>"""
 
 
@@ -479,16 +513,16 @@ def _build_status_row_html(snapshot: PublicSnapshot) -> str:
         )
     )
 
-    return f"""\
+    return f"""\\
 <div style="text-align: center; padding: 6px 20px 20px;">
   <span style="display: inline-flex; align-items: center; gap: 6px;
        font-size: 0.8em; font-family: sans-serif; color: {_SECONDARY};">
     <span style="width: 7px; height: 7px; border-radius: 50%;
          background: {dot_color};"></span>
     <span style="font-weight: 600; color: {dot_color};">{host_state}</span>
-    <span style="color: {_MUTED};">·</span>
+    <span style="color: {_MUTED};">\u00b7</span>
     <span>{online_count}/{total_count} lanes online</span>
-    <span style="color: {_MUTED};">·</span>
+    <span style="color: {_MUTED};">\u00b7</span>
     <span>Updated {last_refresh or 'just now'}</span>
   </span>
 </div>"""
@@ -523,11 +557,11 @@ def _build_cards_html(snapshot: PublicSnapshot) -> tuple[str, str]:
 
 def _build_footer_html() -> str:
     """Static footer bar."""
-    return f"""\
+    return f"""\\
 <div style="text-align: center; padding: 16px 20px 24px;">
   <span style="font-size: 0.68em; color: {_MUTED}; font-family: sans-serif;
        letter-spacing: 0.03em;">
-    Private inference lanes · Public telemetry only</span>
+    Private inference lanes \u00b7 Public telemetry only</span>
 </div>"""
 
 
@@ -540,7 +574,7 @@ def build_dashboard(
     Usage in ``app.py``::
 
         dashboard = build_dashboard(snapshot_provider, refresh_seconds)
-        # … inside ``with gr.Blocks() as demo:`` …
+        # \u2026 inside ``with gr.Blocks() as demo:`` \u2026
         dashboard.header.render()
         dashboard.status_row.render()
         with gr.Row(equal_height=True):

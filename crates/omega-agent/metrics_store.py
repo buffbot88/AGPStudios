@@ -124,6 +124,24 @@ class MetricsStore:
                 if last_success and last_success.generation_tokens_per_second > 0
                 else 0.0
             ),
+            # Server-side timing from llama-server pipeline (spec §9)
+            "last_time_to_first_token_ms": (
+                round(last_success.time_to_first_token_ms, 1)
+                if last_success and last_success.time_to_first_token_ms is not None
+                else None
+            ),
+            "avg_time_to_first_token_ms": (
+                round(sum(
+                    r.time_to_first_token_ms
+                    for r in successes
+                    if r.time_to_first_token_ms is not None
+                ) / max(len([
+                    r for r in successes
+                    if r.time_to_first_token_ms is not None
+                ]), 1), 1)
+                if successes
+                else None
+            ),
         }
 
 
