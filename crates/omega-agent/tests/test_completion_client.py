@@ -155,6 +155,175 @@ class TestCompletionClient(unittest.TestCase):
         kwargs = post.call_args.kwargs
         self.assertEqual(kwargs["json"]["max_tokens"], 4096)
 
+    # ── Server-side timings parsing ─────────────────────────────────────
+
+    def _mock_response(self, body: dict) -> mock.Mock:
+        resp = mock.Mock(status_code=200)
+        resp.json.return_value = body
+        return resp
+
+    def test_with_complete_timings_uses_server_values(self) -> None:
+        """All timings fields present: TTFT, prompt_tps, gen_tps from server."""
+        body = {
+            "choices": [
+                {"message": {"role": "assistant", "content": "Hello!"},
+                 "finish_reason": "stop"}
+            ],
+            "usage": {"prompt_tokens": 25, "completion_tokens": 80, "total_tokens": 105},
+            "timings": {
+                "prompt_ms": 85.2,
+                "predicted_ms": 1200.0,
+                "prompt_per_second": 293.4,
+                "predicted_per_second": 66.7,
+                "total_ms": 1285.2,
+            },
+        }
+        with mock.patch("requests.post", return_value=self._mock_response(body)):
+            result = self.client.complete(
+                _make_live_backend(), Lane.MICROBRAIN,
+                {"messages": [{"role": "user", "content": "Hi"}]},
+            )
+
+        self.assertEqual(result.time_to_first_token_ms, 85.2)
+        self.assertEqual(result.prompt_tokens_per_second, 293.4)
+        self.assertEqual(result.generation_tokens_per_second, 66.7)
+        self.assertEqual(result.prompt_tokens, 25)
+        self.assertEqual(result.completion_tokens, 80)
+
+    def test_missing_timings_falls_back_to_client_side(self) -> None:
+        """No timings object: token/s derived from client-side inference_ms."""
+        body = {
+            "choices": [
+                {"message": {"role": "assistant", "content": "Hi"},
+                 "finish_reason": "stop"}
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        }
+        with mock.patch("requests.post", return_value=self._mock_response(body)):
+            result = self.client.complete(
+                _make_live_backend(), Lane.MICROBRAIN,
+                {"messages": [{"role": "user", "content": "Hi"}]},
+            )
+
+        # Without timings, TTFT is None, token/s are derived from inference_ms
+        self.assertIsNone(result.time_to_first_token_ms)
+        # Client-side inference_ms is a real timer — values will be > 0
+        self.assertIsNotNone(result.prompt_tokens_per_second)
+        self.assertIsNotNone(result.generation_tokens_per_second)
+
+    def test_empty_timings_falls_back_gracefully(self) -> None:
+        """Empty timings dict: same fallback as missing timings."""
+        body = {
+            "choices": [
+                {"message": {"role": "assistant", "content": "Hi"},
+                 "finish_reason": "stop"}
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+            "timings": {},
+        }
+        with mock.patch("requests.post", return_value=self._mock_response(body)):
+            result = self.client.complete(
+                _make_live_backend(), Lane.MICROBRAIN,
+                {"messages": [{"role": "user", "content": "Hi"}]},
+            )
+
+        self.assertIsNone(result.time_to_first_token_ms)
+        self.assertIsNotNone(result.prompt_tokens_per_second)
+        self.assertIsNotNone(result.generation_tokens_per_second)
+
+    def test_partial_timings_fills_what_it_can(self) -> None:
+        """Partial timings: use what's available, fall back for rest."""
+        body = {
+            "choices": [
+                {"message": {"role": "assistant", "content": "Hi"},
+                 "finish_reason": "stop"}
+            ],
+            "usage": {"prompt_tokens": 15, "completion_tokens": 30, "total_tokens": 45},
+            "timings": {
+                # Only prompt timing, no predicted timing
+                "prompt_ms": 45.0,
+                "prompt_per_second": 333.3,
+            },
+        }
+        with mock.patch("requests.post", return_value=self._mock_response(body)):
+            result = self.client.complete(
+                _make_live_backend(), Lane.MICROBRAIN,
+                {"messages": [{"role": "user", "content": "Hi"}]},
+            )
+
+        # TTFT uses prompt_ms from timings
+        self.assertEqual(result.time_to_first_token_ms, 45.0)
+        # prompt_tps from server timings
+        self.assertEqual(result.prompt_tokens_per_second, 333.3)
+        # gen_tps has no server value — falls back to client-side
+        self.assertIsNotNone(result.generation_tokens_per_second)
+
+    def test_null_timings_is_handled_by_type_guard(self) -> None:
+        """Null (None) timings must not raise AttributeError."""
+        body = {
+            "choices": [
+                {"message": {"role": "assistant", "content": "Hi"},
+                 "finish_reason": "stop"}
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10},
+            "timings": None,
+        }
+        with mock.patch("requests.post", return_value=self._mock_response(body)):
+            # Must not raise: type guard should convert None to {}
+            result = self.client.complete(
+                _make_live_backend(), Lane.MICROBRAIN,
+                {"messages": [{"role": "user", "content": "Hi"}]},
+            )
+
+        self.assertIsNone(result.time_to_first_token_ms)
+        self.assertIsNotNone(result.prompt_tokens_per_second)
+        self.assertIsNotNone(result.generation_tokens_per_second)
+
+    def test_malformed_timings_list_does_not_crash(self) -> None:
+        """Malformed timings as a list (non-dict) must not crash."""
+        body = {
+            "choices": [
+                {"message": {"role": "assistant", "content": "Hi"},
+                 "finish_reason": "stop"}
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10},
+            "timings": [1, 2, 3],
+        }
+        with mock.patch("requests.post", return_value=self._mock_response(body)):
+            # Must not raise: type guard should treat non-dict as empty
+            result = self.client.complete(
+                _make_live_backend(), Lane.MICROBRAIN,
+                {"messages": [{"role": "user", "content": "Hi"}]},
+            )
+
+        self.assertIsNone(result.time_to_first_token_ms)
+        self.assertIsNotNone(result.prompt_tokens_per_second)
+
+    def test_timings_with_server_total_ms_fall_back(self) -> None:
+        """No server token/s, but total_ms present: compute from server total."""
+        body = {
+            "choices": [
+                {"message": {"role": "assistant", "content": "Hi"},
+                 "finish_reason": "stop"}
+            ],
+            "usage": {"prompt_tokens": 20, "completion_tokens": 40, "total_tokens": 60},
+            "timings": {
+                "total_ms": 500.0,
+                # No per-second values — fall back to token / total_ms
+            },
+        }
+        with mock.patch("requests.post", return_value=self._mock_response(body)):
+            result = self.client.complete(
+                _make_live_backend(), Lane.MICROBRAIN,
+                {"messages": [{"role": "user", "content": "Hi"}]},
+            )
+
+        self.assertIsNone(result.time_to_first_token_ms)
+        # 20 prompt_tokens / (500ms / 1000) = 40.0
+        self.assertAlmostEqual(result.prompt_tokens_per_second, 40.0, places=1)
+        # 40 completion_tokens / (500ms / 1000) = 80.0
+        self.assertAlmostEqual(result.generation_tokens_per_second, 80.0, places=1)
+
 
 if __name__ == "__main__":
     unittest.main()
