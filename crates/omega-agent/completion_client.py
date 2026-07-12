@@ -145,7 +145,8 @@ class CompletionClient:
             gen_tps = None
 
         # time_to_first_token_ms = prompt_ms (server-side prefill time)
-        ttft_ms = round(prompt_ms, 1) if prompt_ms is not None else None
+        # Treat zero or negative as unmeasured (same as None).
+        ttft_ms = round(prompt_ms, 1) if (prompt_ms is not None and prompt_ms > 0) else None
 
         return CompletionResult(
             text=text,
