@@ -231,7 +231,7 @@ def _build_card_html(
     is_online = state == "online"
 
     model = info.get("model", "")
-    # Short display name: extract "LFM2.5 \u00b7 350M \u00b7 Q6_K" from filename
+    # Short display name: extract "LFM2.5 · 350M · Q6_K" from filename
     short_model = _short_model_name(model)
     ctx = info.get("ctx", 0)
     ctx_fmt = f"{ctx:,}" if ctx else "\u2014"
@@ -280,7 +280,7 @@ def _build_card_html(
     # Full model filename as tooltip
     model_tooltip = model or ""
 
-    return f"""\\
+    return f"""\
 <div style="background: linear-gradient(180deg, {_PANEL} 0%, {_RAISED} 100%);
      border: 1px solid {_BORDER};
      border-radius: 20px;
@@ -451,7 +451,7 @@ class DashboardTemplate:
 
 def _build_header_html() -> str:
     """Static brand header with glowing brain badge."""
-    return f"""\\
+    return f"""\
 <style>
   @media (prefers-reduced-motion: no-preference) {{
     @keyframes brain-pulse {{
@@ -513,7 +513,7 @@ def _build_status_row_html(snapshot: PublicSnapshot) -> str:
         )
     )
 
-    return f"""\\
+    return f"""\
 <div style="text-align: center; padding: 6px 20px 20px;">
   <span style="display: inline-flex; align-items: center; gap: 6px;
        font-size: 0.8em; font-family: sans-serif; color: {_SECONDARY};">
@@ -557,7 +557,7 @@ def _build_cards_html(snapshot: PublicSnapshot) -> tuple[str, str]:
 
 def _build_footer_html() -> str:
     """Static footer bar."""
-    return f"""\\
+    return f"""\
 <div style="text-align: center; padding: 16px 20px 24px;">
   <span style="font-size: 0.68em; color: {_MUTED}; font-family: sans-serif;
        letter-spacing: 0.03em;">

@@ -115,9 +115,11 @@ class CompletionClient:
         # round-trip estimates). We use server values when available and
         # fall back to client-side inference_ms for prompt_tps/gen_tps.
         timings = data.get("timings", {}) or {}
+        # Defensive: guard against malformed non-dict timings
+        if not isinstance(timings, dict):
+            timings = {}
         server_total_ms = timings.get("total_ms")
         prompt_ms = timings.get("prompt_ms")          # time to process prompt (prefill)
-        predicted_ms = timings.get("predicted_ms")    # time to generate response tokens
         server_prompt_per_second = timings.get("prompt_per_second")
         server_predicted_per_second = timings.get("predicted_per_second")
 
