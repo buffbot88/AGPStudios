@@ -1,4 +1,4 @@
-"""Tests for the response envelope adapter.
+"""Tests for the response envelope adapter (single BrainStem lane).
 
 The Run pipeline emits one canonical envelope dict; the response adapter
 (:func:`response_adapter.envelope_to_response`) converts it to the
@@ -6,7 +6,7 @@ OpenAI-compatible HTTP shape. These tests pin the HTTP status mapping so
 FastAPI and Gradio surfaces are always in sync, and the envelope's
 ``ok=True`` flag is stripped before going onto the wire.
 
-This test imports only :mod:`response_adapter` and :mod:`run_errors` — no
+This test imports only :mod:`response_adapter` and :mod:`run_errors` \u2014 no
 gradio, no fastapi, no NetworkX-shaped module side effects.
 """
 
@@ -24,8 +24,8 @@ class TestEnvelopeToResponse(unittest.TestCase):
             "id": "ashat-abc",
             "object": "chat.completion",
             "created": 1,
-            "model": "LFM2.5-350M-Q6_K.gguf",
-            "lane": "microbrain",
+            "model": "LFM2.5-1.2B-Instruct-Q8_0.gguf",
+            "lane": "brainstem",
             "choices": [
                 {"index": 0,
                  "message": {"role": "assistant", "content": "hi"},
@@ -46,7 +46,7 @@ class TestEnvelopeToResponse(unittest.TestCase):
         env = {
             "ok": False,
             "request_id": "x",
-            "lane": "microbrain",
+            "lane": "brainstem",
             "error": {
                 "code": "INFERENCE_UNAVAILABLE",
                 "message": "binary not installed",
@@ -61,7 +61,7 @@ class TestEnvelopeToResponse(unittest.TestCase):
         env = {
             "ok": False,
             "request_id": "x",
-            "lane": "mainbrain",
+            "lane": "brainstem",
             "error": {"code": "INVALID_REQUEST", "message": "bad", "retryable": False},
         }
         status, _ = envelope_to_response(env)
@@ -71,7 +71,7 @@ class TestEnvelopeToResponse(unittest.TestCase):
         env = {
             "ok": False,
             "request_id": "x",
-            "lane": "mainbrain",
+            "lane": "brainstem",
             "error": {"code": "UNAUTHORIZED", "message": "x", "retryable": False},
         }
         status, _ = envelope_to_response(env)
@@ -81,7 +81,7 @@ class TestEnvelopeToResponse(unittest.TestCase):
         env = {
             "ok": False,
             "request_id": "x",
-            "lane": "mainbrain",
+            "lane": "brainstem",
             "error": {"code": "SERVER_START_FAILED", "message": "x", "retryable": True},
         }
         status, _ = envelope_to_response(env)
@@ -91,7 +91,7 @@ class TestEnvelopeToResponse(unittest.TestCase):
         env = {
             "ok": False,
             "request_id": "x",
-            "lane": "mainbrain",
+            "lane": "brainstem",
             "error": {"code": "INFERENCE_TIMEOUT", "message": "x", "retryable": True},
         }
         status, _ = envelope_to_response(env)
@@ -101,7 +101,7 @@ class TestEnvelopeToResponse(unittest.TestCase):
         env = {
             "ok": False,
             "request_id": "x",
-            "lane": "mainbrain",
+            "lane": "brainstem",
             "error": {"code": "SOMETHING_NEW", "message": "x", "retryable": True},
         }
         status, _ = envelope_to_response(env)
@@ -111,12 +111,11 @@ class TestEnvelopeToResponse(unittest.TestCase):
         env = {
             "ok": False,
             "request_id": "x",
-            "lane": "mainbrain",
+            "lane": "brainstem",
             "error": {"code": "INFERENCE_FAILED", "message": "boom", "retryable": True},
         }
         _, body = envelope_to_response(env)
         self.assertEqual(body["error"]["message"], "boom")
-        # type must be lowercase code (matches `error.type` OpenAI shape)
         self.assertEqual(body["error"]["type"], "inference_failed")
 
 

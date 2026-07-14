@@ -4,7 +4,7 @@ Extracted from app.py per spec §17. Owns:
 
     * CSS and layout
     * Header with glowing brain badge
-    * Two neural-lane cards (MicroBrain pink, MainBrain violet)
+    * Single BrainStem neural-lane card (purple accent)
     * Inline SVG sparkline rendering
     * gr.Timer refresh lifecycle
     * Responsive breakpoints
@@ -42,13 +42,9 @@ _GREEN = "#34D399"
 _AMBER = "#FBBF24"
 _CORAL = "#FB7185"
 
-_MICRO_ACCENT = "#F472B6"
-_MICRO_GLOW = "rgba(244,114,182,0.18)"
-_MICRO_BRIGHT = "#FB8BC8"
-
-_MAIN_ACCENT = "#8B5CF6"
-_MAIN_GLOW = "rgba(139,92,246,0.18)"
-_MAIN_BRIGHT = "#A78BFA"
+_ACCENT = "#8B5CF6"
+_GLOW = "rgba(139,92,246,0.18)"
+_BRIGHT = "#A78BFA"
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -133,7 +129,7 @@ def _build_sparkline(
 # ──────────────────────────────────────────────────────────────────────────
 
 def _fmt_count(n: int) -> str:
-    """Format a count with commas (e.g. 12482 → '12,482')."""
+    """Format a count with commas (e.g. 12482 \u2192 '12,482')."""
     if n == 0:
         return "\u2014"
     return f"{n:,}"
@@ -215,7 +211,7 @@ def _status_pill_html(state: str) -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Card builders
+# Card builder — single BrainStem lane
 # ──────────────────────────────────────────────────────────────────────────
 
 def _build_card_html(
@@ -226,13 +222,12 @@ def _build_card_html(
     bright: str,
     glow: str,
 ) -> str:
-    """Build the full HTML for one lane card."""
+    """Build the full HTML for the single BrainStem lane card."""
     state = info.get("lane_state", "offline")
     display_state = _derive_display_state(state)
     is_online = state == "online"
 
     model = info.get("model", "")
-    # Short display name: extract "LFM2.5 · 350M · Q6_K" from filename
     short_model = _short_model_name(model)
     ctx = info.get("ctx", 0)
     ctx_fmt = f"{ctx:,}" if ctx else "\u2014"
@@ -304,7 +299,7 @@ def _build_card_html(
         {lane_key.upper()}</div>
       <div style="font-size: 0.78em; color: {_SECONDARY}; margin-top: 2px;
            font-family: sans-serif;">
-        {'Fast Response Lane' if lane_key == 'microbrain' else 'Reasoning Lane'}</div>
+        Primary Inference Lane</div>
     </div>
     {_status_pill_html(state)}
   </div>
@@ -397,8 +392,7 @@ def _build_card_html(
 def _short_model_name(filename: str) -> str:
     """Convert a GGUF filename to a short readable label.
 
-    'LFM2.5-350M-Q6_K.gguf' → 'LFM2.5 · 350M · Q6_K'
-    'LFM2.5-1.2B-Instruct-Q6_K.gguf' → 'LFM2.5 Instruct · 1.2B · Q6_K'
+    'LFM2.5-1.2B-Instruct-Q8_0.gguf' \u2192 'LFM2.5 Instruct \u00b7 1.2B \u00b7 Q8_0'
     """
     if not filename:
         return "\u2014"
@@ -408,7 +402,6 @@ def _short_model_name(filename: str) -> str:
     # Try to parse model family and size
     if len(parts) >= 2:
         family = parts[0]
-        # Check for Instruct variant
         instruct = ""
         size_candidates = []
         other_parts = []
@@ -422,7 +415,6 @@ def _short_model_name(filename: str) -> str:
             else:
                 other_parts.append(p)
 
-        # Simplify: LFM2.5-350M-Q6_K → "LFM2.5 · 350M · Q6_K"
         result_parts = [family]
         if instruct:
             result_parts.append(instruct)
@@ -444,9 +436,8 @@ class DashboardTemplate:
     """Strings and a refresh callable -- safe to create outside Blocks."""
     header_html: str
     status_html: str
-    micro_html: str
-    main_html: str
-    refresh_fn: Callable[[], tuple[str, str, str]]
+    brainstem_html: str
+    refresh_fn: Callable[[], tuple[str, str]]
     refresh_seconds: int
 
 
@@ -456,16 +447,16 @@ def _build_header_html() -> str:
 <style>
   @media (prefers-reduced-motion: no-preference) {{
     @keyframes brain-pulse {{
-      0%, 100% {{ box-shadow: 0 0 12px rgba(244,114,182,0.15), 0 0 28px rgba(244,114,182,0.06); }}
-      50% {{ box-shadow: 0 0 18px rgba(244,114,182,0.30), 0 0 40px rgba(244,114,182,0.12); }}
+      0%, 100% {{ box-shadow: 0 0 12px rgba(139,92,246,0.15), 0 0 28px rgba(139,92,246,0.06); }}
+      50% {{ box-shadow: 0 0 18px rgba(139,92,246,0.30), 0 0 40px rgba(139,92,246,0.12); }}
     }}
     .brain-badge {{ animation: brain-pulse 3s ease-in-out infinite; }}
   }}
   .brain-badge {{
     display: inline-flex; align-items: center; justify-content: center;
     width: 56px; height: 56px; border-radius: 16px;
-    background: linear-gradient(135deg, rgba(244,114,182,0.12) 0%, rgba(139,92,246,0.08) 100%);
-    border: 1px solid rgba(244,114,182,0.20);
+    background: linear-gradient(135deg, rgba(139,92,246,0.12) 0%, rgba(244,114,182,0.08) 100%);
+    border: 1px solid rgba(139,92,246,0.20);
     font-size: 30px; line-height: 1;
     margin-bottom: 6px;
     transition: box-shadow 0.4s ease;
@@ -479,7 +470,7 @@ def _build_header_html() -> str:
     ASHAT NEURAL HOST</h1>
   <p style="color: {_SECONDARY}; font-size: 0.82em; margin: 2px 0 0;
       font-family: sans-serif; letter-spacing: 0.02em;">
-    Private Neural Inference \u00b7 Public Telemetry</p>
+    BrainStem Neural Inference \u00b7 Public Telemetry</p>
 </div>"""
 
 
@@ -529,31 +520,20 @@ def _build_status_row_html(snapshot: PublicSnapshot) -> str:
 </div>"""
 
 
-def _build_cards_html(snapshot: PublicSnapshot) -> tuple[str, str]:
-    """Build both lane-card HTML strings.
-
-    Returns:
-        (microbrain_html, mainbrain_html)
-    """
+def _build_cards_html(snapshot: PublicSnapshot) -> str:
+    """Build the single BrainStem lane card HTML."""
     status = snapshot.render_status()
     frames = snapshot.render_frames()
     lanes = status.get("lanes", {})
 
-    mb_info = lanes.get("microbrain", {})
-    mm_info = lanes.get("mainbrain", {})
+    bs_info = lanes.get("brainstem", {})
+    bs_frames = frames.get("brainstem", [])
 
-    mb_frames = frames.get("microbrain", [])
-    mm_frames = frames.get("mainbrain", [])
-
-    micro_html = _build_card_html(
-        "microbrain", mb_info, mb_frames,
-        _MICRO_ACCENT, _MICRO_BRIGHT, _MICRO_GLOW,
+    brainstem_html = _build_card_html(
+        "brainstem", bs_info, bs_frames,
+        _ACCENT, _BRIGHT, _GLOW,
     )
-    main_html = _build_card_html(
-        "mainbrain", mm_info, mm_frames,
-        _MAIN_ACCENT, _MAIN_BRIGHT, _MAIN_GLOW,
-    )
-    return micro_html, main_html
+    return brainstem_html
 
 
 def _build_footer_html() -> str:
@@ -562,7 +542,7 @@ def _build_footer_html() -> str:
 <div style="text-align: center; padding: 16px 20px 24px;">
   <span style="font-size: 0.68em; color: {_MUTED}; font-family: sans-serif;
        letter-spacing: 0.03em;">
-    Private inference lanes \u00b7 Public telemetry only</span>
+    BrainStem inference engine \u00b7 Public telemetry only</span>
 </div>"""
 
 
@@ -580,28 +560,25 @@ def build_dashboard(
         dashboard.status_row.render()
         with gr.Row(equal_height=True):
             with gr.Column(scale=1, min_width=320):
-                dashboard.micro_card.render()
-            with gr.Column(scale=1, min_width=320):
-                dashboard.main_card.render()
+                dashboard.brainstem_card.render()
     """
     initial_snapshot = snapshot_provider()
 
     header_html = _build_header_html()
     status_html = _build_status_row_html(initial_snapshot)
-    micro_html, main_html = _build_cards_html(initial_snapshot)
+    brainstem_html = _build_cards_html(initial_snapshot)
 
-    def _refresh() -> tuple[str, str, str]:
+    def _refresh() -> tuple[str, str]:
         """Called by gr.Timer on each tick."""
         snap = snapshot_provider()
         status = _build_status_row_html(snap)
-        micro, main = _build_cards_html(snap)
-        return status, micro, main
+        brainstem = _build_cards_html(snap)
+        return status, brainstem
 
     return DashboardTemplate(
         header_html=header_html,
         status_html=status_html,
-        micro_html=micro_html,
-        main_html=main_html,
+        brainstem_html=brainstem_html,
         refresh_fn=_refresh,
         refresh_seconds=refresh_seconds,
     )

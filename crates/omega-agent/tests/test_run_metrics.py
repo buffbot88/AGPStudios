@@ -1,4 +1,4 @@
-"""Tests for RunMetrics redaction.
+"""Tests for RunMetrics redaction (single BrainStem lane).
 
 The metrics store is exposed on the public dashboard; this test pins that
 prompts and generated text never enter recorded metrics or events.
@@ -21,7 +21,7 @@ def _fake_live_backend() -> LiveBackend:
     proc = mock.Mock()
     proc.poll.return_value = None
     return LiveBackend(
-        lane=Lane.MICROBRAIN,
+        lane=Lane.BRAINSTEM,
         process=proc,
         base_url="http://127.0.0.1:18080/v1",
         model_path="/tmp/model.gguf",
@@ -50,7 +50,7 @@ class TestRunMetrics(unittest.TestCase):
         store = MetricsStore()
         m = RunMetrics(store)
         m.record_success(
-            Lane.MICROBRAIN,
+            Lane.BRAINSTEM,
             _fake_live_backend(),
             _fake_completion("SUPER-SECRET-REPLY"),
             total_latency_ms=300.0,
@@ -58,7 +58,7 @@ class TestRunMetrics(unittest.TestCase):
         )
         # The completion text must NOT appear anywhere in stored metrics.
         events = store.get_events()
-        records = store.get_lane_metrics("microbrain")
+        records = store.get_lane_metrics("brainstem")
         for s in events:
             self.assertNotIn("SUPER-SECRET-REPLY", s)
         for rec in records:
@@ -69,13 +69,13 @@ class TestRunMetrics(unittest.TestCase):
         store = MetricsStore()
         m = RunMetrics(store)
         m.record_success(
-            Lane.MICROBRAIN,
+            Lane.BRAINSTEM,
             _fake_live_backend(),
             _fake_completion(),
             total_latency_ms=300.0,
             cold_start=True,
         )
-        rec = store.get_lane_metrics("microbrain")[-1]
+        rec = store.get_lane_metrics("brainstem")[-1]
         self.assertEqual(rec.prompt_tokens, 5)
         self.assertEqual(rec.completion_tokens, 3)
         self.assertTrue(rec.cold_start)
@@ -88,10 +88,10 @@ class TestRunMetrics(unittest.TestCase):
             InferenceUnavailableError("binary not installed"),
         ]:
             m.record_failure(
-                Lane.MAINBRAIN, "request-123", exc,
+                Lane.BRAINSTEM, "request-123", exc,
                 elapsed_ms=10.0, cold_start=False,
             )
-        records = store.get_lane_metrics("mainbrain")
+        records = store.get_lane_metrics("brainstem")
         self.assertEqual(len(records), 1)
         self.assertFalse(records[0].success)
         self.assertEqual(records[0].error_category, "INFERENCE_UNAVAILABLE")

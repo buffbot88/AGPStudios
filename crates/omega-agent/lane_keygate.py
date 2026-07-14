@@ -7,8 +7,7 @@ arrived on; this module owns the actual comparison logic.
 
 Design constraints:
     * Read the ``X-Ashat-Key`` header.
-    * Select the expected secret for the lane (``ASHAT_MICROBRAIN_KEY`` /
-      ``ASHAT_MAINBRAIN_KEY`` env vars).
+    * Select the expected secret for the lane (``ASHAT_BRAINSTEM_KEY`` env var).
     * Use :func:`hmac.compare_digest` (constant-time).
     * Raise a single generic :class:`AuthError` on rejection — never log
       the supplied key, never log the expected key.
@@ -43,8 +42,7 @@ class LaneKeyGate:
         # by re-importing app.py without restarting the process still
         # pick up the rotation.
         self._keys: dict[Lane, str] = {
-            Lane.MICROBRAIN: os.getenv("ASHAT_MICROBRAIN_KEY", "") or "",
-            Lane.MAINBRAIN: os.getenv("ASHAT_MAINBRAIN_KEY", "") or "",
+            Lane.BRAINSTEM: os.getenv("ASHAT_BRAINSTEM_KEY", "") or "",
         }
         # Master key — overrides lane-specific checks. Set via
         # ASHAT_ADMIN_KEY env var. The AshatOS sync token
@@ -54,8 +52,7 @@ class LaneKeyGate:
     def reload(self) -> None:
         """Re-read keys from env. Call after Space Secret rotation."""
         self._keys = {
-            Lane.MICROBRAIN: os.getenv("ASHAT_MICROBRAIN_KEY", "") or "",
-            Lane.MAINBRAIN: os.getenv("ASHAT_MAINBRAIN_KEY", "") or "",
+            Lane.BRAINSTEM: os.getenv("ASHAT_BRAINSTEM_KEY", "") or "",
         }
         self._master_key = os.getenv("ASHAT_ADMIN_KEY", "AshatOS-00192")
 
@@ -72,7 +69,7 @@ class LaneKeyGate:
         Accepts key from:
         * ``X-Ashat-Key`` header (AshatOS protocol)
         * ``Authorization: Bearer <key>`` header (OpenAI-compatible standard)
-        * Lane-specific key (ASHAT_MICROBRAIN_KEY / ASHAT_MAINBRAIN_KEY)
+        * Lane-specific key (ASHAT_BRAINSTEM_KEY)
         * Master admin key (ASHAT_ADMIN_KEY, default AshatOS-00192)
         """
         expected = self._keys.get(lane, "")

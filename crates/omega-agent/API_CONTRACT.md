@@ -1,20 +1,20 @@
-# API Contract — AshatOS Dual-Lane Inference Host
+# API Contract — AshatOS BrainStem Inference Host
 
 ## Overview
 
 This document defines the API contract for the Hugging Face Space that hosts
-two private GGUF inference lanes (MicroBrain / MainBrain).
+a single private GGUF inference lane (BrainStem).
 
 ---
 
 ## Endpoints
 
-### 1. MicroBrain Inference
+### 1. BrainStem Inference
 
-**Gradio API:** `POST /gradio_api/call/microbrain`  
-**HTTP API:** `POST /v1/chat/completions` (with `model` field containing "micro" or "350m")
+**Gradio API:** `POST /gradio_api/call/brainstem`  
+**HTTP API:** `POST /v1/chat/completions` (with `model` field containing "brainstem" or "1.2b")
 
-**Authentication:** Required (X-Ashat-Key header matching `ASHAT_MICROBRAIN_KEY`)
+**Authentication:** Required (X-Ashat-Key header matching `ASHAT_BRAINSTEM_KEY`)
 
 **Request:**
 ```json
@@ -36,8 +36,8 @@ two private GGUF inference lanes (MicroBrain / MainBrain).
   "id": "ashat-uuid",
   "object": "chat.completion",
   "created": 1783650000,
-  "model": "LFM2.5-350M-Q6_K.gguf",
-  "lane": "microbrain",
+  "model": "LFM2.5-1.2B-Instruct-Q8_0.gguf",
+  "lane": "brainstem",
   "choices": [
     {
       "index": 0,
@@ -68,20 +68,7 @@ two private GGUF inference lanes (MicroBrain / MainBrain).
 
 ---
 
-### 2. MainBrain Inference
-
-**Gradio API:** `POST /gradio_api/call/mainbrain`  
-**HTTP API:** `POST /v1/chat/completions` (with `model` field containing "main" or "1.2b")
-
-**Authentication:** Required (X-Ashat-Key header matching `ASHAT_MAINBRAIN_KEY`)
-
-**Request:** Same format as MicroBrain.
-
-**Response:** Same structure, with larger context and higher latency.
-
----
-
-### 3. List Models
+### 2. List Models
 
 **HTTP API:** `GET /v1/models`
 
@@ -93,13 +80,7 @@ two private GGUF inference lanes (MicroBrain / MainBrain).
   "object": "list",
   "data": [
     {
-      "id": "LFM2.5-1.2B-Instruct-Q6_K.gguf",
-      "object": "model",
-      "created": 1783650000,
-      "owned_by": "ashatos"
-    },
-    {
-      "id": "LFM2.5-350M-Q6_K.gguf",
+      "id": "LFM2.5-1.2B-Instruct-Q8_0.gguf",
       "object": "model",
       "created": 1783650000,
       "owned_by": "ashatos"
@@ -110,7 +91,7 @@ two private GGUF inference lanes (MicroBrain / MainBrain).
 
 ---
 
-### 4. Health Check
+### 3. Health Check
 
 **HTTP API:** `GET /health`
 
@@ -121,15 +102,14 @@ two private GGUF inference lanes (MicroBrain / MainBrain).
 {
   "status": "ok",
   "uptime_seconds": 300.5,
-  "microbrain_ready": true,
-  "mainbrain_ready": true,
+  "brainstem_ready": true,
   "llama_server_available": true
 }
 ```
 
 ---
 
-### 5. Public Status
+### 4. Public Status
 
 **Gradio API:** `POST /gradio_api/call/public_status`  
 **HTTP API:** `GET /api/public_status`
@@ -140,7 +120,7 @@ Returns lane status, request counts, performance summaries.
 
 ---
 
-### 6. Public Metrics
+### 5. Public Metrics
 
 **Gradio API:** `POST /gradio_api/call/public_metrics`  
 **HTTP API:** `GET /api/public_metrics`
@@ -151,15 +131,15 @@ Returns sanitized aggregate metrics.
 
 ---
 
-### 7. Admin Benchmark
+### 6. Admin Benchmark
 
 **Gradio API:** `POST /gradio_api/call/admin_benchmark`
 
 **Authentication:** Required (X-Ashat-Key header matching `ASHAT_ADMIN_KEY`)
 
-Runs a predefined benchmark on the specified lane.
+Runs a predefined benchmark on the BrainStem lane.
 
-**Input:** `{ "lane": "microbrain" | "mainbrain" | "both" }`
+**Input:** `{ "lane": "brainstem" }`
 
 ---
 
@@ -175,8 +155,7 @@ Keys are stored as Hugging Face Space Secrets:
 
 | Secret | Lane |
 |---|---|
-| `ASHAT_MICROBRAIN_KEY` | MicroBrain |
-| `ASHAT_MAINBRAIN_KEY` | MainBrain |
+| `ASHAT_BRAINSTEM_KEY` | BrainStem |
 | `ASHAT_ADMIN_KEY` | Admin/benchmark |
 
 Key comparison uses `hmac.compare_digest()` (constant-time).

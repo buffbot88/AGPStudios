@@ -116,7 +116,7 @@ class TestLaunchVerifier(unittest.TestCase):
         ), mock.patch.object(
             BackendLauncher, "_wait_for_health", return_value=True,
         ):
-            backend = launcher.launch(Lane.MAINBRAIN)
+            backend = launcher.launch(Lane.BRAINSTEM)
 
         # Fields derived from PARSED stderr, not env-var inference.
         self.assertEqual(backend.backend_mode, "cuda")
@@ -136,7 +136,7 @@ class TestLaunchVerifier(unittest.TestCase):
             BackendLauncher, "_wait_for_health", return_value=True,
         ):
             backend = launcher.launch(
-                Lane.MAINBRAIN, gpu_offload_requested=False,
+                Lane.BRAINSTEM, gpu_offload_requested=False,
             )
         self.assertEqual(backend.backend_mode, "cpu")
         self.assertFalse(backend.gpu_offload_verified)
@@ -157,7 +157,7 @@ class TestLaunchVerifier(unittest.TestCase):
             BackendLauncher, "_wait_for_health", return_value=True,
         ):
             with self.assertRaises(GpuOffloadVerificationError):
-                launcher.launch(Lane.MAINBRAIN)
+                launcher.launch(Lane.BRAINSTEM)
 
     def test_offloaded_layer_counts_propagate_to_live_backend(self) -> None:
         launcher = self._build_launcher()
@@ -170,9 +170,9 @@ class TestLaunchVerifier(unittest.TestCase):
         ), mock.patch.object(
             BackendLauncher, "_wait_for_health", return_value=True,
         ):
-            backend = launcher.launch(Lane.MICROBRAIN)
+            backend = launcher.launch(Lane.BRAINSTEM)
         self.assertEqual(backend.gpu_offload_layers, (32, 33))
-        self.assertEqual(backend.lane, Lane.MICROBRAIN)
+        self.assertEqual(backend.lane, Lane.BRAINSTEM)
 
     def test_parser_state_attached_to_live_backend(self) -> None:
         launcher = self._build_launcher()
@@ -185,7 +185,7 @@ class TestLaunchVerifier(unittest.TestCase):
         ), mock.patch.object(
             BackendLauncher, "_wait_for_health", return_value=True,
         ):
-            backend = launcher.launch(Lane.MAINBRAIN)
+            backend = launcher.launch(Lane.BRAINSTEM)
         self.assertIsNotNone(backend.parser)
         self.assertEqual(backend.parser.finalize().parsed_mode, "cuda")
 
@@ -197,7 +197,7 @@ class TestLiveBackendFields(unittest.TestCase):
         proc = mock.Mock()
         proc.poll.return_value = None
         b = LiveBackend(
-            lane=Lane.MICROBRAIN,
+            lane=Lane.BRAINSTEM,
             process=proc,
             base_url="http://127.0.0.1:18080/v1",
             model_path="/tmp/m.gguf",

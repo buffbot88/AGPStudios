@@ -1,4 +1,4 @@
-# Deployment Guide — AshatOS Dual-Lane Inference Host
+# Deployment Guide — AshatOS BrainStem Inference Host
 
 ## Hugging Face Spaces
 
@@ -24,8 +24,7 @@ Add these **Space Secrets** in the Settings tab:
 | Key | Value |
 |---|---|
 | `HF_TOKEN` | Your Hugging Face access token (for model downloads) |
-| `ASHAT_MICROBRAIN_KEY` | Random 256-bit key (generate with `secrets.token_urlsafe(48)`) |
-| `ASHAT_MAINBRAIN_KEY` | Different random 256-bit key |
+| `ASHAT_BRAINSTEM_KEY` | Random 256-bit key (generate with `secrets.token_urlsafe(48)`) |
 | `ASHAT_ADMIN_KEY` | Separate key for admin operations |
 
 ### Optional Space Variables
@@ -34,10 +33,8 @@ These can be set as normal environment variables to override defaults:
 
 | Key | Default | Description |
 |---|---|---|
-| `MAIN_MODEL_REPO` | `stressthismess/LFM2.5-Q6_K` | Override model repository |
-| `MAIN_MODEL_FILE` | `LFM2.5-1.2B-Instruct-Q6_K.gguf` | Override model file |
-| `MICRO_MODEL_REPO` | `stressthismess/LFM2.5-Q6_K` | Override model repository |
-| `MICRO_MODEL_FILE` | `LFM2.5-350M-Q6_K.gguf` | Override model file |
+| `BRAINSTEM_MODEL_REPO` | `buckets/stressthismess/ashatos-storage` | Override model repository |
+| `BRAINSTEM_MODEL_FILE` | `LFM2.5-1.2B-Instruct-Q8_0.gguf` | Override model file |
 | `LLAMA_SERVER_VERSION` | `b9945` | Pin a specific llama.cpp release (pinned default; set Space Secret to override) |
 | `LLAMA_SERVER_HF_REPO` | `stressthismess/llama-server-mirror` | HF mirror repo used as fallback when GitHub releases are unreachable |
 | `LLAMA_SERVER_HF_FILE` | `llama-server-{tag}` | Filename inside the mirror repo (auto-derived from tag if blank) |
@@ -48,8 +45,7 @@ These can be set as normal environment variables to override defaults:
 Generate secure random keys on your local machine:
 
 ```bash
-python -c "import secrets; print('MICRO:', secrets.token_urlsafe(48))"
-python -c "import secrets; print('MAIN: ', secrets.token_urlsafe(48))"
+python -c "import secrets; print('BRAINSTEM:', secrets.token_urlsafe(48))"
 python -c "import secrets; print('ADMIN:', secrets.token_urlsafe(48))"
 ```
 
@@ -64,7 +60,7 @@ python -c "import secrets; print('ADMIN:', secrets.token_urlsafe(48))"
 ```bash
 curl -X POST https://YOUR_USERNAME-ashatos.hf.space/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "X-Ashat-Key: YOUR_MICROBRAIN_KEY" \
+  -H "X-Ashat-Key: YOUR_BRAINSTEM_KEY" \
   -d '{"messages":[{"role":"user","content":"Hello!"}],"max_tokens":64}'
 ```
 
@@ -86,11 +82,11 @@ Check the logs at `/api/public_status` or the Gradio dashboard. Common causes:
 ### Model download fails
 
 Ensure `HF_TOKEN` is set as a Space secret if accessing private repos.
-Public repos from the stressthismess organization should work without it.
+Public repos from the buckets/stressthismess organization should work without it.
 
 ### Authentication errors
 
 Verify that:
-- `ASHAT_MICROBRAIN_KEY` and `ASHAT_MAINBRAIN_KEY` are set as Space **Secrets**
+- `ASHAT_BRAINSTEM_KEY` is set as a Space **Secret**
 - The keys match between the host and your client configuration
 - The `X-Ashat-Key` header is sent (not `Authorization`)

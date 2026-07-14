@@ -2,13 +2,13 @@
 
 Single source of truth for "given a request, which lane does this go to?"
 Both adapters (Gradio route + HTTP ``model`` field) call into this function.
-Unknown names raise :class:`InvalidRequestError` — never silently fall through
-to MainBrain.
+With only one lane (BrainStem), every valid request resolves to it.
+Unknown names raise :class:`InvalidRequestError`.
 """
 
 from __future__ import annotations
 
-from domain import Lane, MICROBRAIN_ALIASES, MAINBRAIN_ALIASES
+from domain import Lane, BRAINSTEM_ALIASES
 from run_errors import InvalidRequestError
 
 
@@ -16,10 +16,10 @@ class LaneResolver:
     """Pure, deterministic lane routing from a request shape.
 
     Resolution rules:
-      * If ``route_hint`` is provided and is one of the canonical lane names,
+      * If ``route_hint`` is provided and is the canonical lane name,
         that lane wins (the route's identity is authoritative).
       * Otherwise, look at ``payload['model']`` and match against the
-        configurable alias maps.
+        configurable alias map.
       * Anything that doesn't match exactly is :class:`InvalidRequestError` —
         never a silent fall-through.
     """
@@ -44,29 +44,15 @@ class LaneResolver:
 
         model_lower = model.lower()
         # Compare case-sensitively because gguf filenames ARE case-sensitive.
-        if model in MICROBRAIN_ALIASES or model in MAINBRAIN_ALIASES:
-            if model in MICROBRAIN_ALIASES and model in MAINBRAIN_ALIASES:
-                # Alias collision (two lanes share a name). Prefer the more
-                # specific one — both are kept but we disambiguate by length
-                # here. In practice this should never fire.
-                # Fall through: defaulted to MAINBRAIN only if no other match.
-                # Treat as invalid to surface the duplication to operators.
-                raise InvalidRequestError(
-                    f"model name {model!r} maps to both lanes; "
-                    f"fix MICROBRAIN_ALIASES / MAINBRAIN_ALIASES"
-                )
-            if model in MICROBRAIN_ALIASES:
-                return Lane.MICROBRAIN
-            return Lane.MAINBRAIN
+        if model in BRAINSTEM_ALIASES:
+            return Lane.BRAINSTEM
 
         # Case-insensitive fallback for human-friendly aliases like
-        # "MicroBrain" or "MainBrain" only.
-        if model_lower in {a.lower() for a in MICROBRAIN_ALIASES}:
-            return Lane.MICROBRAIN
-        if model_lower in {a.lower() for a in MAINBRAIN_ALIASES}:
-            return Lane.MAINBRAIN
+        # "BrainStem" or "brainstem".
+        if model_lower in {a.lower() for a in BRAINSTEM_ALIASES}:
+            return Lane.BRAINSTEM
 
         raise InvalidRequestError(
             f"unknown model {model!r}; expected one of: "
-            f"{sorted(MICROBRAIN_ALIASES | MAINBRAIN_ALIASES)}"
+            f"{sorted(BRAINSTEM_ALIASES)}"
         )

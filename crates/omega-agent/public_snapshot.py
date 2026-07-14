@@ -57,8 +57,7 @@ class LaneActivity:
 
 
 LANE_ACTIVITY: dict[str, LaneActivity] = {
-    "microbrain": LaneActivity(),
-    "mainbrain": LaneActivity(),
+    "brainstem": LaneActivity(),
 }
 
 
@@ -203,8 +202,7 @@ class PublicSnapshot:
             "llama_server": _redact_path(self.runtime.llama_server_path),
             "lanes": lanes,
             "all_ready": (
-                lanes["microbrain"]["ready"]
-                and lanes["mainbrain"]["ready"]
+                lanes.get("brainstem", {}).get("ready", False)
                 and self.runtime.llama_server_available
             ),
         }
@@ -222,8 +220,7 @@ class PublicSnapshot:
         return {
             "uptime_seconds": self.runtime.uptime_seconds,
             "summaries": {
-                "microbrain": self.metrics.get_summary("microbrain"),
-                "mainbrain": self.metrics.get_summary("mainbrain"),
+                "brainstem": self.metrics.get_summary("brainstem"),
             },
             "total_events": len(all_events),
             "recent_events": safe_events,
@@ -250,7 +247,7 @@ class PublicSnapshot:
                 'Check startup logs for the install failure reason.'
                 '</div>'
             )
-        for key in ("mainbrain", "microbrain"):
+        for key in ("brainstem",):
             info = s["lanes"][key]
             if s["degraded"]:
                 emoji = "🟥"
@@ -283,8 +280,7 @@ class PublicSnapshot:
         """Per-lane plot frames + recent events for the Gradio plot tick."""
         all_m = self.metrics.get_all_metrics()
         return {
-            "microbrain": self._to_frame(all_m.get("microbrain", [])),
-            "mainbrain": self._to_frame(all_m.get("mainbrain", [])),
+            "brainstem": self._to_frame(all_m.get("brainstem", [])),
             "events": [
                 {"Event": e} for e in self.metrics.get_events()[-10:]
             ],

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""AshatOS Neural I/O Host — slim orchestrator.
+"""AshatOS Neural I/O Host — slim orchestrator (single BrainStem lane).
 
 The heavy lifting now lives in purpose-built modules:
-    * :mod:`domain`            — Lane enum + per-lane config
-    * :mod:`run_errors`        — typed exception hierarchy + RunError→JSON codes
+    * :mod:`domain`            — Lane enum + per-lane config (single BRAINSTEM)
+    * :mod:`run_errors`        — typed exception hierarchy + RunError\u2192JSON codes
     * :mod:`lane_resolver`     — strict route-or-model lane routing
     * :mod:`lane_keygate`      — single auth authority for both surfaces
     * :mod:`backend_launcher`  — per-request llama-server lifecycle
@@ -98,13 +98,10 @@ N_THREADS = int(os.getenv("N_THREADS", "2"))
 N_BATCH = int(os.getenv("N_BATCH", "128"))
 QUEUE_LIMIT = int(os.getenv("QUEUE_LIMIT", "16"))
 PUBLIC_REFRESH_SECONDS = int(os.getenv("PUBLIC_REFRESH_SECONDS", "10"))
-# GPU slot durations for ZeroGPU. Read once at import time and exposed
-# as plain module-level Names so the @spaces.GPU decorators below are
-# trivially AST-readable by HF Spaces' static scanner (a function-call
-# inside the decorator arg can hang the scanner with the
-# "No @spaces.GPU function detected during startup" error).
-_MICRO_GPU_DURATION = int(os.getenv("MICRO_GPU_DURATION", "60"))
-_MAIN_GPU_DURATION = int(os.getenv("MAIN_GPU_DURATION", "120"))
+# GPU slot duration for ZeroGPU. Read once at import time and exposed
+# as a plain module-level Name so the @spaces.GPU decorator below is
+# trivially AST-readable by HF Spaces' static scanner.
+_BRAINSTEM_GPU_DURATION = int(os.getenv("BRAINSTEM_GPU_DURATION", "120"))
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -163,40 +160,10 @@ atexit.register(stop_all_servers)
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# 5.  Request validation
+# 5.  Request validation (delegates to domain)
 # ──────────────────────────────────────────────────────────────────────────
 
-def validate_request(body: dict[str, Any], lane: Lane) -> str | None:
-    cfg = lane_cfg(lane)
-    messages = body.get("messages", [])
-    if not messages or not isinstance(messages, list):
-        return "Missing or invalid 'messages' field"
-    if len(messages) > cfg["max_messages"]:
-        return f"Too many messages (max {cfg['max_messages']})"
-    body_bytes = len(json.dumps(body))
-    if body_bytes > cfg["max_body_bytes"]:
-        return f"Request body too large (max {cfg['max_body_bytes']} bytes)"
-    for msg in messages:
-        if not isinstance(msg, dict):
-            return "Each message must be a dict"
-        role = msg.get("role", "")
-        if role not in ("system", "user", "assistant"):
-            return f"Unsupported role: {role}"
-        content = msg.get("content", "")
-        if not isinstance(content, str) or not content.strip():
-            return "Message content must be a non-empty string"
-    max_tokens = body.get("max_tokens", 0)
-    if max_tokens and (not isinstance(max_tokens, (int, float)) or max_tokens < 1):
-        return "max_tokens must be a positive integer"
-    temperature = body.get("temperature", 0.7)
-    if isinstance(temperature, (int, float)) and (temperature < 0 or temperature > 2):
-        return "temperature must be between 0 and 2"
-    top_p = body.get("top_p", 0.9)
-    if isinstance(top_p, (int, float)) and (top_p < 0 or top_p > 1):
-        return "top_p must be between 0 and 1"
-    if body.get("stream", False):
-        return "Streaming is not yet supported"
-    return None
+from domain import validate_request
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -311,7 +278,7 @@ def _run_pipeline(lane: Lane, payload: dict[str, Any]) -> dict[str, Any]:
     # Degraded-mode gate.
     if not _llama_bin_path:
         _log.warning(
-            "%s: inference unavailable — llama-server binary not installed",
+            "%s: inference unavailable \u2014 llama-server binary not installed",
             lane.value,
         )
         exc = InferenceUnavailableError(
@@ -357,32 +324,18 @@ def _run_pipeline(lane: Lane, payload: dict[str, Any]) -> dict[str, Any]:
         }
 
 
-def _make_internal_error(message: str):
-    """Construct an ad-hoc RunError for the broadest catch path."""
-    err = RunError(message)
-    err.code = "INTERNAL_ERROR"
-    err.http_status = 500
-    err.retryable = True
-    return err
-
-
 # ──────────────────────────────────────────────────────────────────────────
-# 7.  @spaces.GPU wrappers — one entry per lane
+# 7.  @spaces.GPU wrapper — one entry for the single BrainStem lane
 # ──────────────────────────────────────────────────────────────────────────
 
 @spaces.GPU
-def _execute_microbrain_gpu(payload: dict[str, Any]) -> dict[str, Any]:
-    return _run_pipeline(Lane.MICROBRAIN, payload)
-
-
-@spaces.GPU
-def _execute_mainbrain_gpu(payload: dict[str, Any]) -> dict[str, Any]:
-    return _run_pipeline(Lane.MAINBRAIN, payload)
+def _execute_brainstem_gpu(payload: dict[str, Any]) -> dict[str, Any]:
+    return _run_pipeline(Lane.BRAINSTEM, payload)
 
 
 # ──────────────────────────────────────────────────────────────────────────
 # 7b.  Metric recording in the main process
-#      The functions above may run in a ZeroGPU worker (separate process).
+#      The function above may run in a ZeroGPU worker (separate process).
 #      We record metrics HERE, after the result crosses back to the main
 #      Gradio/FastAPI process, so the dashboard timer can read them.
 # ──────────────────────────────────────────────────────────────────────────
@@ -487,7 +440,7 @@ def _record_returned_result(
 
 
 def execute_lane(lane_str: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Serializing entry point — one inference at a time across the Space.
+    """Serializing entry point \u2014 one inference at a time across the Space.
 
     The ``@spaces.GPU`` functions run in an isolated worker process (on
     HF Spaces with ZeroGPU).  We record metrics here, in the *main*
@@ -496,10 +449,7 @@ def execute_lane(lane_str: str, payload: dict[str, Any]) -> dict[str, Any]:
     """
     lane = Lane.parse(lane_str)
     with _inference_lock:
-        if lane is Lane.MICROBRAIN:
-            result = _execute_microbrain_gpu(payload)
-        else:
-            result = _execute_mainbrain_gpu(payload)
+        result = _execute_brainstem_gpu(payload)
 
     _record_returned_result(lane, result)
     return result
@@ -510,7 +460,7 @@ def execute_lane(lane_str: str, payload: dict[str, Any]) -> dict[str, Any]:
 # ──────────────────────────────────────────────────────────────────────────
 
 def _envelope_to_response(envelope: dict[str, Any]) -> tuple[int, dict[str, Any]]:
-    """Backwards-compat shim — see :func:`response_adapter.envelope_to_response`."""
+    """Backwards-compat shim \u2014 see :func:`response_adapter.envelope_to_response`."""
     return envelope_to_response(envelope)
 
 
@@ -585,7 +535,7 @@ def _make_http_chat_completions():
                 "error": {"message": "Invalid JSON body", "type": "invalid_request_error"},
             })
 
-        # 2. Lane resolution (no string-sniff — exact alias match)
+        # 2. Lane resolution (single BrainStem lane)
         try:
             lane = resolver.resolve(body, route_hint=None)
         except InvalidRequestError as exc:
@@ -630,6 +580,7 @@ def _make_http_chat_completions():
 # ──────────────────────────────────────────────────────────────────────────
 
 from public_snapshot import PublicSnapshot, RuntimeState
+from telemetry import TELEMETRY
 
 
 def _snapshot() -> PublicSnapshot:
@@ -662,9 +613,6 @@ def _status_html() -> str:
     return _snapshot().render_html()
 
 
-
-
-
 # ──────────────────────────────────────────────────────────────────────────
 # 10.  FastAPI / Gradio wiring
 # ──────────────────────────────────────────────────────────────────────────
@@ -683,13 +631,7 @@ async def http_list_models() -> JSONResponse:
         "object": "list",
         "data": [
             {
-                "id": lane_cfg(Lane.MAINBRAIN)["file"],
-                "object": "model",
-                "created": int(_started_at),
-                "owned_by": "ashatos",
-            },
-            {
-                "id": lane_cfg(Lane.MICROBRAIN)["file"],
+                "id": lane_cfg(Lane.BRAINSTEM)["file"],
                 "object": "model",
                 "created": int(_started_at),
                 "owned_by": "ashatos",
@@ -703,13 +645,9 @@ async def http_health() -> JSONResponse:
     return JSONResponse(content={
         "status": "ok",
         "uptime_seconds": round(time.time() - _started_at, 1),
-        "microbrain_ready": bool(
-            LANE_CONFIG[Lane.MICROBRAIN]["model_path"]
-            and os.path.isfile(LANE_CONFIG[Lane.MICROBRAIN]["model_path"])
-        ),
-        "mainbrain_ready": bool(
-            LANE_CONFIG[Lane.MAINBRAIN]["model_path"]
-            and os.path.isfile(LANE_CONFIG[Lane.MAINBRAIN]["model_path"])
+        "brainstem_ready": bool(
+            LANE_CONFIG[Lane.BRAINSTEM]["model_path"]
+            and os.path.isfile(LANE_CONFIG[Lane.BRAINSTEM]["model_path"])
         ),
         "llama_server_available": _llama_bin_path is not None,
     })
@@ -725,10 +663,8 @@ async def http_public_metrics() -> JSONResponse:
     return JSONResponse(content=_snapshot().render_metrics())
 
 
-
-
 # ──────────────────────────────────────────────────────────────────────────
-# 11.  Dashboard — redesigned neural host homepage (spec §4–§15)
+# 11.  Dashboard — redesigned neural host homepage (single BrainStem lane)
 # ──────────────────────────────────────────────────────────────────────────
 
 from dashboard import build_dashboard
@@ -745,19 +681,17 @@ with gr.Blocks(title="AshatOS Neural Host") as _demo:
     # Status row (refreshed by timer)
     _status = gr.HTML(_tpl.status_html)
 
-    # Two-lane card layout (spec §3) — both cards refreshed by timer
+    # Single BrainStem lane card (refreshed by timer)
     with gr.Row(equal_height=True, variant="panel"):
         with gr.Column(scale=1, min_width=320):
-            _micro = gr.HTML(_tpl.micro_html)
-        with gr.Column(scale=1, min_width=320):
-            _main = gr.HTML(_tpl.main_html)
+            _brainstem = gr.HTML(_tpl.brainstem_html)
 
-    # Live refresh via Gradio Timer (spec §10)
+    # Live refresh via Gradio Timer (spec \u00a710)
     _timer = gr.Timer(value=_tpl.refresh_seconds, active=True)
     _timer.tick(
         fn=_tpl.refresh_fn,
         inputs=None,
-        outputs=[_status, _micro, _main],
+        outputs=[_status, _brainstem],
         queue=False,
         show_progress="hidden",
     )
@@ -768,29 +702,19 @@ with gr.Blocks(title="AshatOS Neural Host") as _demo:
         <div style="text-align: center; padding: 16px 20px 24px;">
           <span style="font-size: 0.68em; color: #64748B; font-family: sans-serif;
                letter-spacing: 0.03em;">
-            Private inference lanes · Public telemetry only</span>
+            BrainStem inference engine \u00b7 Public telemetry only</span>
         </div>
         """
     )
 
     # -- Private Gradio API endpoints (AshatOS communication only) --
-    _micro_input = gr.Textbox(visible=False, value="{}", label="microbrain_payload")
-    _micro_trigger = gr.Button(visible=False, elem_id="_micro_trigger")
-    _micro_trigger.click(
-        fn=_gradio_lane_handler(Lane.MICROBRAIN),
-        inputs=[_micro_input],
+    _brainstem_input = gr.Textbox(visible=False, value="{}", label="brainstem_payload")
+    _brainstem_trigger = gr.Button(visible=False, elem_id="_brainstem_trigger")
+    _brainstem_trigger.click(
+        fn=_gradio_lane_handler(Lane.BRAINSTEM),
+        inputs=[_brainstem_input],
         outputs=[gr.Textbox(visible=False)],
-        api_name="microbrain",
-        concurrency_limit=1,
-    )
-
-    _main_input = gr.Textbox(visible=False, value="{}", label="mainbrain_payload")
-    _main_trigger = gr.Button(visible=False, elem_id="_main_trigger")
-    _main_trigger.click(
-        fn=_gradio_lane_handler(Lane.MAINBRAIN),
-        inputs=[_main_input],
-        outputs=[gr.Textbox(visible=False)],
-        api_name="mainbrain",
+        api_name="brainstem",
         concurrency_limit=1,
     )
 
@@ -816,24 +740,33 @@ with gr.Blocks(title="AshatOS Neural Host") as _demo:
 def startup() -> None:
     global _llama_bin_path
     _log.info("=" * 60)
-    _log.info("AshatOS Neural I/O Host — Dual-Lane Inference")
+    _log.info("AshatOS Neural I/O Host \u2014 Single-Lane BrainStem Inference")
     _log.info("=" * 60)
 
     _llama_bin_path = ensure_llama_server()
     if _llama_bin_path:
         _log.info("llama-server binary: %s", _llama_bin_path)
     else:
-        _log.warning("llama-server binary not available — degraded mode")
+        _log.warning("llama-server binary not available \u2014 degraded mode")
 
+    model_ready = False
     if _llama_bin_path:
-        for lane in (Lane.MICROBRAIN, Lane.MAINBRAIN):
+        for lane in (Lane.BRAINSTEM,):
             try:
                 _BACKEND_LAUNCHER.ensure_model(lane)
                 _log.info("%s model cached: %s", lane.value,
                           LANE_CONFIG[lane]["model_path"])
+                model_ready = True
             except Exception as exc:
                 _log.warning("%s model pre-download failed: %s",
                              lane.value, exc)
+
+    # Seed boot telemetry unconditionally so dashboard always has initial data
+    for lane in (Lane.BRAINSTEM,):
+        if model_ready and _llama_bin_path:
+            TELEMETRY.seed_boot(lane, backend="cuda", gpu_offload=True)
+        else:
+            TELEMETRY.seed_boot(lane, backend="cpu", gpu_offload=False)
 
 
 startup()
@@ -869,7 +802,7 @@ if _GRADIO_INTERNAL is not None:
     _GRADIO_INTERNAL.include_router(_router)
     _log.info("FastAPI routes mounted on Gradio internal app")
 else:
-    _log.warning("Gradio internal app not available — FastAPI routes not served")
+    _log.warning("Gradio internal app not available \u2014 FastAPI routes not served")
 
 app = _demo
 

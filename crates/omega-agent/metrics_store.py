@@ -39,17 +39,13 @@ class MetricsStore:
 
     def __init__(self, maxlen: int = 500, event_maxlen: int = 200) -> None:
         self._maxlen = maxlen
-        self._microbrain: deque[MetricRecord] = deque(maxlen=maxlen)
-        self._mainbrain: deque[MetricRecord] = deque(maxlen=maxlen)
+        self._brainstem: deque[MetricRecord] = deque(maxlen=maxlen)
         self._events: deque[str] = deque(maxlen=event_maxlen)
         self._lock = Lock()
 
     def record(self, rec: MetricRecord) -> None:
         with self._lock:
-            if rec.lane == "microbrain":
-                self._microbrain.append(rec)
-            else:
-                self._mainbrain.append(rec)
+            self._brainstem.append(rec)
 
     def add_event(self, event: str) -> None:
         with self._lock:
@@ -58,15 +54,12 @@ class MetricsStore:
 
     def get_lane_metrics(self, lane: str) -> list[MetricRecord]:
         with self._lock:
-            if lane == "microbrain":
-                return list(self._microbrain)
-            return list(self._mainbrain)
+            return list(self._brainstem)
 
     def get_all_metrics(self) -> dict[str, list[MetricRecord]]:
         with self._lock:
             return {
-                "microbrain": list(self._microbrain),
-                "mainbrain": list(self._mainbrain),
+                "brainstem": list(self._brainstem),
             }
 
     def get_events(self) -> list[str]:
@@ -75,8 +68,7 @@ class MetricsStore:
 
     def clear(self) -> None:
         with self._lock:
-            self._microbrain.clear()
-            self._mainbrain.clear()
+            self._brainstem.clear()
             self._events.clear()
 
     def get_summary(self, lane: str) -> dict[str, Any]:

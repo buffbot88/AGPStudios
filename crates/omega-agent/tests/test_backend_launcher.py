@@ -1,4 +1,4 @@
-"""Tests for BackendLauncher command construction.
+"""Tests for BackendLauncher command construction (single BrainStem lane).
 
 The launcher is the seam between ``app.py`` and the subprocess that runs
 ``llama-server``. These tests pin the *shape* of the subprocess command
@@ -50,7 +50,7 @@ class TestBackendLauncherCommand(unittest.TestCase):
         self.assertIn("2", cmd)
         self.assertIn("-b", cmd)
         self.assertIn("128", cmd)
-        # GPU offload layer explicitly off (max layers).
+        # GPU offload layer explicitly on (max layers).
         self.assertIn("-ngl", cmd)
         self.assertIn("999", cmd)
 
@@ -58,9 +58,9 @@ class TestBackendLauncherCommand(unittest.TestCase):
         cmd = self.launcher._build_command(
             "/fake/llama-server",
             "/fake/main.gguf",
-            lane_cfg(Lane.MAINBRAIN)["ctx"],
+            lane_cfg(Lane.BRAINSTEM)["ctx"],
         )
-        self.assertIn(str(lane_cfg(Lane.MAINBRAIN)["ctx"]), cmd)
+        self.assertIn(str(lane_cfg(Lane.BRAINSTEM)["ctx"]), cmd)
 
 
 class TestBackendLauncherBinaryGate(unittest.TestCase):
@@ -74,7 +74,7 @@ class TestBackendLauncherBinaryGate(unittest.TestCase):
         )
         from run_errors import GpuAllocationError
         with self.assertRaises(GpuAllocationError):
-            launcher.launch(Lane.MICROBRAIN)
+            launcher.launch(Lane.BRAINSTEM)
 
     def test_launch_raises_if_binary_path_unreadable(self) -> None:
         launcher = BackendLauncher(
@@ -85,7 +85,7 @@ class TestBackendLauncherBinaryGate(unittest.TestCase):
         )
         from run_errors import GpuAllocationError
         with self.assertRaises(GpuAllocationError):
-            launcher.launch(Lane.MICROBRAIN)
+            launcher.launch(Lane.BRAINSTEM)
 
 
 if __name__ == "__main__":

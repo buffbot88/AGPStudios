@@ -1,9 +1,9 @@
-"""Domain types for the AshatOS dual-lane inference host.
+"""Domain types for the AshatOS Neural Host — single-lane BrainStem.
 
-This module owns the canonical names of the lanes and the per-lane
-configuration table, plus request validation that enforces per-lane
-constraints. It deliberately has zero heavy runtime dependencies so it can
-be imported from any other module, including unit tests.
+This module owns the canonical lane name and configuration, plus request
+validation that enforces lane constraints. It deliberately has zero heavy
+runtime dependencies so it can be imported from any other module, including
+unit tests.
 """
 
 from __future__ import annotations
@@ -16,10 +16,9 @@ import os
 
 
 class Lane(str, Enum):
-    """The two inference lanes — a closed enum, never a free string."""
+    """The single inference lane — a closed enum, never a free string."""
 
-    MICROBRAIN = "microbrain"
-    MAINBRAIN = "mainbrain"
+    BRAINSTEM = "brainstem"
 
     @classmethod
     def parse(cls, value: str) -> "Lane":
@@ -34,41 +33,35 @@ class Lane(str, Enum):
 
 
 # Configurable alias maps (overridable per-deployment). A request may identify
-# a lane by:
-#   - the canonical lane name (e.g. "mainbrain")
-#   - an AshatOS-style prefixed name (e.g. "ashat-mainbrain")
-#   - the configured GGUF filename for the lane (LANE_CONFIG[lane]["file"])
+# the lane by:
+#   - the canonical lane name (e.g. "brainstem")
+#   - an AshatOS-style prefixed name (e.g. "ashat-brainstem")
+#   - the configured GGUF filename for the lane (LANE_CONFIG[Lane.BRAINSTEM]["file"])
 #
 # Populated AFTER ``LANE_CONFIG`` is built so the GGUF filename aliases
 # always match what ``lane_cfg(lane)["file"]`` returns, regardless of
 # whether env overrides are present at import time.
-MICROBRAIN_ALIASES: set[str] = set()
-MAINBRAIN_ALIASES: set[str] = set()
+BRAINSTEM_ALIASES: set[str] = set()
 
 
 # Per-lane configuration. Kept here (not on the Lane enum) because the enum
 # must remain stdlib-pure. Read on each boot from env vars; defaults match
-# the values previously hard-coded in app.py.
+# the new BrainStem model.
 def _build_lane_config() -> dict[Lane, dict[str, Any]]:
     return {
-        Lane.MICROBRAIN: {
-            "label": "MicroBrain",
-            "repo": os.getenv("MICRO_MODEL_REPO", "stressthismess/LFM2.5-Q6_K"),
-            "file": os.getenv("MICRO_MODEL_FILE", "LFM2.5-350M-Q6_K.gguf"),
-            "ctx": int(os.getenv("MICRO_CTX", "4096")),
-            "max_tokens": int(os.getenv("MICRO_MAX_TOKENS", "4096")),
-            "gpu_duration": int(os.getenv("MICRO_GPU_DURATION", "60")),
-            "max_messages": 32,
-            "max_body_bytes": 524_288,
-            "model_path": "",
-        },
-        Lane.MAINBRAIN: {
-            "label": "MainBrain",
-            "repo": os.getenv("MAIN_MODEL_REPO", "stressthismess/LFM2.5-Q6_K"),
-            "file": os.getenv("MAIN_MODEL_FILE", "LFM2.5-1.2B-Instruct-Q6_K.gguf"),
-            "ctx": int(os.getenv("MAIN_CTX", "8192")),
-            "max_tokens": int(os.getenv("MAIN_MAX_TOKENS", "8192")),
-            "gpu_duration": int(os.getenv("MAIN_GPU_DURATION", "120")),
+        Lane.BRAINSTEM: {
+            "label": "BrainStem",
+            "repo": os.getenv(
+                "BRAINSTEM_MODEL_REPO",
+                "buckets/stressthismess/ashatos-storage",
+            ),
+            "file": os.getenv(
+                "BRAINSTEM_MODEL_FILE",
+                "LFM2.5-1.2B-Instruct-Q8_0.gguf",
+            ),
+            "ctx": int(os.getenv("BRAINSTEM_CTX", "8192")),
+            "max_tokens": int(os.getenv("BRAINSTEM_MAX_TOKENS", "8192")),
+            "gpu_duration": int(os.getenv("BRAINSTEM_GPU_DURATION", "120")),
             "max_messages": 64,
             "max_body_bytes": 1_048_576,
             "model_path": "",
@@ -80,24 +73,16 @@ def _build_lane_config() -> dict[Lane, dict[str, Any]]:
 # (i.e. from the Hugging Face Space's Settings → Secrets).
 LANE_CONFIG: dict[Lane, dict[str, Any]] = _build_lane_config()
 
-# Populate alias sets now that LANE_CONFIG exists, so env-overridden
+# Populate alias set now that LANE_CONFIG exists, so env-overridden
 # filenames are picked up.
-MICROBRAIN_ALIASES.update({
-    "microbrain",
-    "ashat-microbrain",
-    "LFM2.5 350M",
-    "LFM2.5-350M",
-    LANE_CONFIG[Lane.MICROBRAIN]["file"],
-})
-MAINBRAIN_ALIASES.update({
-    "mainbrain",
-    "ashat-mainbrain",
+BRAINSTEM_ALIASES.update({
+    "brainstem",
+    "ashat-brainstem",
     "LFM2.5 1.2B Instruct",
     "LFM2.5-1.2B",
-    LANE_CONFIG[Lane.MAINBRAIN]["file"],
+    LANE_CONFIG[Lane.BRAINSTEM]["file"],
 })
-MICROBRAIN_ALIASES.discard("")
-MAINBRAIN_ALIASES.discard("")
+BRAINSTEM_ALIASES.discard("")
 
 
 def lane_cfg(lane: Lane) -> dict[str, Any]:
