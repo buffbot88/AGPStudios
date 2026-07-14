@@ -27,9 +27,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from huggingface_hub import hf_hub_download
+import requests
 
-import requests as _requests
+from huggingface_hub import hf_hub_download
 
 from domain import Lane, lane_cfg
 from llama_stderr_parser import LlamaServerStderrParser
@@ -390,8 +390,6 @@ class BackendLauncher:
     def _wait_for_health(
         self, port: int, timeout: float = 30.0, interval: float = 0.25,
     ) -> bool:
-        # Lazy import — requests is heavy.
-        import requests
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:
