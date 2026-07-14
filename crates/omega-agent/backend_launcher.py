@@ -29,6 +29,8 @@ from typing import Callable
 
 from huggingface_hub import hf_hub_download
 
+import requests as _requests
+
 from domain import Lane, lane_cfg
 from llama_stderr_parser import LlamaServerStderrParser
 from run_errors import (
@@ -130,13 +132,21 @@ class BackendLauncher:
         # Cached path wins.
         if cfg["model_path"] and os.path.isfile(cfg["model_path"]):
             return cfg["model_path"]
-        # Download from HF Hub.
+
         token = os.getenv("HF_TOKEN") or None
-        _log.info("%s: downloading %s/%s ...", lane.value, cfg["repo"], cfg["file"])
+        repo = cfg["repo"]
+        filename = cfg["file"]
+
+        # Check if this is a storage bucket (path starts with "buckets/")
+        if repo.startswith("buckets/"):
+            return self._ensure_bucket_model(lane, repo, filename, token)
+
+        # Standard HF Hub model download.
+        _log.info("%s: downloading %s/%s ...", lane.value, repo, filename)
         try:
             path = hf_hub_download(
-                repo_id=cfg["repo"],
-                filename=cfg["file"],
+                repo_id=repo,
+                filename=filename,
                 revision=os.getenv("MODEL_REVISION", "main"),
                 token=token,
             )
@@ -147,6 +157,86 @@ class BackendLauncher:
         cfg["model_path"] = path
         _log.info("%s: downloaded to %s", lane.value, path)
         return path
+
+    def _ensure_bucket_model(
+        self, lane: Lane, repo: str, filename: str, token: str | None,
+    ) -> str:
+        """Download a GGUF from a HuggingFace storage bucket.
+
+        Storage buckets have a different URL pattern than model repos:
+        ``https://huggingface.co/buckets/{owner}/{bucket}/resolve/{filename}``
+
+        The ``buckets/`` prefix in ``repo`` identifies the bucket path.
+        Example repo: ``buckets/stressthismess/ashatos-storage``
+        """
+        # Strip "buckets/" prefix to get the bucket identifier
+        bucket_id = repo[len("buckets/"):]  # e.g. "stressthismess/ashatos-storage"
+        bucket_url = (
+            f"https://huggingface.co/buckets/{bucket_id}/resolve/{filename}"
+        )
+
+        # Cache path: same cache dir used for model repos
+        cache_dir = Path.home() / ".cache" / "ashatos" / "models"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        dest = cache_dir / filename
+
+        if dest.is_file() and dest.stat().st_size > 0:
+            _log.info("%s: bucket model already cached at %s", lane.value, dest)
+            cfg = lane_cfg(lane)
+            cfg["model_path"] = str(dest)
+            return str(dest)
+
+        _log.info(
+            "%s: downloading from bucket %s ...", lane.value, bucket_url,
+        )
+        headers = {}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+
+        try:
+            resp = _requests.get(
+                bucket_url,
+                headers=headers,
+                timeout=600,
+                stream=True,
+            )
+            resp.raise_for_status()
+
+            # Stream to disk with progress
+            total = int(resp.headers.get("content-length", 0))
+            downloaded = 0
+            with open(dest, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total and downloaded % (10 * 1024 * 1024) == 0:
+                            _log.info(
+                                "%s: downloaded %d/%d MB (%.0f%%)",
+                                lane.value,
+                                downloaded // (1024 * 1024),
+                                total // (1024 * 1024),
+                                downloaded / total * 100,
+                            )
+        except Exception as exc:
+            # Clean up partial download on failure
+            if dest.exists():
+                try:
+                    dest.unlink()
+                except OSError:
+                    pass
+            raise ModelDownloadError(
+                f"{lane.value}: bucket download failed: "
+                f"{type(exc).__name__}: {exc}"
+            )
+
+        _log.info(
+            "%s: downloaded from bucket to %s (%d MB)",
+            lane.value, dest, dest.stat().st_size // (1024 * 1024),
+        )
+        cfg = lane_cfg(lane)
+        cfg["model_path"] = str(dest)
+        return str(dest)
 
     def launch(
         self, lane: Lane, *, gpu_offload_requested: bool = True,

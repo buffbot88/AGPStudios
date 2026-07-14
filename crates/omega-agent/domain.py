@@ -51,6 +51,8 @@ def _build_lane_config() -> dict[Lane, dict[str, Any]]:
     return {
         Lane.BRAINSTEM: {
             "label": "BrainStem",
+            # Storage bucket path: ``buckets/{owner}/{bucket}``
+            # Download URL: https://huggingface.co/buckets/{owner}/{bucket}/resolve/{file}
             "repo": os.getenv(
                 "BRAINSTEM_MODEL_REPO",
                 "buckets/stressthismess/ashatos-storage",
