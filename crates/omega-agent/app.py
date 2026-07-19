@@ -914,38 +914,71 @@ with demo:
 # wrapped by Gradio's UI at `/`. `gr.mount_gradio_app` is the canonical
 # way to make a Gradio Blocks instance live inside an existing
 # FastAPI app — our `_app`'s routes stay, plus the dashboard is at /.
-app = gr.mount_gradio_app(_app, demo, path="/")
-
 _log.info(
-    "FastAPI routes: /, /v1/chat/completions, /v1/models, /health, "
-    "/api/public_status, /api/public_metrics, /api/dashboard_html "
-    "(Gradio mount at / for sdk:gradio + ZeroGPU)"
+    "FastAPI routes owned by `_app`: /, /v1/chat/completions, /v1/models, "
+    "/health, /api/public_status, /api/public_metrics, /api/dashboard_html "
+    "(grafted onto Gradio demo.app in __main__)"
 )
+# `app` is the module-level public surface the smoke harness imports as
+# `python -m uvicorn app:app`. We expose `_app` (the pure-FastAPI app we
+# built up in section 12) directly here — NOT a `gr.mount_gradio_app()`
+# result. On sdk:gradio + zero-a10g the ZeroGPU supervisor intercepts
+# Gradio's `demo.launch()` and binds port 7860 itself; constructing a
+# mount_gradio_app and binding it via uvicorn.run() always collapses to
+# `Errno 98 address already in use`. The actual boot shape we use on HF
+# (in __main__ below) is: `demo.launch()` port-hunts past 7860, then
+# we graft `_app.routes` onto `demo.app.routes`.
+app = _app
 
 
 if __name__ == "__main__":
-    # Boot entry. We unconditionally start uvicorn here because HF
-    # Spaces runs `python app.py` directly (no magical Gradio launcher
-    # that introspects and calls demo.launch() automatically) — without
-    # this block the Python process exits cleanly without ever binding
-    # a port and HF marks the Space RUNTIME_ERROR.
+    # Boot entry. We hand the listener to Gradio's `demo.launch()` instead
+    # of calling `uvicorn.run()` directly. Why:
     #
-    # On HF Spaces the auth/routing proxy typically binds port 7860
-    # itself and tells the user app to bind to a different port via
-    # the GRADIO_SERVER_PORT (or PORT) env var. Hardcoding 7860 in
-    # that case causes `Errno 98 address already in use`. Defaulting to
-    # 7860 only when neither env var is set is the canonical Gradio
-    # boot pattern.
-    import uvicorn
-    _port = int(
-        os.environ.get("GRADIO_SERVER_PORT")
-        or os.environ.get("PORT")
-        or 7860
-    )
+    #   - HF Spaces with `sdk: gradio` on ZeroGPU has an auth/routing
+    #     supervisor that intercepts Gradio's `demo.launch()` and binds
+    #     its OWN listener on port 7860 *before* our app code runs.
+    #   - The supervisor port-hunts and signals the actual port back to
+    #     ZeroGPU — our app just has to `demo.launch()` and the right
+    #     port gets picked.
+    #   - Calling `uvicorn.run()` ourselves on 7860 collides with the
+    #     supervisor's bind (live Space repeatedly showed
+    #     `Errno 98 address already in use` regardless of
+    #     GRADIO_SERVER_PORT/PORT env reads — both unset on this Space).
+    #   - Calling `uvicorn.run()` on a different port we picked has the
+    #     same problem in reverse: ZeroGPU's proxy still forwards to 7860
+    #     and never reaches us.
+    #
+    # So: let Gradio own the listener. Then graft our pure-FastAPI
+    # routes onto Gradio's internal FastAPI so /health, /v1/*, /api/*
+    # are served from the same listener Gradio is launching.
+    _log.info("Boot: demo.launch(server_name=0.0.0.0, prevent_thread_lock=True)")
+    demo.launch(server_name="0.0.0.0", prevent_thread_lock=True)
+
+    # Graft our pure-FastAPI routes onto Gradio's internal FastAPI app.
+    # Skip any mounts/Route paths that already exist on Gradio's app so
+    # we don't duplicate a path that may already be reserved (e.g. if
+    # Gradio expects /login, we shouldn't accidentally clobber it).
+    _existing_paths = {getattr(r, "path", None) for r in demo.app.routes}
+    _merged = 0
+    for route in _app.routes:
+        _rpath = getattr(route, "path", None)
+        if _rpath and _rpath in _existing_paths:
+            continue
+        demo.app.routes.append(route)
+        _merged += 1
     _log.info(
-        "Starting uvicorn host=0.0.0.0 port=%s (GRADIO_SERVER_PORT=%s PORT=%s)",
-        _port,
-        os.environ.get("GRADIO_SERVER_PORT"),
-        os.environ.get("PORT"),
+        "Merged %d FastAPI routes into Gradio demo.app; main thread parking.",
+        _merged,
     )
-    uvicorn.run(app, host="0.0.0.0", port=_port)
+
+    # `demo.launch(prevent_thread_lock=True)` unblocks immediately and
+    # Gradio's uvicorn runs in a background thread. Without keeping the
+    # main thread alive the HF worker container sees Python exit cleanly
+    # with no live listeners and HF marks the Space RUNTIME_ERROR
+    # ("Exit code: 0. Reason: "). The 1-hour sleep loop keeps the main
+    # thread parked without burning CPU; HF sends SIGTERM on shutdown and
+    # the loop dies cleanly.
+    import time
+    while True:
+        time.sleep(3600)
