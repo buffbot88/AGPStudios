@@ -3,4 +3,7 @@ uvicorn>=0.34.0
 huggingface_hub>=0.27
 requests>=2.31.0
 spaces>=0.30
-gradio==4.44.0
+# gradio is NOT pinned here — HF Spaces auto-injects
+# `gradio[oauth,mcp]==6.20.0` for sdk:gradio and conflicts with our
+# explicit pin. Letting pip negotiate the version avoids a
+# user-totalled base layer where the [oauth,mcp] extras get dropped.
