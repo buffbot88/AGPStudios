@@ -957,52 +957,25 @@ except Exception as exc:
 # Without this lazy-build escape, the only top-level binding HF sees is
 # `app` -- the right thing. With it, every /api/* request hits our
 # FastAPI route directly on port 7860 instead of Gradio's auth-shim.
-# Build Gradio in its OWN sub-app. The earlier `gr.mount_gradio_app(app=_fastapi_app, ...)`
-# registered Gradio's Auth/queue/lifespan ASGI middlewares GLOBALLY on _fastapi_app
-# which meant they short-circuited every /api/* /v1/* request with the auth shim
-# BEFORE Starlette's explicit-route matching could fire. Mounting Gradio on a
-# separate FastAPI instance confines those middlewares to /ui/* sub-paths only.
-_gradio_subapp = FastAPI()
-_gradio_subapp = gr.mount_gradio_app(
-    app=_gradio_subapp,
+# Single-mount pattern. `gr.mount_gradio_app(app=_fastapi_app, ...)` mutates
+# _fastapi_app IN PLACE and returns the same FastAPI object, so the explicit
+# `app = _fastapi_app` assignment below exposes our mounted-asgi app to HF
+# Spaces' ASGI dispatch. Gradio's UI / WS / queue live at `/` (it owns the
+# landing); our decorator routes (/health, /v1/*, /api/*) co-exist with
+# Gradio's Mount -- Starlette walks `_fastapi_app.routes` in order and explicit
+# APIRoutes match before the catch-all Gradio Mount on unrelated paths.
+#
+# The `_build_gradio_blocks()` builder runs ONLY at the mount call below, so
+# the resulting `gr.Blocks` instance never enters module globals(). That keeps
+# HF Spaces' static type-scanner from finding a module-level Blocks instance
+# and launching its own parallel Gradio runner (with HF-injected auth) which
+# would race our uvicorn for port 7860 and short-circuit `/api/*` responses
+# with the Login / TypeError: fetch failed auth shim.
+app = gr.mount_gradio_app(
+    app=_fastapi_app,
     blocks=_build_gradio_blocks(),
     path="/",
 )
-# Sub-mount Gradio's app under /ui/ on the root. Starlette's Mount dispatches
-# only requests whose path begins with /ui/ to the sub-app -- everything else
-# stays on _fastapi_app's explicit routes (and is therefore Gradio-middleware-free).
-_fastapi_app.mount("/ui", _gradio_subapp)
-
-# Module-level `app` for HF Spaces' ASGI dispatch. Note: this MUST be
-# `_fastapi_app` (not the sub-app) so all our /v1/* /api/* /health routes are
-# reachable from the ASGI dispatch root. The Gradio UI lives under /ui/.
-app = _fastapi_app
-
-
-# Tiny HTML landing on `/` so the Space root shows something useful now that
-# Gradio is no longer served at the top level (it's behind /ui/ instead).
-@_fastapi_app.get("/", response_class=HTMLResponse)
-async def http_landing() -> HTMLResponse:
-    return HTMLResponse(
-        content=(
-            "<!doctype html>"
-            "<html><head><title>AshatOS Neural Host</title></head>"
-            "<body style='font-family: sans-serif; max-width: 720px; margin: 40px auto; "
-            "padding: 24px;'>"
-            "<h1 style='color:#0EA5E9;'>AshatOS Neural Host</h1>"
-            "<p>The interactive Gradio dashboard now lives under "
-            "<a href='/ui/'>/ui/</a>.</p>"
-            "<h2>Public HTTP endpoints</h2>"
-            "<ul>"
-            "<li><code>GET /health</code> &mdash; liveness + readiness</li>"
-            "<li><code>GET /v1/models</code> &mdash; OpenAI-compatible model list</li>"
-            "<li><code>POST /v1/chat/completions</code> &mdash; OpenAI-compatible inference</li>"
-            "<li><code>GET /api/public_status</code> &mdash; per-lane status + diagnostics</li>"
-            "<li><code>GET /api/public_metrics</code> &mdash; sanitized metrics &amp; events</li>"
-            "</ul>"
-            "</body></html>"
-        ),
-    )
 
 
 
@@ -1035,25 +1008,37 @@ _log.info(
     "/api/public_status, /api/public_metrics; Gradio UI at /ui/"
 )
 
-# Hugging Face Spaces has two runner modes for app.py. If both ASGI and
-# SCRIPT modes fire, exactly one uvicorn wins port 7860; the other raises
-# OSError 98. We MUST NOT exit non-zero in that case -- the winning uvicorn
-# is serving correctly and a non-zero container exit would trip HF's
-# FAIL state regardless. Swallow the OSError and hold the script-mode
-# process alive so HF keeps the Space RUNNING until it restarts the
-# container for us. HF sends SIGTERM/SIGKILL on restart (never SIGINT) so
-# we leave Ctrl+C untouched for local dev.
+# Hugging Face Spaces (ZeroGPU / CPU) prefers ASGI dispatch -- it loads our
+# `app` symbol and runs it through its own uvicorn on port 7860. Running a
+# SECOND uvicorn in the `__main__` block on HF Spaces triggers the
+# `[Errno 98] address-already-in-use` bind race, which HF surfaces to the
+# operator as a `Runtime Error` and a 503 from the proxy -- the Space then
+# sits on "Starting" or "Runtime Error" indefinitely. On HF Spaces we MUST
+# NOT launch a second uvicorn. Local dev (`python app.py`) does want a
+# uvicorn here. The SPACE_ID / HF_TOKEN env vars are reliably present on
+# HF Spaces and absent on dev machines; the guard below makes both work.
+_IS_HF_SPACE = bool(
+    os.getenv("SPACE_ID")
+    or os.getenv("HF_TOKEN")
+    or os.getenv("HUGGINGFACE_API_TOKEN")
+)
+
 if __name__ == "__main__":
-    import time as _time
-    import uvicorn
-    try:
-        uvicorn.run(app, host="0.0.0.0", port=7860)
-    except OSError as exc:
+    if _IS_HF_SPACE:
+        # HF Spaces uses ASGI dispatch against the module-level `app`.
+        # Reaching this branch means HF launched us via `python app.py`
+        # which is rare on Spaces (SCRIPT mode) but if it happens we must
+        # NOT exit, since a non-zero exit trips HF's `Runtime Error` state.
+        # Sleep forever so HF's process supervisor keeps us healthy.
+        import time as _time
         _log.info(
-            "script-mode could not bind 7860 (%s) -- HF Spaces' ASGI-mode "
-            "uvicorn is already serving the same mounted app; sleeping "
-            "to keep the container healthy until HF restarts us.",
-            exc,
+            "HF Spaces detected via SPACE_ID/HF_TOKEN -- skipping __main__ "
+            "uvicorn (HF's ASGI dispatch is already serving `app` on 7860)."
         )
         while True:
             _time.sleep(86400)  # 1 day per iteration; safe on Windows (no Sleep() DWORD overflow)
+    else:
+        # Local dev. Bind the standard HF Spaces port so curl probes work
+        # the same way they will against the deployed Space.
+        import uvicorn
+        uvicorn.run(app, host="0.0.0.0", port=7860)
