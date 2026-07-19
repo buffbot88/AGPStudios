@@ -40,7 +40,7 @@ from typing import Any
 
 import gradio as gr
 from fastapi import FastAPI, Request as FastRequest
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from backend_launcher import BackendLauncher, LiveBackend
 from completion_client import CompletionClient, CompletionResult
@@ -957,11 +957,54 @@ except Exception as exc:
 # Without this lazy-build escape, the only top-level binding HF sees is
 # `app` -- the right thing. With it, every /api/* request hits our
 # FastAPI route directly on port 7860 instead of Gradio's auth-shim.
-app = gr.mount_gradio_app(
-    app=_fastapi_app,
+# Build Gradio in its OWN sub-app. The earlier `gr.mount_gradio_app(app=_fastapi_app, ...)`
+# registered Gradio's Auth/queue/lifespan ASGI middlewares GLOBALLY on _fastapi_app
+# which meant they short-circuited every /api/* /v1/* request with the auth shim
+# BEFORE Starlette's explicit-route matching could fire. Mounting Gradio on a
+# separate FastAPI instance confines those middlewares to /ui/* sub-paths only.
+_gradio_subapp = FastAPI()
+_gradio_subapp = gr.mount_gradio_app(
+    app=_gradio_subapp,
     blocks=_build_gradio_blocks(),
     path="/",
 )
+# Sub-mount Gradio's app under /ui/ on the root. Starlette's Mount dispatches
+# only requests whose path begins with /ui/ to the sub-app -- everything else
+# stays on _fastapi_app's explicit routes (and is therefore Gradio-middleware-free).
+_fastapi_app.mount("/ui", _gradio_subapp)
+
+# Module-level `app` for HF Spaces' ASGI dispatch. Note: this MUST be
+# `_fastapi_app` (not the sub-app) so all our /v1/* /api/* /health routes are
+# reachable from the ASGI dispatch root. The Gradio UI lives under /ui/.
+app = _fastapi_app
+
+
+# Tiny HTML landing on `/` so the Space root shows something useful now that
+# Gradio is no longer served at the top level (it's behind /ui/ instead).
+@_fastapi_app.get("/", response_class=HTMLResponse)
+async def http_landing() -> HTMLResponse:
+    return HTMLResponse(
+        content=(
+            "<!doctype html>"
+            "<html><head><title>AshatOS Neural Host</title></head>"
+            "<body style='font-family: sans-serif; max-width: 720px; margin: 40px auto; "
+            "padding: 24px;'>"
+            "<h1 style='color:#0EA5E9;'>AshatOS Neural Host</h1>"
+            "<p>The interactive Gradio dashboard now lives under "
+            "<a href='/ui/'>/ui/</a>.</p>"
+            "<h2>Public HTTP endpoints</h2>"
+            "<ul>"
+            "<li><code>GET /health</code> &mdash; liveness + readiness</li>"
+            "<li><code>GET /v1/models</code> &mdash; OpenAI-compatible model list</li>"
+            "<li><code>POST /v1/chat/completions</code> &mdash; OpenAI-compatible inference</li>"
+            "<li><code>GET /api/public_status</code> &mdash; per-lane status + diagnostics</li>"
+            "<li><code>GET /api/public_metrics</code> &mdash; sanitized metrics &amp; events</li>"
+            "</ul>"
+            "</body></html>"
+        ),
+    )
+
+
 
 # Defensive verification (cheap, future-proof against Gradio's mount
 # behaviour silently stripping pre-existing routes). Both `APIRoute` and
@@ -988,8 +1031,8 @@ if not any(
     )
 
 _log.info(
-    "FastAPI routes mounted via gr.mount_gradio_app: /v1/chat/completions, "
-    "/v1/models, /health, /api/public_status, /api/public_metrics"
+    "FastAPI routes: /, /v1/chat/completions, /v1/models, /health, "
+    "/api/public_status, /api/public_metrics; Gradio UI at /ui/"
 )
 
 # Hugging Face Spaces has two runner modes for app.py. If both ASGI and
