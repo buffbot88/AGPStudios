@@ -907,77 +907,69 @@ except Exception as exc:
 
 _gradio_blocks.queue(default_concurrency_limit=1, max_size=QUEUE_LIMIT)
 
-# Two static-fingerprint lines are required to defeat HF Spaces' naive AST
-# scanner, which dispatches either the Gradio runner OR the uvicorn runner
-# (never both). Without both defences the live Space returns 503/404:
+# ONE FastAPI signpost for HF Spaces' static scanner AND our ASGI/uvicorn serving.
+# `gr.mount_gradio_app(_fastapi_app, ...)` mutates `_fastapi_app` IN PLACE
+# (verified empirically: `gr.mount_gradio_app(...) is _fastapi_app` is True).
+# The reassignment below points `app` at the routed, Gradio-mounted FastAPI.
 #
-# (1) The Blocks object above is named ``_gradio_blocks`` \u2014 NOT ``demo``
-#     or ``iface``. The earlier ``_demo`` name matched HF Spaces' partial
-#     Gradio-detector heuristics, so the Gradio runner was auto-dispatched
-#     alongside uvicorn and both tried to bind 0.0.0.0:7860 (address-in-use).
-#     Renaming the Blocks breaks that auto-dispatch path.
+# Why no separate `app = FastAPI()` placeholder line: the previous version
+# (commit 3a4bf37) deliberately added one as an HF Spaces AST fingerprint so
+# the static detector would match `app` and dispatch ASGI uvicorn. In
+# practice this BACKFIRED on the live Space -- HF's static detector matched
+# the placeholder, dispatched an ASGI uvicorn against the EMPTY FastAPI
+# snapshot (no /health, no /v1/*, no /api/* routes), and grabbed port 7860
+# first. Our `__main__` uvicorn then crashed with Errno 98 and exited
+# non-zero, taking the Space down even though the winning ASGI uvicorn was
+# serving -- the wrong app.
 #
-# (2) The literal ``app = FastAPI()`` two lines below IS the explicit
-#     uvicorn fingerprint the AST scanner looks for. Without it, the
-#     ``app = gr.mount_gradio_app(...)`` assignment below looks like an
-#     opaque function call to the static scanner and gets categorised as
-#     "neither", causing HF Spaces to fall back to running the renamed
-#     ``_gradio_blocks`` object directly via Gradio's launcher (which gives
-#     us a Gradio UI but NO custom FastAPI routes \u2014 the 404 state).
-#
-# DO NOT remove either line; they are layered defences, not redundant.
-app = FastAPI()  # noqa: F841 \u2014 intentional AST fingerprint for HF Spaces
-
-# Mount the Gradio UI inside the same FastAPI app so our custom routes
-# (``/v1/chat/completions``, ``/v1/models``, ``/health``,
-# ``/api/public_status``, ``/api/public_metrics``) share one port with the
-# Gradio UI / WS / queue. ``gr.mount_gradio_app`` returns a real,
-# immediately-servable FastAPI app with the Gradio UI at ``path="/"``
-# above and our explicit routes (/v1/*, /api/*, /health) preserved on
-# the underlying FastAPI app (literal paths match before the Gradio
-# Mount fallback). This is the supported, documented Gradio 6.x pattern
-# for serving custom FastAPI routes alongside a Gradio Blocks app.
+# Without the placeholder, HF Spaces' behaviour is one of two scenarios,
+# both of which this file serves correctly:
+#   (a) ASGI mode: HF reads `app` and dispatches uvicorn against the
+#       mounted, routed FastAPI. Our `__main__` uvicorn then loses the
+#       bind race; we swallow the OSError below and sleep so the
+#       container stays RUNNING while ASGI mode serves.
+#   (b) SCRIPT mode: HF falls back to plain `python app.py`. Our
+#       `__main__` block binds 7860 and serves the same mounted FastAPI.
 app = gr.mount_gradio_app(
     app=_fastapi_app,
     blocks=_gradio_blocks,
     path="/",
 )
 
-# Defensive verification: in a future Gradio release that silently strips
-# pre-existing routes on mount, the line below would trip an ImportError
-# at boot instead of a runtime 404 on the live Space. Cheap, worth keeping.
-# Class-name check (``APIRoute``/``Route``) is forward-compatible with
-# any FastAPI/Starlette route-type drift; it covers the only route kinds
-# ``@_fastapi_app.get/post`` produces.
+# Defensive verification (cheap, future-proof against Gradio's mount
+# behaviour silently stripping pre-existing routes). Both `APIRoute` and
+# `Route` (Starlette) names appear on `app.routes` after mount -- the
+# former for our `@_fastapi_app.get/post` decorators, the latter for
+# FastAPI's auto-docs routes at `/docs`, `/openapi.json`, etc.
 assert any(
     r.__class__.__name__ in ("APIRoute", "Route")
     and getattr(r, "path", None) == "/health"
     for r in app.routes
-), "gr.mount_gradio_app stripped the /health route \u2014 FastAPI mount is broken"
+), "gr.mount_gradio_app stripped the /health route -- FastAPI mount is broken"
 
-# Bind an alias for explicit ``app:app`` uvicorn targeting.
-_FASTAPI_EXPORT = app  # FastAPI instance returned by gr.mount_gradio_app
 _log.info(
     "FastAPI routes mounted via gr.mount_gradio_app: /v1/chat/completions, "
     "/v1/models, /health, /api/public_status, /api/public_metrics"
 )
 
-# Hugging Face Spaces has two runner modes for app.py and selecting the
-# wrong one produces a silent 503:
-#
-#   * ASGI mode: HF detects `app = FastAPI(...)` at the module level and
-#     dispatches `uvicorn app:app` against it. Our ``__main__`` block is
-#     bypassed (different execution path), HF's uvicorn handles binding.
-#
-#   * SCRIPT mode: HF invokes plain `python app.py`, which exits
-#     cleanly with code 0 if no blocking call is left on the stack.
-#     The Space then reports "Exit code 0; Container logs: Fetching
-#     error logs..." and every endpoint returns 503.
-#
-# Provide a blocking uvicorn call so SCRIPT mode keeps the process alive.
-# If HF's ASGI mode already bound 7860 from a separate uvicorn process,
-# ours will raise OSError \u2014 we let it propagate; HF's runner continues
-# serving independently regardless of our exit code.
+# Hugging Face Spaces has two runner modes for app.py. If both ASGI and
+# SCRIPT modes fire, exactly one uvicorn wins port 7860; the other raises
+# OSError 98. We MUST NOT exit non-zero in that case -- the winning uvicorn
+# is serving correctly and a non-zero container exit would trip HF's
+# FAIL state regardless. Swallow the OSError and hold the script-mode
+# process alive so HF keeps the Space RUNNING until it restarts the
+# container for us. HF sends SIGTERM/SIGKILL on restart (never SIGINT) so
+# we leave Ctrl+C untouched for local dev.
 if __name__ == "__main__":
+    import time as _time
     import uvicorn
-    uvicorn.run(_FASTAPI_EXPORT, host="0.0.0.0", port=7860)
+    try:
+        uvicorn.run(app, host="0.0.0.0", port=7860)
+    except OSError as exc:
+        _log.info(
+            "script-mode could not bind 7860 (%s) -- HF Spaces' ASGI-mode "
+            "uvicorn is already serving the same mounted app; sleeping "
+            "to keep the container healthy until HF restarts us.",
+            exc,
+        )
+        _time.sleep(2**31)  # ~68 years; effectively forever
