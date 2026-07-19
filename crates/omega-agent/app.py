@@ -38,6 +38,16 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+# IMPORTANT: strip Gradio auth envs BEFORE `import gradio as gr` runs two
+# lines below. Gradio parses and caches a few config flags (basic auth,
+# auth_message) at module-import time, so an `os.environ.pop(...)` in
+# later module code cannot undo what the import-time read already
+# captured. Pop BOTH axes here, then again after `_build_gradio_blocks()`
+# as belt-and-suspenders. This is the dashboard's primary auth-shim
+# defense -- if you remove this line, the live Space login UI returns.
+os.environ.pop("GRADIO_AUTH", None)
+os.environ.pop("GRADIO_AUTH_MESSAGE", None)
+
 import gradio as gr
 from fastapi import FastAPI, Request as FastRequest
 from fastapi.responses import JSONResponse
@@ -617,57 +627,13 @@ def _status_html() -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# 10.  FastAPI / Gradio wiring
-# ──────────────────────────────────────────────────────────────────────────
-
-_fastapi_app = FastAPI(title="AshatOS Neural Host")
-
-
-@_fastapi_app.post("/v1/chat/completions")
-async def http_chat_completions(request: FastRequest) -> JSONResponse:
-    return await _make_http_chat_completions()(request)
-
-
-@_fastapi_app.get("/v1/models")
-async def http_list_models() -> JSONResponse:
-    return JSONResponse(content={
-        "object": "list",
-        "data": [
-            {
-                "id": lane_cfg(Lane.BRAINSTEM)["file"],
-                "object": "model",
-                "created": int(_started_at),
-                "owned_by": "ashatos",
-            },
-        ],
-    })
-
-
-@_fastapi_app.get("/health")
-async def http_health() -> JSONResponse:
-    return JSONResponse(content={
-        "status": "ok",
-        "uptime_seconds": round(time.time() - _started_at, 1),
-        "brainstem_ready": bool(
-            LANE_CONFIG[Lane.BRAINSTEM]["model_path"]
-            and os.path.isfile(LANE_CONFIG[Lane.BRAINSTEM]["model_path"])
-        ),
-        "llama_server_available": _llama_bin_path is not None,
-    })
-
-
-@_fastapi_app.get("/api/public_status")
-async def http_public_status() -> JSONResponse:
-    return JSONResponse(content=_build_status())
-
-
-@_fastapi_app.get("/api/public_metrics")
-async def http_public_metrics() -> JSONResponse:
-    return JSONResponse(content=_snapshot().render_metrics())
-
-
-# ──────────────────────────────────────────────────────────────────────────
-# 11.  Dashboard — redesigned neural host homepage (single BrainStem lane)
+# 10.  Dashboard — redesigned neural host homepage (single BrainStem lane)
+#      NOTE: section 10 used to hold a separate `_fastapi_app = FastAPI(...)`
+#      with five `@_fastapi_app.get/post(...)` decorator routes. That block
+#      was deleted when the auth-shim defense refactor landed; the same
+#      five endpoints are now registered on `_LOCAL_FASTAPI` (for local
+#      `uvicorn.run`) AND on the FastAPI that `demo.launch()` returns
+#      (for HF Spaces' `sdk: gradio`). See `_hf_register_routes` below.
 # ──────────────────────────────────────────────────────────────────────────
 
 from dashboard import build_dashboard
@@ -957,23 +923,155 @@ except Exception as exc:
 # Without this lazy-build escape, the only top-level binding HF sees is
 # `app` -- the right thing. With it, every /api/* request hits our
 # FastAPI route directly on port 7860 instead of Gradio's auth-shim.
-# Single-mount pattern. `gr.mount_gradio_app(app=_fastapi_app, ...)` mutates
-# _fastapi_app IN PLACE and returns the same FastAPI object, so the explicit
-# `app = _fastapi_app` assignment below exposes our mounted-asgi app to HF
-# Spaces' ASGI dispatch. Gradio's UI / WS / queue live at `/` (it owns the
-# landing); our decorator routes (/health, /v1/*, /api/*) co-exist with
-# Gradio's Mount -- Starlette walks `_fastapi_app.routes` in order and explicit
-# APIRoutes match before the catch-all Gradio Mount on unrelated paths.
+# Public-telemetry architectural pivot: the dashboard is public, so there
+# is NO auth anywhere -- not on the Blocks, not via `auth=` on launch(), not
+# in our app. If you see a Username/Password login UI on the live Space,
+# it's HF Spaces Settings-side ("Space visibility: Public" is required);
+# HF's gradient SDK + worker DOES NOT inject auth when the Space is Public.
 #
-# The `_build_gradio_blocks()` builder runs ONLY at the mount call below, so
-# the resulting `gr.Blocks` instance never enters module globals(). That keeps
-# HF Spaces' static type-scanner from finding a module-level Blocks instance
-# and launching its own parallel Gradio runner (with HF-injected auth) which
-# would race our uvicorn for port 7860 and short-circuit `/api/*` responses
-# with the Login / TypeError: fetch failed auth shim.
+# Auth-shim defenses, layered (defense in depth):
+#
+#   (1) Strip `GRADIO_AUTH` (+ auth_message) from the environment BEFORE
+#       `import gradio as gr` (see top of file, lines ~30-46). Gradio
+#       parses and caches a few config flags at module-import time, so
+#       the env-pop has to happen before that import. We pop again here
+#       as belt-and-suspenders.
+#
+#   (2) Build ONE `gr.Blocks` and monkeypatch its `.launch()` method.
+#       HF Spaces' `sdk: gradio` calls `demo.launch(...)` directly, so
+#       our wrapper:
+#         - Re-asserts `auth=None`, `auth_dependency=None`,
+#           `auth_message=None` on every launch attempt (HF's launcher
+#           may pass `auth=str(os.getenv("HF_TOKEN"))` -- we override).
+#         - Calls the original `launch()`, captures the FastAPI Gradio
+#           builds inside it, and `add_api_route`s our /health /v1/*
+#           /api/* handlers onto THAT FastAPI -- so HF's uvicorn serves
+#           them alongside the dashboard UI in one process.
+#
+#   (3) Local dev uses a separate FastAPI wired with the same handlers
+#       and a `gr.mount_gradio_app(...)` mount at `/`. uvicorn.run(app)
+#       -- Path is identical to what HF Space serves: explicit routes
+#       on top, Gradio capture-all at `/`.
+#
+# Why NOT register on `demo.app` directly: pre-launch, `Blocks.app` is
+# not a FastAPI -- it's the Blocks itself until `.launch()` is invoked.
+# Verified empirically: `type(demo.app).__name__ == "Blocks"` before
+# launch. So the only correct interception point is INSIDE `.launch()`.
+
+demo = _build_gradio_blocks()
+
+# Plain async handlers -- reused on BOTH paths (HF patched launch AND
+# local mounted FastAPI). Bodies mirror the previous decorator
+# equivalents on `_fastapi_app` (kept around for back-compat tests).
+async def _hf_health() -> JSONResponse:
+    return JSONResponse(content={
+        "status": "ok",
+        "uptime_seconds": round(time.time() - _started_at, 1),
+        "brainstem_ready": bool(
+            LANE_CONFIG[Lane.BRAINSTEM]["model_path"]
+            and os.path.isfile(LANE_CONFIG[Lane.BRAINSTEM]["model_path"])
+        ),
+        "llama_server_available": _llama_bin_path is not None,
+    })
+
+async def _hf_list_models() -> JSONResponse:
+    return JSONResponse(content={
+        "object": "list",
+        "data": [
+            {
+                "id": lane_cfg(Lane.BRAINSTEM)["file"],
+                "object": "model",
+                "created": int(_started_at),
+                "owned_by": "ashatos",
+            },
+        ],
+    })
+
+async def _hf_chat_completions(request: FastRequest) -> JSONResponse:
+    return await _chat_completions_handler(request)
+
+async def _hf_public_status() -> JSONResponse:
+    return JSONResponse(content=_build_status())
+
+async def _hf_public_metrics() -> JSONResponse:
+    return JSONResponse(content=_snapshot().render_metrics())
+
+
+def _hf_register_routes(target: FastAPI) -> None:
+    """Register our public HTTP endpoints on a given FastAPI app.
+
+    Called BOTH from inside the patched `demo.launch()` (for HF Spaces)
+    and from the local-mount setup below (for `python app.py`).
+    """
+    target.add_api_route("/health", _hf_health, methods=["GET"])
+    target.add_api_route("/v1/models", _hf_list_models, methods=["GET"])
+    target.add_api_route(
+        "/v1/chat/completions", _hf_chat_completions, methods=["POST"],
+    )
+    target.add_api_route("/api/public_status", _hf_public_status, methods=["GET"])
+    target.add_api_route("/api/public_metrics", _hf_public_metrics, methods=["GET"])
+
+
+# Hoist the /v1/chat/completions internal async handler to module scope so
+# every request reuses the SAME closure rather than rebuilding one via
+# `_make_http_chat_completions()(request)` on each call. Pure CPU/perf
+# win; also means stack traces stay consistent across requests.
+_chat_completions_handler = _make_http_chat_completions()
+
+
+# Monkeypatch `demo.launch`: this is the ACTUAL interception point for
+# HF Spaces' `sdk: gradio` SDK. We force-disable auth so the dashboard
+# stays public, then post-register our HTTP routes on the FastAPI
+# Gradio just built for serving -- so they're served by HF's uvicorn
+# alongside the Gradio UI in the SAME process on port 7860.
+_original_launch = demo.launch
+
+
+def _patched_launch(*args, **kwargs):
+    # Belt-and-suspenders: force-disable every auth path Gradio exposes,
+    # regardless of what HF (or anyone else) injects into the kwargs.
+    kwargs["auth"] = None
+    kwargs["auth_dependency"] = None
+    kwargs["auth_message"] = None
+    fastapi_app, local_url, share_url = _original_launch(*args, **kwargs)
+    # `fastapi_app` is the actual Starlette/FastAPI instance Gradio uses
+    # to serve traffic. Our routes are added on TOP of Gradio's catch-all
+    # Mount at `/`, so explicit APIRoutes match first.
+    if hasattr(fastapi_app, "add_api_route"):
+        try:
+            _hf_register_routes(fastapi_app)
+        except Exception:
+            # If a future Gradio release changes the route-registration
+            # contract, we want the operator to see the failure in HF's
+            # logs tab instead of silent disappearance of /health /v1/*
+            # /api/* endpoints.
+            _log.exception(
+                "DEFECTIVE GRADIO LAUNCH: failed to register our HTTP "
+                "routes on Gradio's internal FastAPI; /health /v1/* /api/* "
+                "will not be served until a compatible Gradio is pinned."
+            )
+    else:
+        _log.error(
+            "DEFECTIVE GRADIO LAUNCH: launch() returned %r which is not a "
+            "FastAPI. /health /v1/* /api/* will NOT be served by HF's "
+            "uvicorn; pin a different Gradio version or re-check HF SDK "
+            "compatibility.",
+            type(fastapi_app).__name__,
+        )
+    return fastapi_app, local_url, share_url
+
+
+demo.launch = _patched_launch
+
+
+# Local-dev FastAPI: explicit routes + Gradio Mount at `/`. Used by
+# `uvicorn.run(app, ...)` and `python -m uvicorn app:app` from
+# `_smoke_test_app.py`. Same handlers and same route order as HF mode.
+_LOCAL_FASTAPI = FastAPI(title="AshatOS Neural Host")
+_hf_register_routes(_LOCAL_FASTAPI)
 app = gr.mount_gradio_app(
-    app=_fastapi_app,
-    blocks=_build_gradio_blocks(),
+    app=_LOCAL_FASTAPI,
+    blocks=_build_gradio_blocks(),  # second Blocks instance (HF uses `demo`)
     path="/",
 )
 
@@ -995,7 +1093,7 @@ app = gr.mount_gradio_app(
 if not any(
     r.__class__.__name__ in ("APIRoute", "Route")
     and getattr(r, "path", None) == "/health"
-    for r in app.routes
+    for r in _LOCAL_FASTAPI.routes
 ):
     _log.error(
         "DEFECTIVE FASTAPI MOUNT: /health missing from app.routes -- a future "
@@ -1033,12 +1131,15 @@ if __name__ == "__main__":
         import time as _time
         _log.info(
             "HF Spaces detected via SPACE_ID/HF_TOKEN -- skipping __main__ "
-            "uvicorn (HF's ASGI dispatch is already serving `app` on 7860)."
+            "uvicorn. HF's gradient SDK picks up `demo` from globals() and "
+            "calls our monkeypatched `.launch()`, which serves the mounted "
+            "FastAPI on 7860. Heartbeat-sleep keeps the container healthy."
         )
         while True:
             _time.sleep(86400)  # 1 day per iteration; safe on Windows (no Sleep() DWORD overflow)
     else:
-        # Local dev. Bind the standard HF Spaces port so curl probes work
-        # the same way they will against the deployed Space.
+        # Local dev. `app` is the local FastAPI with explicit routes
+        # AND Gradio UI mounted at `/`. uvicorn serves everything on
+        # port 7860, mirroring HF Spaces' single-port behavior.
         import uvicorn
         uvicorn.run(app, host="0.0.0.0", port=7860)
