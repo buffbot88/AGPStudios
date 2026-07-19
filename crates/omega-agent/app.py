@@ -933,33 +933,29 @@ app = gr.mount_gradio_app(_app, demo, path="/")
 if __name__ == "__main__":
     # Boot entry. We MUST serve via `uvicorn.run()` here because Gradio
     # 6.20's `demo.launch()` no longer accepts a pre-built app (the `app=`
-    # keyword was removed). But `uvicorn.run(app, port=7860)` collapses
-    # to `Errno 98 address already in use` on HF `sdk: gradio` because
-    # the local network proxy on the Space's container claims 7860 first.
-    # `demo.launch()` survives this by port-hunting past 7860; we
-    # replicate the same EADDRINUSE bypass here so the unified app can
-    # still bind. The "Running on local URL: ..." line printed on stdout
-    # is also what HF Spaces' runner scrapes to discover the actual port
-    # Gradio is listening on — without it the proxy never points at us.
-    import socket
+    # keyword was removed). The unified app (our `_app` with Gradio's UI
+    # mounted inside via `mount_gradio_app`) is what we serve.
+    #
+    # Why bind 7860 directly (NOT port-hunt to 7861+)?
+    #   - HF Spaces' ingress proxy on `sdk: gradio` ONLY forwards to the
+    #     container's port 7860. There is no env-var override on this
+    #     Space (PORT=7860, GRADIO_SERVER_PORT unset). If our uvicorn
+    #     binds anything other than 7860, HF proxy never reaches us; it
+    #     hits whatever HF's local Gradio-sidecar has on 7860 (a default
+    #     Gradio HTML shell — exactly the symptom commit bfa5d5b
+    #     exhibited: 16577-byte Gradio HTML on /, /health, /api/*).
+    #   - If 7860 is genuinely held by another live process, uvicorn's
+    #     EADDRINUSE surfaces in the boot log with the actual cause so
+    #     the operator can see it instead of getting a silent misroute.
+    #     TIME_WAIT from prior failed boots clears in ~60s, after which
+    #     the next deploy succeeds.
     import uvicorn
 
-    def _first_free_port(start: int) -> int:
-        for p in range(start, start + 100):
-            try:
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                    s.bind(("0.0.0.0", p))
-                return p
-            except OSError:
-                continue
-        return start
-
-    _port = _first_free_port(int(os.environ.get("GRADIO_SERVER_PORT") or 7860))
-    print(f"Running on local URL:  http://0.0.0.0:{_port}")
+    _target_port = int(os.environ.get("GRADIO_SERVER_PORT") or 7860)
     _log.info(
         "Boot: uvicorn.run(app, host=0.0.0.0, port=%d) "
-        "(mount_gradio_app + port-hunt to dodge ZeroGPU proxy on 7860)",
-        _port,
+        "(mount_gradio_app + direct-bind on 7860)",
+        _target_port,
     )
-    uvicorn.run(app, host="0.0.0.0", port=_port)
+    print(f"Running on local URL:  http://0.0.0.0:{_target_port}")
+    uvicorn.run(app, host="0.0.0.0", port=_target_port)
