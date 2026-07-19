@@ -972,4 +972,5 @@ if __name__ == "__main__":
             "to keep the container healthy until HF restarts us.",
             exc,
         )
-        _time.sleep(2**31)  # ~68 years; effectively forever
+        while True:
+            _time.sleep(86400)  # 1 day per iteration; safe on Windows (no Sleep() DWORD overflow)
