@@ -907,21 +907,48 @@ except Exception as exc:
 
 _demo.queue(default_concurrency_limit=1, max_size=QUEUE_LIMIT)
 
-# Register the /v1/chat/completions endpoint on Gradio's internal app
-# so it's served on the same port as the Gradio UI.
-_GRADIO_INTERNAL = getattr(_demo, "app", None)
-if _GRADIO_INTERNAL is not None:
-    from fastapi import APIRouter
-    _router = APIRouter()
-    for route in _fastapi_app.routes:
-        _router.routes.append(route)
-    _GRADIO_INTERNAL.include_router(_router)
-    _log.info("FastAPI routes mounted on Gradio internal app")
-else:
-    _log.warning("Gradio internal app not available \u2014 FastAPI routes not served")
+# Mount the Gradio UI inside the same FastAPI app so our custom routes
+# (``/v1/chat/completions``, ``/v1/models``, ``/health``,
+# ``/api/public_status``, ``/api/public_metrics``) share one port with the
+# Gradio UI / WS / queue. HF Spaces auto-detects the ``app`` variable on
+# import and serves it via uvicorn.
+#
+# Why this fixes the 404s the live Space was showing:
+#
+#   * The previous block tried to ``getattr(_demo, "app", None)`` and copy
+#     routes into ``_demo.app`` via ``_router.routes.append(...)``. In
+#     Gradio 4.x/5.x, ``_demo.app`` is created *lazily* inside
+#     ``_demo.launch()`` \u2014 i.e. only once uvicorn has bound ports. At
+#     IMPORT time (which is how HF Spaces boots multi-file projects),
+#     ``_demo.app`` is ``None``, so the elif branch fired the warning and
+#     abandoned the mount entirely. Every FastAPI route then returned
+#     404 against the live Space even though Python registered them on a
+#     throwaway FastAPI instance.
+#   * Manual ``routes.append`` + ``include_router`` also bypasses
+#     FastAPI's normal route-dependency wiring; endpoints registered
+#     that way can lose their dependency tree, which makes the approach
+#     brittle even if ``_demo.app`` were available.
+#
+# ``gr.mount_gradio_app`` returns a real, immediately-servable FastAPI
+# app with everything in place \u2014 our routes underneath, Gradio on
+# ``path="/"`` above. This is the supported, documented pattern for
+# Gradio + custom FastAPI routes on a single port.
+app = gr.mount_gradio_app(
+    app=_fastapi_app,
+    blocks=_demo,
+    path="/",
+)
 
-app = _demo
+# Bind an alias for explicit ``app:app`` uvicorn targeting (HF Spaces'
+# static detector looks for both ``app`` and ``iface`` module-level names).
+_FASTAPI_EXPORT = app  # FastAPI instance returned by gr.mount_gradio_app
+_log.info(
+    "FastAPI routes mounted via gr.mount_gradio_app: /v1/chat/completions, "
+    "/v1/models, /health, /api/public_status, /api/public_metrics"
+)
 
 if __name__ == "__main__":
-    _demo.launch(server_name="0.0.0.0", server_port=7860,
-                   show_error=True, theme=gr.themes.Soft())
+    # Local dev entrypoint. HF Spaces will detect ``app`` above and serve
+    # it via uvicorn automatically without entering this block.
+    import uvicorn
+    uvicorn.run(_FASTAPI_EXPORT, host="0.0.0.0", port=7860)
