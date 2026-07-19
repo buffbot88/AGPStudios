@@ -924,7 +924,14 @@ _log.info(
 
 
 if __name__ == "__main__":
-    # Local dev only. HF Spaces (sdk: gradio) starts Gradio's uvicorn
-    # inside the mounted app; this branch is for local testing.
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=7860)
+    # Local-dev-only entry. On HF Spaces with `sdk: gradio` the runtime
+    # already binds port 7860 via its own Gradio launcher (which serves
+    # the FastAPI/Starlette `app` returned by `gr.mount_gradio_app`).
+    # Starting a second uvicorn here on HF Space would produce `Errno 98
+    # address already in use` and an immediate RUNTIME_ERROR — exactly
+    # what the live Space's last log captured. The `HF_HUB_SPACE_ID`
+    # gate keeps `python app.py -> http://localhost:7860` available on
+    # any non-HF machine while skipping the double-bind on HF.
+    if not os.environ.get("HF_HUB_SPACE_ID"):
+        import uvicorn
+        uvicorn.run(app, host="0.0.0.0", port=7860)
