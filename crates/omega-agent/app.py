@@ -924,38 +924,28 @@ _log.info(
 
 
 if __name__ == "__main__":
-    # Local-dev-only entry. On HF Spaces with `sdk: gradio` the runtime
-    # already binds port 7860 via its own Gradio launcher (which serves
-    # the FastAPI/Starlette `app` returned by `gr.mount_gradio_app`).
-    # Starting a second uvicorn here on HF Space would produce `Errno 98
-    # address already in use` and an immediate RUNTIME_ERROR — exactly
-    # what the live Space's last log captured.
+    # Boot entry. We unconditionally start uvicorn here because HF
+    # Spaces runs `python app.py` directly (no magical Gradio launcher
+    # that introspects and calls demo.launch() automatically) — without
+    # this block the Python process exits cleanly without ever binding
+    # a port and HF marks the Space RUNTIME_ERROR.
     #
-    # HF Spaces' runtime reports itself via one of several env vars
-    # (canonical name has changed across HF SDK versions). We OR-check
-    # all known names so the gate fires regardless of which one happens
-    # to be present in the current HF Spaces SDK build. On a developer
-    # machine none of them are set, so the local-dev uvicorn.run
-    # (`python app.py -> http://localhost:7860`) is restored.
-    _hf_env = {k: os.environ.get(k) for k in (
-        "HF_HUB_SPACE_ID",  # canonical HF Spaces env var (newest SDKs)
-        "SPACE_ID",         # legacy alias still set on some deployments
-        "HF_SPACE_ID",      # alternate alias
-    )}
-    # Bulletproof fallback: HF Spaces always mounts the user's source
-    # code at /home/user/app/app.py. On a developer machine the file
-    # lives at the project root, not under /home/user/. Path check is
-    # universal across every HF SDK version, doesn't depend on env
-    # export quirks, and costs one syscall.
-    _hf_path = os.path.exists("/home/user/app/app.py")
-    if any(_hf_env.values()) or _hf_path:
-        _log.info(
-            "HF Spaces detected (env=%s path=%s); skipping local-dev "
-            "uvicorn.run because HF's own Gradio launcher already binds "
-            "port 7860.",
-            {k: v for k, v in _hf_env.items() if v},
-            _hf_path,
-        )
-    else:
-        import uvicorn
-        uvicorn.run(app, host="0.0.0.0", port=7860)
+    # On HF Spaces the auth/routing proxy typically binds port 7860
+    # itself and tells the user app to bind to a different port via
+    # the GRADIO_SERVER_PORT (or PORT) env var. Hardcoding 7860 in
+    # that case causes `Errno 98 address already in use`. Defaulting to
+    # 7860 only when neither env var is set is the canonical Gradio
+    # boot pattern.
+    import uvicorn
+    _port = int(
+        os.environ.get("GRADIO_SERVER_PORT")
+        or os.environ.get("PORT")
+        or 7860
+    )
+    _log.info(
+        "Starting uvicorn host=0.0.0.0 port=%s (GRADIO_SERVER_PORT=%s PORT=%s)",
+        _port,
+        os.environ.get("GRADIO_SERVER_PORT"),
+        os.environ.get("PORT"),
+    )
+    uvicorn.run(app, host="0.0.0.0", port=_port)
