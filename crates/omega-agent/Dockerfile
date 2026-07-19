@@ -1,13 +1,16 @@
-FROM python:3.11-slim
+FROM python:3.11
 
-# System packages needed by llama-server install path (curl + ca-certs
-# for the GitHub release + HF Hub mirror downloads installer.py makes).
+# System packages needed by llama-server install path + runtime:
+#   curl/wget     -> installer.py GitHub/HF mirror fetches
+#   git           -> llama-server source-build fallback
+#   libgomp1      -> openmp runtime for llama-server CPU inference
+#   libstdc++6    -> gcc runtime (some llama-server binaries link against it)
+#   ca-certificates -> TLS for HF Hub + GitHub release downloads
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl ca-certificates \
+    curl wget git ca-certificates libgomp1 libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
 
-# HF Spaces default port. Exposed explicitly so the docker runner can
-# surface the actual port being served.
+# HF Spaces default port (must keep in sync with `app_port: 7860` in README frontmatter).
 EXPOSE 7860
 
 WORKDIR /app
@@ -38,6 +41,6 @@ COPY lane_resolver.py /app/lane_resolver.py
 
 # Single-process FastAPI serving. No second uvicorn (no bind race), no
 # Gradio runtime (no Login auth shim). HF Spaces with `sdk: docker`
-# runs this ENTRYPOINT and proxies 7860 to the public hostname.
+# runs this CMD and proxies 7860 to the public hostname.
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7860", \
      "--workers", "1", "--log-level", "info"]

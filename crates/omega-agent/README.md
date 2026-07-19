@@ -3,8 +3,8 @@ title: AshatOS Neural Host
 emoji: 🧠
 colorFrom: indigo
 colorTo: purple
-sdk: gradio
-app_file: app.py
+sdk: docker
+app_port: 7860
 pinned: false
 ---
 
@@ -28,7 +28,7 @@ and displays a sanitized public dashboard.
 2. The GGUF model downloads from Hugging Face Hub in a background thread.
 3. The ZeroGPU runtime is used per-request: each inference call starts
    `llama-server`, runs one completion, collects metrics, and terminates.
-4. The Gradio dashboard displays live telemetry (no inference controls).
+4. The dashboard is server-rendered HTML at GET /; a JS setInterval polls /api/dashboard_html for live updates (no inference controls).
 5. FastAPI routes expose OpenAI-compatible `/v1/chat/completions` and
    `/v1/models` endpoints.
 6. Authentication via `X-Ashat-Key` header (constant-time HMAC comparison).
@@ -81,22 +81,13 @@ and displays a sanitized public dashboard.
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `GET` | `/` | No | Gradio dashboard |
+| `GET` | `/` | No | Public telemetry dashboard (HTML, JS-polled) |
 | `GET` | `/v1/models` | No | List available models |
 | `POST` | `/v1/chat/completions` | `X-Ashat-Key` | Chat completions |
 | `GET` | `/health` | No | Health check |
 | `GET` | `/api/public_status` | No | Public status snapshot |
 | `GET` | `/api/public_metrics` | No | Public metrics snapshot |
 | `GET` | `/api/dashboard_html` | No | Status + card HTML snippets (live JS poll) |
-
-### Gradio Queue API
-
-| API Name | Auth | Description |
-|---|---|---|
-| `brainstem` | `X-Ashat-Key` | BrainStem inference |
-| `public_status` | No | Status (must be called via gradio_client) |
-| `public_metrics` | No | Metrics (must be called via gradio_client) |
-| `admin_benchmark` | `X-Ashat-Key` (admin) | Run benchmark |
 
 ---
 
