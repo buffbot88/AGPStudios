@@ -527,6 +527,7 @@ def _make_http_chat_completions():
 
 from public_snapshot import PublicSnapshot, RuntimeState
 from telemetry import TELEMETRY
+from dashboard import render_index_html, render_dashboard_html_json, render_dashboard_refresh_js
 
 
 def _snapshot() -> PublicSnapshot:
@@ -845,16 +846,85 @@ async def http_landing() -> HTMLResponse:
     )
 
 
-app = _app
+# ──────────────────────────────────────────────────────────────────────────
+# 13.  Gradio thin-mount for ZeroGPU
+#      HF Spaces `sdk: gradio` requires a Gradio Blocks instance at
+#      module scope so the runner can call .launch(). To stay on
+#      ZeroGPU (zero-a10g) AND ship a public-only telemetry surface,
+#      we wrap our pure-FastAPI app inside a minimal Gradio Blocks
+#      whose ONLY component is a static HTML embed of our dashboard.
+#      The user lands on `/` and sees our dashboard directly — no
+#      Gradio chrome, no inference controls, no login form.
+#
+#      Defense-in-depth against the Login auth shim:
+#        (a) env-pop GRADIO_AUTH / GRADIO_AUTH_MESSAGE /
+#            GRADIO_OAUTH_CLIENT_ID / GRADIO_OAUTH_CLIENT_SECRET
+#            BEFORE `import gradio as gr` — Gradio caches these at
+#            import time.  Clearing them at this scope forces the
+#            module to load as if the Space were never authenticated.
+#        (b) `gr.Blocks(...)` is constructed with no `auth=`, no
+#            `auth_dependency=`, no `oauth_client_id=`, no
+#            `auth_message=` — every Gradio auth slot is left at
+#            its None default.
+#        (c) `gr.mount_gradio_app(_app, demo, path="/")` returns
+#            the parent FastAPI app with `demo` mounted at `/` —
+#            the parent's other routes (`/health`, `/v1/*`, `/api/*`)
+#            remain reachable through the same Starlette router.
+#
+#      Result: HF proxy lands on `/`, gets our telemetry HTML, never
+#      hits a Gradio UI that could ask for credentials, never passes
+#      through a Gradio login challenge. The shim is structurally
+#      impossible at the app layer; if the Live probe still shows
+#      one, it would have to come from an HF-infrastructure layer
+#      outside our code (e.g. an HF-managed proxy on private domains).
+# ──────────────────────────────────────────────────────────────────────────
+os.environ.pop("GRADIO_AUTH", None)
+os.environ.pop("GRADIO_AUTH_MESSAGE", None)
+os.environ.pop("GRADIO_OAUTH_CLIENT_ID", None)
+os.environ.pop("GRADIO_OAUTH_CLIENT_SECRET", None)
+import gradio as gr  # noqa: E402  -- after env-pops on purpose
+
+_demo_html = render_index_html(
+    snapshot_provider=_snapshot,
+    refresh_seconds=PUBLIC_REFRESH_SECONDS,
+)
+
+demo = gr.Blocks(
+    title="AshatOS Neural Host",
+    theme=gr.themes.Base(),
+    css=(
+        "body { background: #070B14 !important; margin: 0; }"
+        " footer { display: none !important; }"
+        " .gradio-container { max-width: 100% !important; padding: 0 !important; }"
+        " .contain { max-width: 760px !important; }"
+    ),
+)
+with demo:
+    # `js_on_load` runs the polling loop on component render (browsers do
+    # NOT execute <script> tags injected via innerHTML — see the warning
+    # that gr.HTML raises when value contains <script>). The JS expression
+    # builds a 1-minute-of-glitches-resistant setInterval that fetches
+    # /api/dashboard_html and innerHTML-swaps status + brainstem cards.
+    gr.HTML(value=_demo_html, js_on_load=render_dashboard_refresh_js(
+        PUBLIC_REFRESH_SECONDS * 1000,
+    ))
+
+
+# Compose final ASGI app: FastAPI `_app` (with /health, /v1/*, /api/*)
+# wrapped by Gradio's UI at `/`. `gr.mount_gradio_app` is the canonical
+# way to make a Gradio Blocks instance live inside an existing
+# FastAPI app — our `_app`'s routes stay, plus the dashboard is at /.
+app = gr.mount_gradio_app(_app, demo, path="/")
 
 _log.info(
     "FastAPI routes: /, /v1/chat/completions, /v1/models, /health, "
-    "/api/public_status, /api/public_metrics, /api/dashboard_html"
+    "/api/public_status, /api/public_metrics, /api/dashboard_html "
+    "(Gradio mount at / for sdk:gradio + ZeroGPU)"
 )
 
 
 if __name__ == "__main__":
-    # Local dev only. HF Spaces (sdk: docker) runs uvicorn from
-    # Dockerfile's ENTRYPOINT and never reaches this branch.
+    # Local dev only. HF Spaces (sdk: gradio) starts Gradio's uvicorn
+    # inside the mounted app; this branch is for local testing.
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=7860)

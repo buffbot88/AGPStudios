@@ -581,10 +581,58 @@ def _build_footer_html() -> str:
 </div>"""
 
 
+    # Live-refresh polling is wired INSIDE app.py via `gr.HTML`'s
+    # `js_on_load` parameter instead. See :func:`render_dashboard_refresh_js`.
+
+
 # ──────────────────────────────────────────────────────────────────────────
-# Public rendering entry points — server-rendered HTML page + companion
-# JSON payload used by the JS poll loop.
+# Public rendering entry points — server-rendered HTML fragment,
+# companion JSON payload used by the JS poll loop, and the polling
+# function expression exported for gr.HTML's `js_on_load`.
 # ──────────────────────────────────────────────────────────────────────────
+
+
+def render_dashboard_refresh_js(refresh_ms: int) -> str:
+    """Return a JS function expression for `gr.HTML(js_on_load=...)`.
+
+    Browsers do NOT execute `<script>` tags injected via innerHTML
+    (which is how `gr.HTML(value=...)` renders its content). The polling
+    loop therefore has to be supplied through Gradio's `js_on_load`
+    parameter — a function expression Gradio evaluates on component
+    render. Inside Gradio this runs ONCE on mount; we use ``setInterval``
+    to keep ticking every ``refresh_ms`` and one immediate ``tick()``
+    call to correct any drift between server-render time and the
+    current second.
+    """
+    safe_ms = max(1000, int(refresh_ms))
+    return (
+        "() => {\n"
+        "    const REFRESH_MS = %d;\n"
+        "    function tick() {\n"
+        "        fetch('/api/dashboard_html', { cache: 'no-store' })\n"
+        "            .then(function (r) {\n"
+        "                if (!r.ok) throw new Error('status ' + r.status);\n"
+        "                return r.json();\n"
+        "            })\n"
+        "            .then(function (j) {\n"
+        "                if (j.status_html) {\n"
+        "                    var el = document.getElementById('status');\n"
+        "                    if (el) el.innerHTML = j.status_html;\n"
+        "                }\n"
+        "                if (j.brainstem_html) {\n"
+        "                    var el = document.getElementById('brainstem');\n"
+        "                    if (el) el.innerHTML = j.brainstem_html;\n"
+        "                }\n"
+        "            })\n"
+        "            .catch(function (err) {\n"
+        "                console.warn('dashboard refresh failed', err);\n"
+        "            });\n"
+        "    }\n"
+        "    setInterval(tick, REFRESH_MS);\n"
+        "    tick();\n"
+        "}\n"
+    ) % safe_ms
+
 
 def render_dashboard_html_json(snapshot: PublicSnapshot) -> dict[str, str]:
     """Return the JSON payload the client polls to refresh the page.
@@ -639,12 +687,26 @@ def render_index_html(
     snapshot_provider: Callable[[], PublicSnapshot],
     refresh_seconds: int = 8,
 ) -> str:
-    """Render the full public dashboard HTML page (self-contained document).
+    """Render the public dashboard as a compact inner-only HTML fragment.
 
-    The first request to ``GET /`` uses this once for SSR; client JS
-    then polls ``/api/dashboard_html`` for live updates every
-    ``refresh_seconds`` seconds. ``refresh_seconds`` validated to be
-    at least 1 so a tiny misconfiguration doesn't loop at full CPU.
+    Returns a single ``<div class="ashat-root">...</div>`` wrapper
+    containing a scoped ``<style>`` block (every selector prefixed
+    with ``.ashat-root``) plus the page body (header + status row +
+    BrainStem card + footer) and a ``<script>`` that polls
+    ``/api/dashboard_html`` every ``refresh_seconds`` for live updates.
+
+    Why compact inner-only instead of a standalone ``<!DOCTYPE html>``
+    document: the value flows through ``gr.HTML(value=...)`` and into
+    a Gradio Blocks UI; browsers silently strip DOCTYPE/html/head/body
+    tags injected via ``innerHTML``, so an unscoped full-document body
+    would lose its background / typography class hooks. Scoping all
+    global CSS rules under ``.ashat-root`` and wrapping everything in
+    a single styled div makes the dashboard render correctly inside
+    Gradio's chrome-less container — and the inline styles already
+    painted on each card stay identical to the standalone version.
+
+    ``refresh_seconds`` is clamped to ``>= 1`` so a misconfigured
+    zero/negative value can't loop the JS poll at full CPU.
     """
     safe_refresh = max(1, int(refresh_seconds))
     initial_snapshot = snapshot_provider()
@@ -654,31 +716,31 @@ def render_index_html(
     brainstem_html = _build_cards_html(initial_snapshot)
     footer_html = _build_footer_html()
 
-    refresh_js = _REFRESH_JS_TEMPLATE.replace(
-        "%REFRESH_MS%", str(safe_refresh * 1000)
-    )
-
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>AshatOS Neural Host \u00b7 Public Telemetry</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+    return f"""<div class="ashat-root">
   <style>
-    body {{ background: {_BG}; color: {_PRIMARY}; margin: 0; padding: 0;
-           min-height: 100vh; }}
-    a {{ color: {_ACCENT}; }}
-    .container {{ max-width: 760px; margin: 0 auto; padding: 0 24px; }}
+    .ashat-root {{
+      background: {_BG}; color: {_PRIMARY};
+      margin: 0; padding: 0; min-height: 100vh;
+      font-family: sans-serif;
+    }}
+    .ashat-root a {{ color: {_ACCENT}; }}
+    .ashat-root .container {{
+      max-width: 760px; margin: 0 auto; padding: 0 24px;
+    }}
+    .ashat-root #status, .ashat-root #brainstem {{
+      line-height: 1.4;
+    }}
   </style>
-</head>
-<body>
   {header_html}
   <div id="status">{status_html}</div>
   <div class="container">
     <div id="brainstem">{brainstem_html}</div>
   </div>
   {footer_html}
-  <script>{refresh_js}</script>
-</body>
-</html>
-"""
+</div>"""
+    # Live-refresh polling is wired INSIDE app.py via gr.HTML's `js_on_load`
+    # parameter, not by embedding a <script> tag here. Browsers do NOT
+    # execute <script> tags injected via innerHTML (which is how Gradio's
+    # gr.HTML(value=...) renders its content into the DOM); only Gradio's
+    # `js_on_load=` runs on render. The polling snippet is exported as
+    # `render_dashboard_refresh_js(refresh_ms)` for the caller to wire in.
