@@ -29,7 +29,7 @@ import tempfile
 import urllib.error
 import urllib.request
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
@@ -39,6 +39,18 @@ from install_strategies import (
     filter_any_archive,
     filter_linux_binaries,
     pick_download_strategies,
+)
+
+from backend_launcher import (
+    _classify_hf_exception,
+    _classify_status_and_body,
+)
+from run_errors import (
+    BinaryInstallError,
+    HfCreditsExhaustedError,
+    HfRateLimitedError,
+    ModelDownloadError,
+    RunError,
 )
 
 _log = logging.getLogger("ashatos")
@@ -53,6 +65,39 @@ LLAMA_SERVER_HF_REPO: str = os.getenv("LLAMA_SERVER_HF_REPO", "stressthismess/ll
 LLAMA_SERVER_HF_FILE: str = os.getenv("LLAMA_SERVER_HF_FILE", "")
 LLAMA_SERVER_PATH: str = os.getenv("LLAMA_SERVER_PATH", "").strip()
 USER_AGENT: str = "AshatOS-NeuralHost"
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Structured install result — replaces the previous ``str | None`` return.
+# The path stays ``None`` exactly when degraded mode kicks in (binary not
+# installable). The optional ``failure_code`` + ``failure_message`` carry
+# the *typed* reason so the dashboard can render e.g. "Out of HF credits"
+# instead of a generic failed-install warning.
+# ──────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class InstallerResult:
+    """Structured outcome of :func:`ensure_llama_server`.
+
+    Backwards-compat: ``result.path`` plays the role of the old return
+    value (a path string or ``None`` when not available) so callers that
+    previously did ``path == None`` keep working.
+    """
+
+    path: str | None = None
+    failure_code: str | None = None
+    failure_message: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.path is not None
+
+    def to_dict(self) -> dict[str, str | None]:
+        return {
+            "path": self.path,
+            "failure_code": self.failure_code,
+            "failure_message": self.failure_message,
+        }
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -339,6 +384,8 @@ class HfMirror:
         self.repo = repo
         self.file_template = file_template
         self.token = token
+        self.last_failure_code: str | None = None
+        self.last_failure_message: str | None = None
 
     def fetch(self, tag: str) -> str | None:
         if not self.repo:
@@ -367,9 +414,14 @@ class HfMirror:
                 _log.info("llama: HF mirror ready at %s", str(p))
             return str(p)
         except Exception as exc:
-            _log.info(
-                "llama: HF mirror download failed: %s: %s",
-                type(exc).__name__, exc,
+            classified: RunError = _classify_hf_exception(
+                exc, "llama-server mirror", "llama-bin",
+            )
+            self.last_failure_code = classified.code
+            self.last_failure_message = classified.message
+            _log.warning(
+                "llama: HF mirror classified as %s: %s",
+                classified.code, classified.message[:200],
             )
             return None
 
@@ -397,23 +449,28 @@ class LlamaBinaryInstaller:
 
     # ── Public ────────────────────────────────────────────────────────
 
-    def ensure(self, version: str = LLAMA_SERVER_VERSION) -> str | None:
+    def ensure(self, version: str = LLAMA_SERVER_VERSION) -> InstallerResult:
+        """Walk all tiers; return a structured :class:`InstallerResult`."""
         # 0. Operator-pinned path wins regardless of tier.
         explicit = self._look_for_explicit_path()
         if explicit:
-            return explicit
+            return InstallerResult(path=explicit)
 
         # 1. Cache hit is fastest.
         cached = self.cache.find_existing()
         if cached:
             _log.info("llama: using cached binary at %s", cached)
-            return cached
+            return InstallerResult(path=cached)
 
         # 2. Resolve tag (literal vs 'latest').
         tag = self._resolve_tag(version)
         if not tag:
             _log.warning("llama: tag resolution failed; no binary")
-            return None
+            return InstallerResult(
+                path=None,
+                failure_code="BINARY_INSTALL_FAILED",
+                failure_message="tag resolution failed",
+            )
         _log.info("llama: release tag: %s", tag)
 
         # 3. GitHub tier — real assets + URL guesses.
@@ -427,21 +484,41 @@ class LlamaBinaryInstaller:
         for asset in strategies:
             result = self.downloader.fetch_one(tag, asset)
             if result:
-                return result
+                return InstallerResult(path=result)
 
         _log.warning(
             "llama: GitHub tiers exhausted (%d strategies); falling back to HF mirror",
             len(strategies),
         )
 
-        # 4. HF mirror tier.
+        # 4. HF mirror tier. Bubble the typed HF classification up if
+        # the mirror was the failing tier \u2014 so HF_CREDITS_EXHAUSTED vs
+        # HF_RATE_LIMITED vs BINARY_INSTALL_FAILED is surfaced distinctly.
         mirror_result = self.mirror.fetch(tag)
         if mirror_result:
-            return mirror_result
+            return InstallerResult(path=mirror_result)
 
-        # 5. Final failure — opacity today; let the caller see why from the log.
+        # 5. Final failure \u2014 use the most recent typed classification
+        # from the HF mirror tier (only meaningful when the mirror itself
+        # failed due to an HF error).
+        if self.mirror.last_failure_code:
+            message = self.mirror.last_failure_message or "HF mirror download failed"
+            _log.error(
+                "llama: ALL TIERS FAILED (GitHub + HF mirror) \u2014 last HF failure code: %s",
+                self.mirror.last_failure_code,
+            )
+            return InstallerResult(
+                path=None,
+                failure_code=self.mirror.last_failure_code,
+                failure_message=message[:200],
+            )
+
         _log.error("llama: ALL TIERS FAILED (GitHub + HF mirror)")
-        return None
+        return InstallerResult(
+            path=None,
+            failure_code="BINARY_INSTALL_FAILED",
+            failure_message="all install tiers exhausted (no asset found)",
+        )
 
     # ── Private ───────────────────────────────────────────────────────
 
@@ -474,6 +551,12 @@ def _get_installer() -> LlamaBinaryInstaller:
     return _INSTALLER_SINGLETON
 
 
-def ensure_llama_server() -> str | None:
-    """Public install facade. Returns the binary path or ``None``."""
+def ensure_llama_server() -> InstallerResult:
+    """Public install facade. Returns a structured :class:`InstallerResult`.
+
+    The result has ``.path`` set to the binary location on success, or
+    ``None`` when degraded mode kicks in. ``.failure_code`` and
+    ``.failure_message`` carry the *typed* cause when degraded so the
+    dashboard can render "Out of HF credits" vs "All tiers exhausted".
+    """
     return _get_installer().ensure(LLAMA_SERVER_VERSION)

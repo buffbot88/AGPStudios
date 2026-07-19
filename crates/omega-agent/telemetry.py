@@ -115,50 +115,76 @@ class TelemetryRelay:
         *,
         backend: str = "cpu",
         gpu_offload: bool = False,
+        lane_state: str = "online",
+        host_state: str = "operational",
     ) -> TelemetryPackage:
         """Seed boot-time telemetry so the dashboard shows data immediately.
 
         Call once during startup after the model path is verified.
         Writes a ``MetricRecord`` into the store and caches the resulting
         package as the "last known good" state.
+
+        ``lane_state`` and ``host_state`` are honest by default ("online" /
+        "operational") but may be overridden ("waking" / "degraded" /
+        "offline") when boot succeeded mechanically but the lane is not
+        actually usable — e.g. HF download failed so the model file is
+        absent. The cached :class:`TelemetryPackage` is what the dashboard
+        renders during the cold-start window.
+
+        IMPORTANT: when ``lane_state != "online"`` this method only
+        updates the cached package + event log — it does NOT write a
+        MetricRecord. The startup pipeline is expected to make a single
+        dedicated :meth:`RunMetrics.record_failure` call for the broken
+        path; double-writing here would inflate downstream failure counts.
         """
         cfg = lane_cfg(lane)
-        rec = MetricRecord(
-            timestamp=datetime.now(timezone.utc).isoformat(),
-            lane=lane.value,
-            success=True,
-            cold_start=True,
-            server_start_ms=0.0,
-            model_load_ms=0.0,
-            prompt_tokens=0,
-            completion_tokens=0,
-            prompt_tokens_per_second=0.0,
-            generation_tokens_per_second=0.0,
-            time_to_first_token_ms=None,
-            total_latency_ms=0.0,
-            backend=backend,
-            gpu_offload_verified=gpu_offload,
-            finish_reason="n/a",
-        )
-        self._store.record(rec)
+        if lane_state == "online":
+            rec = MetricRecord(
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                lane=lane.value,
+                success=True,
+                cold_start=True,
+                server_start_ms=0.0,
+                model_load_ms=0.0,
+                prompt_tokens=0,
+                completion_tokens=0,
+                prompt_tokens_per_second=0.0,
+                generation_tokens_per_second=0.0,
+                time_to_first_token_ms=None,
+                total_latency_ms=0.0,
+                backend=backend,
+                gpu_offload_verified=gpu_offload,
+                finish_reason="n/a",
+            )
+            self._store.record(rec)
+        else:
+            # Boot is *not* at the "online" steady state — e.g. HF credits
+            # exhausted or model file missing. Defer the typed failure
+            # record to the orchestrator's ``record_failure`` call so we
+            # don't double-count failures in the summary.
+            _log.info(
+                "telemetry: seed_boot for %s lane_state=%s \u2014 "
+                "skipping MetricRecord; orchestrator records the typed failure",
+                lane.value, lane_state,
+            )
         self._store.add_event(
             f"{lane.value}: server ready (backend={backend}, "
-            f"gpu_offload={gpu_offload})"
+            f"gpu_offload={gpu_offload}, state={lane_state})"
         )
 
         pkg = TelemetryPackage(
             lane_label=cfg.get("label", "BrainStem"),
             model_name=cfg.get("file", ""),
             context_size=cfg.get("ctx", 0),
-            lane_state="online",
-            host_state="operational",
+            lane_state=lane_state,
+            host_state=host_state,
             backend=backend,
             gpu_offload_verified=gpu_offload,
         )
         self._last = pkg
         _log.info(
-            "telemetry: boot seed for %s — model=%s backend=%s",
-            lane.value, cfg.get("file", ""), backend,
+            "telemetry: boot seed for %s \u2014 model=%s backend=%s lane_state=%s",
+            lane.value, cfg.get("file", ""), backend, lane_state,
         )
         return pkg
 

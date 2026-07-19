@@ -39,10 +39,105 @@ from run_errors import (
     CleanupError,
     GpuAllocationError,
     GpuOffloadVerificationError,
+    HfCreditsExhaustedError,
+    HfRateLimitedError,
     ModelDownloadError,
+    RunError,
 )
 
 _log = logging.getLogger("ashatos")
+
+
+# --------------------------------------------------------------------
+# HF error classification \u2014 translates raw HF Hub / requests exceptions
+# into the typed RunError family so the dashboard can show "Out of HF
+# credits" or "Rate limited" instead of a generic model download error.
+# --------------------------------------------------------------------
+
+_CREDIT_NEEDLES: tuple[str, ...] = (
+    "exceeded your monthly",
+    "monthly included compute",
+    "monthly hours",
+    "out of credits",
+    "credit balance",
+    "your plan",
+    "your subscription",
+    "billing",
+    "quota",
+    "payment required",
+    "402",
+)
+
+
+def _classify_hf_exception(
+    exc: BaseException,
+    what: str,
+    lane_value: str,
+) -> RunError:
+    """Classify a raw HF Hub exception into a typed :class:`RunError`.
+
+    ``what`` is a short noun ("model", "bucket", "llama-server mirror")
+    included in the user-facing error message.
+    """
+    status_code: int | None = None
+    body_text: str = ""
+    try:  # pragma: no cover - defensive
+        from huggingface_hub.utils import HfHubHTTPError
+
+        if isinstance(exc, HfHubHTTPError):
+            status_code = (
+                getattr(exc, "status_code", None)
+                or getattr(getattr(exc, "response", None), "status_code", None)
+            )
+            try:
+                body_text = (
+                    exc.response.text if exc.response is not None else ""
+                ) or ""
+            except Exception:
+                body_text = str(exc)
+        else:
+            body_text = str(exc)
+    except Exception:
+        body_text = str(exc)
+
+    return _classify_status_and_body(status_code, body_text, what, lane_value)
+
+
+def _classify_status_and_body(
+    status_code: int | None,
+    body_text: str,
+    what: str,
+    lane_value: str,
+) -> RunError:
+    """Pure body/status classifier — used by bucket path (no exception obj).
+
+    Returns :class:`HfRateLimitedError`, :class:`HfCreditsExhaustedError`,
+    or :class:`ModelDownloadError` based on HF Hub / HF Bucket response.
+    """
+    body_lc = (body_text or "").lower()
+    safe_body = (body_text or "")[:200]
+
+    if (
+        status_code == 429
+        or "too many requests" in body_lc
+        or "rate limit" in body_lc
+        or "rate-limit" in body_lc
+    ):
+        return HfRateLimitedError(
+            f"{lane_value}: HF {what} rate-limited: HTTP {status_code or '?'}: {safe_body}"
+        )
+
+    if (
+        status_code in (402, 403)
+        or any(needle in body_lc for needle in _CREDIT_NEEDLES)
+    ):
+        return HfCreditsExhaustedError(
+            f"{lane_value}: HF {what} credits exhausted: HTTP {status_code or '?'}: {safe_body}"
+        )
+
+    return ModelDownloadError(
+        f"{lane_value}: HF {what} download failed: HTTP {status_code or '?'}: {safe_body}"
+    )
 
 
 def is_port_open(port: int, host: str = "127.0.0.1") -> bool:
@@ -151,9 +246,12 @@ class BackendLauncher:
                 token=token,
             )
         except Exception as exc:
-            raise ModelDownloadError(
-                f"{lane.value}: HF Hub download failed: {type(exc).__name__}: {exc}"
+            classified = _classify_hf_exception(exc, what="model", lane_value=lane.value)
+            _log.warning(
+                "%s: HF Hub %s download classified as %s",
+                lane.value, "model", classified.code,
             )
+            raise classified
         cfg["model_path"] = path
         _log.info("%s: downloaded to %s", lane.value, path)
         return path
@@ -194,7 +292,7 @@ class BackendLauncher:
             headers["Authorization"] = f"Bearer {token}"
 
         try:
-            resp = _requests.get(
+            resp = requests.get(
                 bucket_url,
                 headers=headers,
                 timeout=600,
@@ -218,6 +316,29 @@ class BackendLauncher:
                                 total // (1024 * 1024),
                                 downloaded / total * 100,
                             )
+        except requests.HTTPError as exc:
+            # Classify 402/403/429 distinctly so the dashboard can show
+            # "Out of HF credits" / "Rate limited" rather than a generic
+            # 503 from the orchestrator. Clean up partial download first.
+            if dest.exists():
+                try:
+                    dest.unlink()
+                except OSError:
+                    pass
+            response = getattr(exc, "response", None)
+            sc = getattr(response, "status_code", None)
+            body = ""
+            try:
+                body = (response.text if response is not None else "") or ""
+            except Exception:
+                body = str(exc)
+            classified = _classify_status_and_body(
+                sc, body, "bucket", lane.value,
+            )
+            _log.warning(
+                "%s: bucket classified as %s", lane.value, classified.code,
+            )
+            raise classified
         except Exception as exc:
             # Clean up partial download on failure
             if dest.exists():

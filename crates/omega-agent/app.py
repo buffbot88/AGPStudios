@@ -45,7 +45,7 @@ from fastapi.responses import JSONResponse
 from backend_launcher import BackendLauncher, LiveBackend
 from completion_client import CompletionClient, CompletionResult
 from domain import LANE_CONFIG, Lane, lane_cfg
-from installer import ensure_llama_server
+from installer import InstallerResult, ensure_llama_server
 from lane_keygate import (
     AuthError,
     LaneKeyGate,
@@ -56,8 +56,11 @@ from lane_resolver import LaneResolver
 from metrics_store import METRICS, MetricRecord
 from run_errors import (
     ERROR_CODE_TO_HTTP_STATUS,
+    HfCreditsExhaustedError,
+    HfRateLimitedError,
     InferenceUnavailableError,
     InvalidRequestError,
+    ModelDownloadError,
     RunError,
 )
 from run_metrics import RunMetrics
@@ -737,36 +740,149 @@ with gr.Blocks(title="AshatOS Neural Host") as _demo:
     )
 
 
+# Mapping of binary-install failure codes -> exception class. Used by
+# startup() so the dashboard surfaces the typed cause (HF credits vs
+# rate limit vs generic install fail) instead of one blanket 503.
+_BINARY_FAILURE_EXC: dict[str, type[RunError]] = {
+    "HF_CREDITS_EXHAUSTED": HfCreditsExhaustedError,
+    "HF_RATE_LIMITED": HfRateLimitedError,
+}
+
+
 def startup() -> None:
+    """Boot sequence — install binary, pre-fetch model, seed telemetry.
+
+    Surfaces HF-specific failures (credits exhausted / rate limited /
+    model missing) into the metrics store and dashboard via typed error
+    codes rather than generic ``Exception`` silently. The seed telemetry
+    state is HONEST about reality \u2014 a broken boot never claims
+    ``lane_state="online"``.
+    """
     global _llama_bin_path
     _log.info("=" * 60)
     _log.info("AshatOS Neural I/O Host \u2014 Single-Lane BrainStem Inference")
     _log.info("=" * 60)
 
-    _llama_bin_path = ensure_llama_server()
+    # Pass 1: llama-server binary.
+    bin_result: InstallerResult = ensure_llama_server()
+    _llama_bin_path = bin_result.path
     if _llama_bin_path:
         _log.info("llama-server binary: %s", _llama_bin_path)
     else:
-        _log.warning("llama-server binary not available \u2014 degraded mode")
+        _log.warning(
+            "llama-server binary not available (code=%s msg=%s) \u2014 degraded mode",
+            bin_result.failure_code or "BINARY_INSTALL_FAILED",
+            bin_result.failure_message or "(no detail)",
+        )
+        # Record binary-install failures against the lane so the
+        # dashboard surfaces them as a clear "BINARY MISSING" pill.
+        if bin_result.failure_code:
+            exc_cls = _BINARY_FAILURE_EXC.get(
+                bin_result.failure_code, InferenceUnavailableError,
+            )
+            err = exc_cls(
+                bin_result.failure_message or "llama-server binary install failed",
+            )
+            for lane in (Lane.BRAINSTEM,):
+                _RUN_METRICS.record_failure(
+                    lane,
+                    request_id="startup-binary",
+                    error=err,
+                    elapsed_ms=0.0,
+                    cold_start=True,
+                )
 
+    # Pass 2: model pre-download.
+    model_failure_code: str | None = None
     model_ready = False
     if _llama_bin_path:
         for lane in (Lane.BRAINSTEM,):
             try:
-                _BACKEND_LAUNCHER.ensure_model(lane)
-                _log.info("%s model cached: %s", lane.value,
-                          LANE_CONFIG[lane]["model_path"])
+                path = _BACKEND_LAUNCHER.ensure_model(lane)
+                _log.info(
+                    "%s model cached: %s", lane.value, path,
+                )
                 model_ready = True
+            except HfCreditsExhaustedError as exc:
+                model_failure_code = "HF_CREDITS_EXHAUSTED"
+                _log.error(
+                    "%s model download: %s \u2014 %s",
+                    lane.value, exc.code, exc.message[:200],
+                )
+                _RUN_METRICS.record_failure(
+                    lane, request_id="startup-model",
+                    error=exc, elapsed_ms=0.0, cold_start=True,
+                )
+            except HfRateLimitedError as exc:
+                model_failure_code = "HF_RATE_LIMITED"
+                _log.error(
+                    "%s model download: %s \u2014 %s",
+                    lane.value, exc.code, exc.message[:200],
+                )
+                _RUN_METRICS.record_failure(
+                    lane, request_id="startup-model",
+                    error=exc, elapsed_ms=0.0, cold_start=True,
+                )
+            except ModelDownloadError as exc:
+                model_failure_code = "MODEL_DOWNLOAD_FAILED"
+                _log.warning(
+                    "%s model pre-download failed: %s", lane.value, exc,
+                )
+                _RUN_METRICS.record_failure(
+                    lane, request_id="startup-model",
+                    error=exc, elapsed_ms=0.0, cold_start=True,
+                )
             except Exception as exc:
-                _log.warning("%s model pre-download failed: %s",
-                             lane.value, exc)
+                model_failure_code = "MODEL_DOWNLOAD_FAILED"
+                _log.warning(
+                    "%s model pre-download failed (unknown): %s: %s",
+                    lane.value, type(exc).__name__, exc,
+                )
+                _RUN_METRICS.record_failure(
+                    lane, request_id="startup-model",
+                    error=ModelDownloadError(
+                        f"{lane.value}: pre-download raised "
+                        f"{type(exc).__name__}: {exc}",
+                    ),
+                    elapsed_ms=0.0,
+                    cold_start=True,
+                )
 
-    # Seed boot telemetry unconditionally so dashboard always has initial data
+    # Pass 3: seed boot telemetry with HONEST state for each lane.
     for lane in (Lane.BRAINSTEM,):
         if model_ready and _llama_bin_path:
             TELEMETRY.seed_boot(lane, backend="cuda", gpu_offload=True)
+        elif not _llama_bin_path:
+            TELEMETRY.seed_boot(
+                lane, backend="cpu", gpu_offload=False,
+                lane_state="offline", host_state="offline",
+            )
+        elif model_failure_code == "HF_CREDITS_EXHAUSTED":
+            # Persistent failure (waiting on human action) \u2014 surface it
+            # prominently as a degraded lane (not transient "waking").
+            TELEMETRY.seed_boot(
+                lane, backend="cpu", gpu_offload=False,
+                lane_state="degraded", host_state="degraded",
+            )
+        elif model_failure_code == "HF_RATE_LIMITED":
+            TELEMETRY.seed_boot(
+                lane, backend="cpu", gpu_offload=False,
+                lane_state="waking", host_state="starting",
+            )
         else:
-            TELEMETRY.seed_boot(lane, backend="cpu", gpu_offload=False)
+            TELEMETRY.seed_boot(
+                lane, backend="cpu", gpu_offload=False,
+                lane_state="waking", host_state="starting",
+            )
+
+        # Always emit a single, explicit startup event so the operator
+        # can see exactly what happened even when seed_boot claims a
+        # degraded state \u2014 the event log is the most reliable surface.
+        METRICS.add_event(
+            f"{lane.value}: startup complete "
+            f"(binary={'ready' if _llama_bin_path else 'missing'}, "
+            f"model={'ready' if model_ready else model_failure_code or 'missing'})"
+        )
 
 
 startup()

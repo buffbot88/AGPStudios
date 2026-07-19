@@ -86,9 +86,14 @@ class MetricsStore:
                 "last_request_time": None,
                 "last_success": True,
                 "success_rate": 100.0,
+                # Failure diagnostic — populated when a failure record exists.
+                "last_failure_code": None,
+                "last_failure_at": None,
             }
         successes = [r for r in records if r.success]
         failures = [r for r in records if not r.success]
+        failure_records = [r for r in failures if r.error_category]
+        last_failure = failure_records[-1] if failure_records else None
         gen_tps = [r.generation_tokens_per_second for r in successes if r.generation_tokens_per_second > 0]
         prompt_tps = [r.prompt_tokens_per_second for r in successes if r.prompt_tokens_per_second > 0]
         latencies = [r.total_latency_ms for r in successes]
@@ -134,6 +139,12 @@ class MetricsStore:
                 if successes
                 else None
             ),
+            # Startup / inference failure diagnostic — drives the dashboard
+            # banner ("Out of HF credits" / "Rate limited" / "Model missing").
+            # Raw error text NEVER lives in the store; the dashboard looks up
+            # the public message from the error code (sanitized lookup table).
+            "last_failure_code": last_failure.error_category if last_failure else None,
+            "last_failure_at": last_failure.timestamp if last_failure else None,
         }
 
 

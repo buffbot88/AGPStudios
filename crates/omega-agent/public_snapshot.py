@@ -100,6 +100,82 @@ class RuntimeState:
 
 
 # ──────────────────────────────────────────────────────────────────────────
+# Public error messages — single source of truth for human-readable
+# explanations of error codes. NEVER include raw HF API responses,
+# tokens, URLs, paths, or stack traces here — these messages are
+# surfaced verbatim on the public dashboard.
+# ──────────────────────────────────────────────────────────────────────────
+
+PUBLIC_ERROR_MESSAGES: dict[str, str] = {
+    "HF_CREDITS_EXHAUSTED": (
+        "HuggingFace credits exhausted \u2014 add credits at "
+        "huggingface.co/settings/billing or wait for your monthly "
+        "quota to reset."
+    ),
+    "HF_RATE_LIMITED": (
+        "HuggingFace rate limit hit \u2014 the page auto-recovers within "
+        "a minute or two."
+    ),
+    "MODEL_DOWNLOAD_FAILED": (
+        "Model download failed. Check the application logs for the "
+        "underlying network error."
+    ),
+    "BINARY_INSTALL_FAILED": (
+        "llama-server binary could not be installed. Check the "
+        "application logs for the underlying network error."
+    ),
+    "INFERENCE_UNAVAILABLE": (
+        "Inference engine unavailable \u2014 llama-server binary "
+        "is NOT installed."
+    ),
+    "BACKEND_START_FAILED": (
+        "Backend process failed to start. Check the application logs."
+    ),
+    "SERVER_START_FAILED": (
+        "llama-server did not become healthy in time. Check the logs."
+    ),
+    "GPU_UNAVAILABLE": (
+        "GPU could not be allocated. The host may be out of ZeroGPU slots."
+    ),
+    "GPU_OFFLOAD_VERIFICATION_FAILED": (
+        "GPU offload requested but never confirmed. The server fell "
+        "back to CPU, or no GPU is available."
+    ),
+    "INFERENCE_TIMEOUT": (
+        "Inference timed out. Retry with a shorter prompt or lower max_tokens."
+    ),
+    "INFERENCE_FAILED": (
+        "Backend returned a non-200 response. Check the application logs."
+    ),
+    "INVALID_MODEL_RESPONSE": (
+        "Backend response shape did not match OpenAI-compatible. Check "
+        "the application logs."
+    ),
+    "INVALID_REQUEST": (
+        "Request validation failed (missing messages, oversized body, "
+        "or unsupported parameters)."
+    ),
+    "UNAUTHORIZED": (
+        "Authentication failed."
+    ),
+    "INTERNAL_ERROR": (
+        "Internal server error. Check the application logs."
+    ),
+}
+
+
+# Stable label overrides for the status pill — only set when we have a
+# SPECIFIC human explainable reason that warrants a custom color/label.
+DIAGNOSTIC_PILL_OVERRIDES: dict[str, tuple[str, str]] = {
+    # code:           (pill_color_hex, label)
+    "HF_CREDITS_EXHAUSTED": ("#FB7185", "HF QUOTA"),
+    "HF_RATE_LIMITED":      ("#FBBF24", "HF RATE-LIMITED"),
+    "BINARY_INSTALL_FAILED": ("#FB7185", "BINARY MISSING"),
+    "MODEL_DOWNLOAD_FAILED": ("#FBBF24", "MODEL DOWNLOAD"),
+}
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # Redaction helpers
 # ──────────────────────────────────────────────────────────────────────────
 
@@ -186,13 +262,37 @@ class PublicSnapshot:
                 lane.value, available, summary,
                 self.runtime.llama_server_available,
             )
+            last_failure_code = summary.get("last_failure_code")
+            # Pull the public-safe explanation for the diagnostic — never
+            # any raw error text from the store. Falls back to None when
+            # no failure is recorded.
+            reason_message = (
+                PUBLIC_ERROR_MESSAGES.get(last_failure_code)
+                if last_failure_code
+                else None
+            )
+            # Stats: HF-specific failures should never read as "online" —
+            # override the auto-derived lane_state so the dashboard pill
+            # turns amber/red immediately.
+            override_state: str | None = None
+            if last_failure_code == "HF_CREDITS_EXHAUSTED":
+                override_state = "degraded"
+            elif last_failure_code in ("HF_RATE_LIMITED", "MODEL_DOWNLOAD_FAILED"):
+                override_state = "waking"
+            elif last_failure_code == "BINARY_INSTALL_FAILED":
+                # Binary install failure is global, not lane-specific.
+                pass
+            effective_state = override_state or lane_state
             lanes[lane.value] = {
                 "label": cfg.get("label", lane.value),
                 "model": cfg.get("file", ""),
                 "ctx": cfg.get("ctx", 0),
                 "available": available,
                 "ready": available,
-                "lane_state": lane_state,
+                "lane_state": effective_state,
+                "lane_state_raw": lane_state,
+                "last_failure_code": last_failure_code,
+                "reason_message": reason_message,
                 **summary,
             }
         return {

@@ -24,7 +24,11 @@ from dataclasses import dataclass
 from typing import Any
 
 
-from public_snapshot import PublicSnapshot
+from public_snapshot import (
+    DIAGNOSTIC_PILL_OVERRIDES,
+    PUBLIC_ERROR_MESSAGES,
+    PublicSnapshot,
+)
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -189,16 +193,28 @@ def _derive_display_state(raw: str) -> str:
     return raw
 
 
-def _status_pill_html(state: str) -> str:
-    """Build the coloured status pill for a card."""
-    colors = {
-        "online": (_GREEN, "ONLINE"),
-        "busy": (_AMBER, "BUSY"),
-        "waking": (_AMBER, "WAKING"),
-        "degraded": (_CORAL, "DEGRADED"),
-        "offline": (_CORAL, "OFFLINE"),
-    }
-    color, label = colors.get(state, (_MUTED, state.upper()))
+def _status_pill_html(
+    state: str,
+    *,
+    override: tuple[str, str] | None = None,
+) -> str:
+    """Build the coloured status pill for a card.
+
+    ``override`` lets callers force a specific (color_hex, label) pair \u2014
+    used when we have a specific diagnostic (e.g. "HF QUOTA") that's more
+    informative than the generic state name.
+    """
+    if override is not None:
+        color, label = override
+    else:
+        colors = {
+            "online": (_GREEN, "ONLINE"),
+            "busy": (_AMBER, "BUSY"),
+            "waking": (_AMBER, "WAKING"),
+            "degraded": (_CORAL, "DEGRADED"),
+            "offline": (_CORAL, "OFFLINE"),
+        }
+        color, label = colors.get(state, (_MUTED, state.upper()))
     return (
         f'<span style="display: inline-flex; align-items: center; gap: 4px; '
         f'padding: 2px 10px; border-radius: 10px; font-size: 0.7em; '
@@ -232,7 +248,19 @@ def _build_card_html(
     ctx = info.get("ctx", 0)
     ctx_fmt = f"{ctx:,}" if ctx else "\u2014"
 
-    # Metrics
+    # Diagnostic (specifically HF-credited failures, etc.). When set,
+    # override the pill label with a more informative one and render a
+    # prominent banner inside the card explaining what happened.
+    last_failure_code: str | None = info.get("last_failure_code")
+    reason_message: str | None = info.get("reason_message")
+    override_pill: tuple[str, str] | None = (
+        DIAGNOSTIC_PILL_OVERRIDES.get(last_failure_code)
+        if last_failure_code
+        else None
+    )
+
+    # Metrics (suppress numeric noise when nothing has run yet AND
+    # there's an active diagnostic \u2014 the operator is here to see WHY).
     total_prompt = _fmt_count(info.get("total_prompt_tokens", 0))
     total_completion = _fmt_count(info.get("total_completion_tokens", 0))
     fastest = _fmt_speed(info.get("quickest_generation_tokens_per_second", 0.0))
@@ -276,6 +304,27 @@ def _build_card_html(
     # Full model filename as tooltip
     model_tooltip = model or ""
 
+    diagnostic_html = ""
+    if last_failure_code and reason_message:
+        # Color matches the pill override; coral for permanent failures,
+        # amber for transient. Body explains what the user should do.
+        diag_color, _ = override_pill if override_pill else (_CORAL, "")
+        diagnostic_html = (
+            f'<div style="margin: 0 0 16px; padding: 12px 14px; '
+            f'border: 1px solid {diag_color}66; border-radius: 10px; '
+            f'background: {diag_color}14; color: {diag_color}; '
+            f'font-size: 0.78em; line-height: 1.4; '
+            f'font-family: sans-serif;">'
+            f'<div style="font-weight: 700; letter-spacing: 0.04em; '
+            f'margin-bottom: 4px; font-size: 0.82em;">'
+            f'\u26a0  {last_failure_code.replace("_", " ").title()}'
+            f'</div>'
+            f'<div style="color: {_PRIMARY}; opacity: 0.92;">'
+            f'{reason_message}'
+            f'</div>'
+            f'</div>'
+        )
+
     return f"""\
 <div style="background: linear-gradient(180deg, {_PANEL} 0%, {_RAISED} 100%);
      border: 1px solid {_BORDER};
@@ -301,8 +350,10 @@ def _build_card_html(
            font-family: sans-serif;">
         Primary Inference Lane</div>
     </div>
-    {_status_pill_html(state)}
+    {_status_pill_html(state, override=override_pill)}
   </div>
+
+  {diagnostic_html}
 
   <!-- Model identity -->
   <div style="margin-bottom: 18px; padding-bottom: 14px; border-bottom: 1px solid {_BORDER};">
@@ -475,7 +526,12 @@ def _build_header_html() -> str:
 
 
 def _build_status_row_html(snapshot: PublicSnapshot) -> str:
-    """Build the global status row below the header."""
+    """Build the global status row below the header.
+
+    When ANY lane has a typed diagnostic failure (e.g. HF credits
+    exhausted), the row shows a short one-liner explaining it. The full
+    detail lives in the BrainStem card's diagnostic banner.
+    """
     status = snapshot.render_status()
     host_state = _global_host_state(status)
 
@@ -493,6 +549,28 @@ def _build_status_row_html(snapshot: PublicSnapshot) -> str:
     )
     total_count = len(lanes)
 
+    # Surface the highest-priority HF diagnostic in the status row.
+    # "HF_CREDITS_EXHAUSTED" wins (persistent, human-action required);
+    # "HF_RATE_LIMITED" comes next (transient, auto-recoverable).
+    last_failure_codes = [
+        l.get("last_failure_code") for l in lanes.values()
+        if l.get("last_failure_code")
+    ]
+    priority_order = (
+        "HF_CREDITS_EXHAUSTED",
+        "HF_RATE_LIMITED",
+        "MODEL_DOWNLOAD_FAILED",
+        "BINARY_INSTALL_FAILED",
+    )
+    headline_code: str | None = None
+    for code in priority_order:
+        if code in last_failure_codes:
+            headline_code = code
+            break
+    headline_msg = (
+        PUBLIC_ERROR_MESSAGES.get(headline_code) if headline_code else None
+    )
+
     # Compute seconds since last refresh
     last_refresh = _fmt_since(
         max(
@@ -505,8 +583,18 @@ def _build_status_row_html(snapshot: PublicSnapshot) -> str:
         )
     )
 
+    headline_html = ""
+    if headline_code and headline_msg:
+        headline_html = (
+            f'<div style="margin: 6px 20px 0; text-align: center; '
+            f'font-family: sans-serif; font-size: 0.78em; color: {_CORAL};">'
+            f'\u26a0 <span style="font-weight: 600;">{headline_code.replace("_", " ").title()}</span>'
+            f' \u00b7 <span>{headline_msg}</span>'
+            f'</div>'
+        )
+
     return f"""\
-<div style="text-align: center; padding: 6px 20px 20px;">
+<div style="text-align: center; padding: 6px 20px 12px;">
   <span style="display: inline-flex; align-items: center; gap: 6px;
        font-size: 0.8em; font-family: sans-serif; color: {_SECONDARY};">
     <span style="width: 7px; height: 7px; border-radius: 50%;
@@ -517,7 +605,7 @@ def _build_status_row_html(snapshot: PublicSnapshot) -> str:
     <span style="color: {_MUTED};">\u00b7</span>
     <span>Updated {last_refresh or 'just now'}</span>
   </span>
-</div>"""
+</div>{headline_html}"""
 
 
 def _build_cards_html(snapshot: PublicSnapshot) -> str:

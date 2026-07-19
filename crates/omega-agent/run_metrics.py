@@ -24,6 +24,8 @@ _log = logging.getLogger("ashatos")
 CATEGORIES = (
     "OK",
     "BINARY_INSTALL_FAILED",
+    "HF_CREDITS_EXHAUSTED",
+    "HF_RATE_LIMITED",
     "MODEL_DOWNLOAD_FAILED",
     "INFERENCE_UNAVAILABLE",
     "BACKEND_START_FAILED",

@@ -45,10 +45,60 @@ class BinaryInstallError(RunError):
 
 
 class ModelDownloadError(RunError):
-    """HF Hub GGUF download failed."""
+    """HF Hub GGUF download failed (generic network / I/O error)."""
     code: Final[str] = "MODEL_DOWNLOAD_FAILED"
     http_status: Final[int] = 503
     retryable: Final[bool] = True
+
+
+class HfCreditsExhaustedError(RunError):
+    """HuggingFace Hub returned 402 / 403 indicating credits, quota, or
+    billing exhaustion. ``retryable=False`` because the condition will not
+    self-correct in a short window — the operator must top up their plan
+    or wait for the monthly cycle to reset.
+    """
+    code: Final[str] = "HF_CREDITS_EXHAUSTED"
+    http_status: Final[int] = 402
+    retryable: Final[bool] = False
+
+    def __init__(
+        self,
+        message: str = "HuggingFace credits exhausted",
+        *,
+        retry_after_hours: int = 24,
+    ) -> None:
+        super().__init__(message)
+        self.retry_after_hours = retry_after_hours
+
+    def to_envelope(self) -> dict:
+        base = super().to_envelope()
+        base["retry_after_hours"] = self.retry_after_hours
+        return base
+
+
+class HfRateLimitedError(RunError):
+    """HuggingFace Hub returned 429 — transient rate limit hit.
+
+    Surfaced distinctly from ``HfCreditsExhaustedError`` so the dashboard
+    can offer an auto-retry message instead of "add credits".
+    """
+    code: Final[str] = "HF_RATE_LIMITED"
+    http_status: Final[int] = 429
+    retryable: Final[bool] = True
+
+    def __init__(
+        self,
+        message: str = "HuggingFace rate limit hit",
+        *,
+        retry_after_s: int = 30,
+    ) -> None:
+        super().__init__(message)
+        self.retry_after_s = retry_after_s
+
+    def to_envelope(self) -> dict:
+        base = super().to_envelope()
+        base["retry_after_s"] = self.retry_after_s
+        return base
 
 
 class InferenceUnavailableError(RunError):
@@ -125,7 +175,9 @@ class InvalidRequestError(RunError):
 ERROR_CODE_TO_HTTP_STATUS: Final[dict[str, int]] = {
     e.code: e.http_status
     for e in [
-        BinaryInstallError, ModelDownloadError, InferenceUnavailableError,
+        BinaryInstallError, ModelDownloadError,
+        HfCreditsExhaustedError, HfRateLimitedError,
+        InferenceUnavailableError,
         BackendStartError, BackendHealthTimeout, GpuAllocationError,
         GpuOffloadVerificationError, CompletionTimeout,
         CompletionProtocolError, InvalidModelResponse, CleanupError,
