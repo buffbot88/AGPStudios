@@ -929,9 +929,33 @@ if __name__ == "__main__":
     # the FastAPI/Starlette `app` returned by `gr.mount_gradio_app`).
     # Starting a second uvicorn here on HF Space would produce `Errno 98
     # address already in use` and an immediate RUNTIME_ERROR — exactly
-    # what the live Space's last log captured. The `HF_HUB_SPACE_ID`
-    # gate keeps `python app.py -> http://localhost:7860` available on
-    # any non-HF machine while skipping the double-bind on HF.
-    if not os.environ.get("HF_HUB_SPACE_ID"):
+    # what the live Space's last log captured.
+    #
+    # HF Spaces' runtime reports itself via one of several env vars
+    # (canonical name has changed across HF SDK versions). We OR-check
+    # all known names so the gate fires regardless of which one happens
+    # to be present in the current HF Spaces SDK build. On a developer
+    # machine none of them are set, so the local-dev uvicorn.run
+    # (`python app.py -> http://localhost:7860`) is restored.
+    _hf_env = {k: os.environ.get(k) for k in (
+        "HF_HUB_SPACE_ID",  # canonical HF Spaces env var (newest SDKs)
+        "SPACE_ID",         # legacy alias still set on some deployments
+        "HF_SPACE_ID",      # alternate alias
+    )}
+    # Bulletproof fallback: HF Spaces always mounts the user's source
+    # code at /home/user/app/app.py. On a developer machine the file
+    # lives at the project root, not under /home/user/. Path check is
+    # universal across every HF SDK version, doesn't depend on env
+    # export quirks, and costs one syscall.
+    _hf_path = os.path.exists("/home/user/app/app.py")
+    if any(_hf_env.values()) or _hf_path:
+        _log.info(
+            "HF Spaces detected (env=%s path=%s); skipping local-dev "
+            "uvicorn.run because HF's own Gradio launcher already binds "
+            "port 7860.",
+            {k: v for k, v in _hf_env.items() if v},
+            _hf_path,
+        )
+    else:
         import uvicorn
         uvicorn.run(app, host="0.0.0.0", port=7860)
