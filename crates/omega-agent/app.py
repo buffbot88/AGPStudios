@@ -949,16 +949,12 @@ if __name__ == "__main__":
     #     same problem in reverse: ZeroGPU's proxy still forwards to 7860
     #     and never reaches us.
     #
-    # So: let Gradio own the listener. Then graft our pure-FastAPI
-    # routes onto Gradio's internal FastAPI so /health, /v1/*, /api/*
-    # are served from the same listener Gradio is launching.
-    _log.info("Boot: demo.launch(server_name=0.0.0.0, prevent_thread_lock=True)")
-    demo.launch(server_name="0.0.0.0", prevent_thread_lock=True)
-
-    # Graft our pure-FastAPI routes onto Gradio's internal FastAPI app.
-    # Skip any mounts/Route paths that already exist on Gradio's app so
-    # we don't duplicate a path that may already be reserved (e.g. if
-    # Gradio expects /login, we shouldn't accidentally clobber it).
+    # CRITICAL ORDERING: graft the FastAPI routes onto Gradio's
+    # internal app BEFORE demo.launch(). Gradio freezes its routes
+    # list once the server starts; routes appended after launch()
+    # are silently ignored (live probe showed /health /v1/models
+    # /api/public_status all returning Gradio's HTML shell with
+    # /gradio_api/info claiming zero endpoints registered).
     _existing_paths = {getattr(r, "path", None) for r in demo.app.routes}
     _merged = 0
     for route in _app.routes:
@@ -968,9 +964,12 @@ if __name__ == "__main__":
         demo.app.routes.append(route)
         _merged += 1
     _log.info(
-        "Merged %d FastAPI routes into Gradio demo.app; main thread parking.",
+        "Pre-launch graft: merged %d FastAPI routes into Gradio demo.app.",
         _merged,
     )
+
+    _log.info("Boot: demo.launch(server_name=0.0.0.0, prevent_thread_lock=True)")
+    demo.launch(server_name="0.0.0.0", prevent_thread_lock=True)
 
     # `demo.launch(prevent_thread_lock=True)` unblocks immediately and
     # Gradio's uvicorn runs in a background thread. Without keeping the
