@@ -100,14 +100,26 @@ def _wait_until_ready(base_url: str, *, attempts: int = 30, wait_s: float = 0.5)
 def main() -> None:
     print("== STEP 1: import app.py (with mocks) ==")
     app = _import_app()
-    print(f"   app imported OK; app.app class = {type(app.app).__name__}")
+    # After the pure-FastAPI pivot, app.py's `app` attribute is a
+    # plain FastAPI instance (no Gradio Mount, no `app.app` double-
+    # indirection). Duck-type both shapes: prefer `app.app.routes` if
+    # the module has a nested .app with .routes (legacy Gradio Mount
+    # path); otherwise use `app.routes` directly.
+    candidate = (
+        app.app
+        if hasattr(app, "app") and hasattr(getattr(app, "app", None), "routes")
+        else app
+    )
+    if not hasattr(candidate, "routes"):
+        sys.exit("FATAL: app.py didn't expose a FastAPI with .routes")
+    print(f"   app imported OK; FastAPI class = {type(candidate).__name__}")
 
     health_present = any(
         r.__class__.__name__ in ("APIRoute", "Route")
         and getattr(r, "path", None) == "/health"
-        for r in app.app.routes
+        for r in candidate.routes
     )
-    print(f"   /health on app.app.routes? {health_present}")
+    print(f"   /health on FastAPI routes? {health_present}")
     assert health_present, "Defensive /health assert stripped -- smoke test fails."
 
     print()

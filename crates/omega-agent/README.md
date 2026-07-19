@@ -87,6 +87,7 @@ and displays a sanitized public dashboard.
 | `GET` | `/health` | No | Health check |
 | `GET` | `/api/public_status` | No | Public status snapshot |
 | `GET` | `/api/public_metrics` | No | Public metrics snapshot |
+| `GET` | `/api/dashboard_html` | No | Status + card HTML snippets (live JS poll) |
 
 ### Gradio Queue API
 
