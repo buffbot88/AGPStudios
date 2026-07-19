@@ -672,72 +672,86 @@ async def http_public_metrics() -> JSONResponse:
 
 from dashboard import build_dashboard
 
-with gr.Blocks(title="AshatOS Neural Host") as _gradio_blocks:
-    _tpl = build_dashboard(
-        snapshot_provider=_snapshot,
-        refresh_seconds=PUBLIC_REFRESH_SECONDS,
-    )
+def _build_gradio_blocks() -> "gr.Blocks":
+    """Build the Gradio dashboard Blocks.
 
-    # Header (static, no refresh needed)
-    gr.HTML(_tpl.header_html)
-
-    # Status row (refreshed by timer)
-    _status = gr.HTML(_tpl.status_html)
-
-    # Single BrainStem lane card (refreshed by timer)
-    with gr.Row(equal_height=True, variant="panel"):
-        with gr.Column(scale=1, min_width=320):
-            _brainstem = gr.HTML(_tpl.brainstem_html)
-
-    # Live refresh via Gradio Timer (spec \u00a710)
-    _timer = gr.Timer(value=_tpl.refresh_seconds, active=True)
-    _timer.tick(
-        fn=_tpl.refresh_fn,
-        inputs=None,
-        outputs=[_status, _brainstem],
-        queue=False,
-        show_progress="hidden",
-    )
-
-    # Footer
-    gr.HTML(
-        """
-        <div style="text-align: center; padding: 16px 20px 24px;">
-          <span style="font-size: 0.68em; color: #64748B; font-family: sans-serif;
-               letter-spacing: 0.03em;">
-            BrainStem inference engine \u00b7 Public telemetry only</span>
-        </div>
-        """
-    )
-
-    # -- Private Gradio API endpoints (AshatOS communication only) --
-    _brainstem_input = gr.Textbox(visible=False, value="{}", label="brainstem_payload")
-    _brainstem_trigger = gr.Button(visible=False, elem_id="_brainstem_trigger")
-    _brainstem_trigger.click(
-        fn=_gradio_lane_handler(Lane.BRAINSTEM),
-        inputs=[_brainstem_input],
-        outputs=[gr.Textbox(visible=False)],
-        api_name="brainstem",
-        concurrency_limit=1,
-    )
-
-    _status_trigger = gr.Button(visible=False, elem_id="_status_trigger")
-    _status_trigger.click(
-        fn=_public_status_json,
-        inputs=[],
-        outputs=[gr.Textbox(visible=False)],
-        api_name="public_status",
-        concurrency_limit=1,
-    )
-
-    _metrics_trigger = gr.Button(visible=False, elem_id="_metrics_trigger")
-    _metrics_trigger.click(
-        fn=_public_metrics_json,
-        inputs=[],
-        outputs=[gr.Textbox(visible=False)],
-        api_name="public_metrics",
-        concurrency_limit=1,
-    )
+    Wrapped in a function -- not at module level -- so HF Spaces' static
+    type-scanner cannot find a `gr.Blocks` instance in globals(). On a
+    match HF launches its own Gradio runner with HF-injected auth on port
+    7860, which is why our `/api/*` endpoints returned Gradio's login
+    HTML instead of our JSON on the live Space. The builder below runs
+    only at the moment of mount; the instance never enters the module's
+    namespace.
+    """
+    with gr.Blocks(title="AshatOS Neural Host") as b:
+        _tpl = build_dashboard(
+            snapshot_provider=_snapshot,
+            refresh_seconds=PUBLIC_REFRESH_SECONDS,
+        )
+    
+        # Header (static, no refresh needed)
+        gr.HTML(_tpl.header_html)
+    
+        # Status row (refreshed by timer)
+        _status = gr.HTML(_tpl.status_html)
+    
+        # Single BrainStem lane card (refreshed by timer)
+        with gr.Row(equal_height=True, variant="panel"):
+            with gr.Column(scale=1, min_width=320):
+                _brainstem = gr.HTML(_tpl.brainstem_html)
+    
+        # Live refresh via Gradio Timer (spec \u00a710)
+        _timer = gr.Timer(value=_tpl.refresh_seconds, active=True)
+        _timer.tick(
+            fn=_tpl.refresh_fn,
+            inputs=None,
+            outputs=[_status, _brainstem],
+            queue=False,
+            show_progress="hidden",
+        )
+    
+        # Footer
+        gr.HTML(
+            """
+            <div style="text-align: center; padding: 16px 20px 24px;">
+              <span style="font-size: 0.68em; color: #64748B; font-family: sans-serif;
+                   letter-spacing: 0.03em;">
+                BrainStem inference engine \u00b7 Public telemetry only</span>
+            </div>
+            """
+        )
+    
+        # -- Private Gradio API endpoints (AshatOS communication only) --
+        _brainstem_input = gr.Textbox(visible=False, value="{}", label="brainstem_payload")
+        _brainstem_trigger = gr.Button(visible=False, elem_id="_brainstem_trigger")
+        _brainstem_trigger.click(
+            fn=_gradio_lane_handler(Lane.BRAINSTEM),
+            inputs=[_brainstem_input],
+            outputs=[gr.Textbox(visible=False)],
+            api_name="brainstem",
+            concurrency_limit=1,
+        )
+    
+        _status_trigger = gr.Button(visible=False, elem_id="_status_trigger")
+        _status_trigger.click(
+            fn=_public_status_json,
+            inputs=[],
+            outputs=[gr.Textbox(visible=False)],
+            api_name="public_status",
+            concurrency_limit=1,
+        )
+    
+        _metrics_trigger = gr.Button(visible=False, elem_id="_metrics_trigger")
+        _metrics_trigger.click(
+            fn=_public_metrics_json,
+            inputs=[],
+            outputs=[gr.Textbox(visible=False)],
+            api_name="public_metrics",
+            concurrency_limit=1,
+        )
+    
+        b.queue(default_concurrency_limit=1, max_size=QUEUE_LIMIT)
+    return b
 
 
 # Mapping of binary-install failure codes -> exception class. Used by
@@ -929,36 +943,23 @@ except Exception as exc:
 #      (demo.app) is available after queue() is called. We add the
 #      OpenAI-compatible /v1/chat/completions route to it so AshatOS
 #      can connect with the standard OpenAI format.
-# ──────────────────────────────────────────────────────────────────────────
-
-_gradio_blocks.queue(default_concurrency_limit=1, max_size=QUEUE_LIMIT)
-
-# ONE FastAPI signpost for HF Spaces' static scanner AND our ASGI/uvicorn serving.
-# `gr.mount_gradio_app(_fastapi_app, ...)` mutates `_fastapi_app` IN PLACE
-# (verified empirically: `gr.mount_gradio_app(...) is _fastapi_app` is True).
-# The reassignment below points `app` at the routed, Gradio-mounted FastAPI.
+# ──────────────────────────────────────────────────────────────────────────# Mount Gradio inside the SAME FastAPI so user routes share one port with
+# Gradio's UI / WS / queue. `gr.mount_gradio_app(...)` mutates `_fastapi_app`
+# in place (verified empirically: `gr.mount_gradio_app(...) is _fastapi_app`
+# is True) and returns the same FastAPI object, so `app` and `_fastapi_app`
+# end up aliased to one object holding our decorator routes AND the Gradio
+# Mount at path="/".
 #
-# Why no separate `app = FastAPI()` placeholder line: the previous version
-# (commit 3a4bf37) deliberately added one as an HF Spaces AST fingerprint so
-# the static detector would match `app` and dispatch ASGI uvicorn. In
-# practice this BACKFIRED on the live Space -- HF's static detector matched
-# the placeholder, dispatched an ASGI uvicorn against the EMPTY FastAPI
-# snapshot (no /health, no /v1/*, no /api/* routes), and grabbed port 7860
-# first. Our `__main__` uvicorn then crashed with Errno 98 and exited
-# non-zero, taking the Space down even though the winning ASGI uvicorn was
-# serving -- the wrong app.
-#
-# Without the placeholder, HF Spaces' behaviour is one of two scenarios,
-# both of which this file serves correctly:
-#   (a) ASGI mode: HF reads `app` and dispatches uvicorn against the
-#       mounted, routed FastAPI. Our `__main__` uvicorn then loses the
-#       bind race; we swallow the OSError below and sleep so the
-#       container stays RUNNING while ASGI mode serves.
-#   (b) SCRIPT mode: HF falls back to plain `python app.py`. Our
-#       `__main__` block binds 7860 and serves the same mounted FastAPI.
+# The `blocks=_build_gradio_blocks()` argument calls the builder function
+# inline. Inside that function the `gr.Blocks` instance never enters
+# module globals() which is what HF Spaces' static scanner iterates to
+# decide whether to launch its own parallel Gradio runner (with auth).
+# Without this lazy-build escape, the only top-level binding HF sees is
+# `app` -- the right thing. With it, every /api/* request hits our
+# FastAPI route directly on port 7860 instead of Gradio's auth-shim.
 app = gr.mount_gradio_app(
     app=_fastapi_app,
-    blocks=_gradio_blocks,
+    blocks=_build_gradio_blocks(),
     path="/",
 )
 
