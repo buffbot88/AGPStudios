@@ -955,7 +955,29 @@ assert any(
     for r in app.routes
 ), "gr.mount_gradio_app stripped the /health route \u2014 FastAPI mount is broken"
 
-# Bind an alias for explicit ``app:app`` uvicorn targeting. HF Spaces'
-# static detector reads the ``app`` module-level name; this alias is just
-# for the local ``__main__`` block (HF Spaces doesn't execute __main__).
+# Bind an alias for explicit ``app:app`` uvicorn targeting.
 _FASTAPI_EXPORT = app  # FastAPI instance returned by gr.mount_gradio_app
+_log.info(
+    "FastAPI routes mounted via gr.mount_gradio_app: /v1/chat/completions, "
+    "/v1/models, /health, /api/public_status, /api/public_metrics"
+)
+
+# Hugging Face Spaces has two runner modes for app.py and selecting the
+# wrong one produces a silent 503:
+#
+#   * ASGI mode: HF detects `app = FastAPI(...)` at the module level and
+#     dispatches `uvicorn app:app` against it. Our ``__main__`` block is
+#     bypassed (different execution path), HF's uvicorn handles binding.
+#
+#   * SCRIPT mode: HF invokes plain `python app.py`, which exits
+#     cleanly with code 0 if no blocking call is left on the stack.
+#     The Space then reports "Exit code 0; Container logs: Fetching
+#     error logs..." and every endpoint returns 503.
+#
+# Provide a blocking uvicorn call so SCRIPT mode keeps the process alive.
+# If HF's ASGI mode already bound 7860 from a separate uvicorn process,
+# ours will raise OSError \u2014 we let it propagate; HF's runner continues
+# serving independently regardless of our exit code.
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(_FASTAPI_EXPORT, host="0.0.0.0", port=7860)
