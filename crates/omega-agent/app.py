@@ -919,7 +919,7 @@ _gradio_blocks.queue(default_concurrency_limit=1, max_size=QUEUE_LIMIT)
 #
 # (2) The literal ``app = FastAPI()`` two lines below IS the explicit
 #     uvicorn fingerprint the AST scanner looks for. Without it, the
-#     ``app = gr.mount_gradigo_app(...)`` assignment below looks like an
+#     ``app = gr.mount_gradio_app(...)`` assignment below looks like an
 #     opaque function call to the static scanner and gets categorised as
 #     "neither", causing HF Spaces to fall back to running the renamed
 #     ``_gradio_blocks`` object directly via Gradio's launcher (which gives
@@ -931,13 +931,13 @@ app = FastAPI()  # noqa: F841 \u2014 intentional AST fingerprint for HF Spaces
 # Mount the Gradio UI inside the same FastAPI app so our custom routes
 # (``/v1/chat/completions``, ``/v1/models``, ``/health``,
 # ``/api/public_status``, ``/api/public_metrics``) share one port with the
-# Gradio UI / WS / queue. ``gr.mount_gradigo_app`` returns a real,
+# Gradio UI / WS / queue. ``gr.mount_gradio_app`` returns a real,
 # immediately-servable FastAPI app with the Gradio UI at ``path="/"``
 # above and our explicit routes (/v1/*, /api/*, /health) preserved on
 # the underlying FastAPI app (literal paths match before the Gradio
 # Mount fallback). This is the supported, documented Gradio 6.x pattern
 # for serving custom FastAPI routes alongside a Gradio Blocks app.
-app = gr.mount_gradigo_app(
+app = gr.mount_gradio_app(
     app=_fastapi_app,
     blocks=_gradio_blocks,
     path="/",
@@ -953,19 +953,9 @@ assert any(
     r.__class__.__name__ in ("APIRoute", "Route")
     and getattr(r, "path", None) == "/health"
     for r in app.routes
-), "gr.mount_gradigo_app stripped the /health route \u2014 FastAPI mount is broken"
+), "gr.mount_gradio_app stripped the /health route \u2014 FastAPI mount is broken"
 
 # Bind an alias for explicit ``app:app`` uvicorn targeting. HF Spaces'
 # static detector reads the ``app`` module-level name; this alias is just
 # for the local ``__main__`` block (HF Spaces doesn't execute __main__).
-_FASTAPI_EXPORT = app  # FastAPI instance returned by gr.mount_gradigo_app
-_log.info(
-    "FastAPI routes mounted via gr.mount_gradigo_app: /v1/chat/completions, "
-    "/v1/models, /health, /api/public_status, /api/public_metrics"
-)
-
-if __name__ == "__main__":
-    # Local dev entrypoint. HF Spaces will detect ``app`` above and serve
-    # it via uvicorn automatically without entering this block.
-    import uvicorn
-    uvicorn.run(_FASTAPI_EXPORT, host="0.0.0.0", port=7860)
+_FASTAPI_EXPORT = app  # FastAPI instance returned by gr.mount_gradio_app
