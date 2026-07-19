@@ -916,60 +916,59 @@ with demo:
 # FastAPI app — our `_app`'s routes stay, plus the dashboard is at /.
 _log.info(
     "FastAPI routes owned by `_app`: /, /v1/chat/completions, /v1/models, "
-    "/health, /api/public_status, /api/public_metrics, /api/dashboard_html "
-    "(grafted onto Gradio demo.app in __main__)"
+    "/health, /api/public_status, /api/public_metrics, /api/dashboard_html. "
+    "On HF ZeroGPU, __main__ hands _app to demo.launch(app=_app) so Gradio "
+    "mounts its UI onto our pre-built FastAPI (Starlette first-match-wins)."
 )
 # `app` is the module-level public surface the smoke harness imports as
-# `python -m uvicorn app:app`. We expose `_app` (the pure-FastAPI app we
+# `python -m uvicorn app:app`. We expose `_app` (the pure-FastAPI app
 # built up in section 12) directly here — NOT a `gr.mount_gradio_app()`
 # result. On sdk:gradio + zero-a10g the ZeroGPU supervisor intercepts
 # Gradio's `demo.launch()` and binds port 7860 itself; constructing a
-# mount_gradio_app and binding it via uvicorn.run() always collapses to
-# `Errno 98 address already in use`. The actual boot shape we use on HF
-# (in __main__ below) is: `demo.launch()` port-hunts past 7860, then
-# we graft `_app.routes` onto `demo.app.routes`.
+# mount_gradio_app and binding it via uvicorn.run() directly always
+# collapses to `Errno 98 address already in use`. The actual boot shape
+# on HF (in __main__ below) is: pass `_app` to `demo.launch(app=_app, ...)`
+# so Gradio mounts its UI routes onto our pre-built `_app` while we
+# retain ownership of every native FastAPI endpoint.
 app = _app
 
 
 if __name__ == "__main__":
-    # Boot entry. We hand the listener to Gradio's `demo.launch()` instead
-    # of calling `uvicorn.run()` directly. Why:
+    # Boot entry. We hand our pre-configured FastAPI `_app` to Gradio's
+    # `demo.launch()` via the canonical `app=` parameter. Why this shape
+    # (vs. `uvicorn.run()` direct, vs. `gr.mount_gradio_app()` then
+    # uvicorn.run, vs. graft-after-launch, vs. graft-before-launch):
     #
-    #   - HF Spaces with `sdk: gradio` on ZeroGPU has an auth/routing
-    #     supervisor that intercepts Gradio's `demo.launch()` and binds
-    #     its OWN listener on port 7860 *before* our app code runs.
-    #   - The supervisor port-hunts and signals the actual port back to
-    #     ZeroGPU — our app just has to `demo.launch()` and the right
-    #     port gets picked.
-    #   - Calling `uvicorn.run()` ourselves on 7860 collides with the
-    #     supervisor's bind (live Space repeatedly showed
-    #     `Errno 98 address already in use` regardless of
-    #     GRADIO_SERVER_PORT/PORT env reads — both unset on this Space).
-    #   - Calling `uvicorn.run()` on a different port we picked has the
-    #     same problem in reverse: ZeroGPU's proxy still forwards to 7860
-    #     and never reaches us.
+    #   - HF Spaces `sdk: gradio` on ZeroGPU has an auth/routing supervisor
+    #     that intercepts `demo.launch()` and binds port 7860 itself.
+    #     Calling `uvicorn.run(app, port=7860)` directly collides with the
+    #     supervisor's bind (`Errno 98 address already in use`, regardless
+    #     of GRADIO_SERVER_PORT/PORT env reads — both unset on this Space).
+    #     So we MUST let `demo.launch()` own the listener.
     #
-    # CRITICAL ORDERING: graft the FastAPI routes onto Gradio's
-    # internal app BEFORE demo.launch(). Gradio freezes its routes
-    # list once the server starts; routes appended after launch()
-    # are silently ignored (live probe showed /health /v1/models
-    # /api/public_status all returning Gradio's HTML shell with
-    # /gradio_api/info claiming zero endpoints registered).
-    _existing_paths = {getattr(r, "path", None) for r in demo.app.routes}
-    _merged = 0
-    for route in _app.routes:
-        _rpath = getattr(route, "path", None)
-        if _rpath and _rpath in _existing_paths:
-            continue
-        demo.app.routes.append(route)
-        _merged += 1
+    #   - Gradio 6.20's `demo.launch()` rebuilds `demo.app` from scratch
+    #     during launch. Any routes we append to `demo.app.routes` BEFORE
+    #     launch (pre-launch graft) or AFTER launch (post-launch graft)
+    #     are silently discarded — live probe showed `/health`,
+    #     `/v1/models`, `/api/public_status` all returning Gradio's HTML
+    #     shell and `/gradio_api/info` reporting zero endpoints registered.
+    #
+    #   - Passing `app=_app` tells Gradio's launch() to mount its UI routes
+    #     onto OUR pre-existing FastAPI instance via `mount_gradio_app`
+    #     under the hood. Gradio's routes are appended; ours stay at their
+    #     module-scope paths. Starlette's first-match-wins routing means
+    #     our `GET /` (HTMLResponse dashboard), `GET /health` (JSON),
+    #     `GET /api/public_status` (JSON), `POST /v1/chat/completions`
+    #     etc. all win over Gradio's appended fallbacks. The unified app
+    #     is uvicorn-served on port 7860 by Gradio's supervisor.
     _log.info(
-        "Pre-launch graft: merged %d FastAPI routes into Gradio demo.app.",
-        _merged,
+        "Boot: demo.launch(app=_app, server_name=0.0.0.0, prevent_thread_lock=True)"
     )
-
-    _log.info("Boot: demo.launch(server_name=0.0.0.0, prevent_thread_lock=True)")
-    demo.launch(server_name="0.0.0.0", prevent_thread_lock=True)
+    demo.launch(
+        app=_app,
+        server_name="0.0.0.0",
+        prevent_thread_lock=True,
+    )
 
     # `demo.launch(prevent_thread_lock=True)` unblocks immediately and
     # Gradio's uvicorn runs in a background thread. Without keeping the
