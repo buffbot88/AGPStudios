@@ -40,7 +40,7 @@ from typing import Any
 
 import gradio as gr
 from fastapi import FastAPI, Request as FastRequest
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import JSONResponse
 
 from backend_launcher import BackendLauncher, LiveBackend
 from completion_client import CompletionClient, CompletionResult
@@ -1004,8 +1004,8 @@ if not any(
     )
 
 _log.info(
-    "FastAPI routes: /, /v1/chat/completions, /v1/models, /health, "
-    "/api/public_status, /api/public_metrics; Gradio UI at /ui/"
+    "FastAPI routes: /v1/chat/completions, /v1/models, /health, "
+    "/api/public_status, /api/public_metrics; Gradio mounted at / (dashboard)"
 )
 
 # Hugging Face Spaces (ZeroGPU / CPU) prefers ASGI dispatch -- it loads our
