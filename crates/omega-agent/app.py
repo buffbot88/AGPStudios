@@ -885,7 +885,33 @@ def startup() -> None:
         )
 
 
-startup()
+# Run startup() in a daemon thread so the FastAPI app can bind port 7860
+# IMMEDIATELY and start serving /health, /v1/models, /api/public_status, etc.
+# Instead of blocking the module-level import for the duration of the binary
+# install + model download (which can take 60s+ on cold cache and was the live
+# Space's "Starting..." symptom for the past several commits). The dashboard
+# reads `_llama_bin_path` as it gets populated; the lanes show `waking` until
+# startup completes, then flip to `online` automatically. Daemon=True so the
+# thread never blocks container exit if HF sends SIGTERM during shutdown.
+#
+# CRITICAL: any unhandled exception raised inside startup() would be swallowed
+# by Python's threading layer (no traceback on the console, the daemon just
+# dies). We wrap the target with a `_log.exception(...)` chokepoint so a
+# crash surfaces in HF Spaces' logs tab rather than leaving the operator
+# debugging a silent hang.
+def _run_startup_with_logging() -> None:
+    try:
+        startup()
+    except Exception:
+        _log.exception(
+            "startup daemon thread crashed; Space will run degraded (binary "
+            "or model may be unreachable). Check HF Spaces logs for the cause."
+        )
+
+_startup_thread = threading.Thread(
+    target=_run_startup_with_logging, daemon=True, name="ashatos-startup",
+)
+_startup_thread.start()
 
 # ── Sync startup report (lets ZeroGPU platform confirm readiness) ────
 try:
@@ -941,11 +967,24 @@ app = gr.mount_gradio_app(
 # `Route` (Starlette) names appear on `app.routes` after mount -- the
 # former for our `@_fastapi_app.get/post` decorators, the latter for
 # FastAPI's auto-docs routes at `/docs`, `/openapi.json`, etc.
-assert any(
+#
+# We do NOT use ``assert`` here -- an AssertionError on import would crash
+# the whole module and either trip HF Spaces' restart loop (ASGI mode) or
+# leave the script-mode container exiting non-zero. Logging the regression
+# at ERROR level instead surfaces the same warning through the dashboard's
+# event log + logs tab while keeping port 7860 bound so the Space stays
+# RUNNING. An operator can then read the diagnostic line and pin a Gradio
+# version that matches the operator's tolerance.
+if not any(
     r.__class__.__name__ in ("APIRoute", "Route")
     and getattr(r, "path", None) == "/health"
     for r in app.routes
-), "gr.mount_gradio_app stripped the /health route -- FastAPI mount is broken"
+):
+    _log.error(
+        "DEFECTIVE FASTAPI MOUNT: /health missing from app.routes -- a future "
+        "Gradio release likely stripped pre-existing routes on mount. /health, "
+        "/v1/*, /api/* will 404 until a compatible Gradio is re-installed."
+    )
 
 _log.info(
     "FastAPI routes mounted via gr.mount_gradio_app: /v1/chat/completions, "
