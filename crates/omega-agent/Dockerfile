@@ -36,7 +36,6 @@ COPY backend_launcher.py /app/backend_launcher.py
 COPY completion_client.py /app/completion_client.py
 COPY installer.py /app/installer.py
 COPY install_strategies.py /app/install_strategies.py
-COPY lane_keygate.py /app/lane_keygate.py
 COPY lane_resolver.py /app/lane_resolver.py
 
 # Single-process FastAPI serving. No second uvicorn (no bind race), no

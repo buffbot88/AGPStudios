@@ -581,57 +581,11 @@ def _build_footer_html() -> str:
 </div>"""
 
 
-    # Live-refresh polling is wired INSIDE app.py via `gr.HTML`'s
-    # `js_on_load` parameter instead. See :func:`render_dashboard_refresh_js`.
-
-
 # ──────────────────────────────────────────────────────────────────────────
 # Public rendering entry points — server-rendered HTML fragment,
 # companion JSON payload used by the JS poll loop, and the polling
 # function expression exported for gr.HTML's `js_on_load`.
 # ──────────────────────────────────────────────────────────────────────────
-
-
-def render_dashboard_refresh_js(refresh_ms: int) -> str:
-    """Return a JS function expression for `gr.HTML(js_on_load=...)`.
-
-    Browsers do NOT execute `<script>` tags injected via innerHTML
-    (which is how `gr.HTML(value=...)` renders its content). The polling
-    loop therefore has to be supplied through Gradio's `js_on_load`
-    parameter — a function expression Gradio evaluates on component
-    render. Inside Gradio this runs ONCE on mount; we use ``setInterval``
-    to keep ticking every ``refresh_ms`` and one immediate ``tick()``
-    call to correct any drift between server-render time and the
-    current second.
-    """
-    safe_ms = max(1000, int(refresh_ms))
-    return (
-        "() => {\n"
-        "    const REFRESH_MS = %d;\n"
-        "    function tick() {\n"
-        "        fetch('/api/dashboard_html', { cache: 'no-store' })\n"
-        "            .then(function (r) {\n"
-        "                if (!r.ok) throw new Error('status ' + r.status);\n"
-        "                return r.json();\n"
-        "            })\n"
-        "            .then(function (j) {\n"
-        "                if (j.status_html) {\n"
-        "                    var el = document.getElementById('status');\n"
-        "                    if (el) el.innerHTML = j.status_html;\n"
-        "                }\n"
-        "                if (j.brainstem_html) {\n"
-        "                    var el = document.getElementById('brainstem');\n"
-        "                    if (el) el.innerHTML = j.brainstem_html;\n"
-        "                }\n"
-        "            })\n"
-        "            .catch(function (err) {\n"
-        "                console.warn('dashboard refresh failed', err);\n"
-        "            });\n"
-        "    }\n"
-        "    setInterval(tick, REFRESH_MS);\n"
-        "    tick();\n"
-        "}\n"
-    ) % safe_ms
 
 
 def render_dashboard_html_json(snapshot: PublicSnapshot) -> dict[str, str]:
@@ -647,66 +601,22 @@ def render_dashboard_html_json(snapshot: PublicSnapshot) -> dict[str, str]:
     }
 
 
-# JavaScript snippet that the rendered HTML page embeds. Pulled out as
-# a constant so it can be tested independently if needed.
-_REFRESH_JS_TEMPLATE = """\
-(function() {
-    var REFRESH_MS = %REFRESH_MS%;
-    var STATUS_EL = document.getElementById('status');
-    var BRAINSTEM_EL = document.getElementById('brainstem');
-    function tick() {
-        fetch('/api/dashboard_html', { cache: 'no-store' })
-            .then(function(r) {
-                if (!r.ok) throw new Error('status ' + r.status);
-                return r.json();
-            })
-            .then(function(j) {
-                if (j.status_html && STATUS_EL) {
-                    STATUS_EL.innerHTML = j.status_html;
-                }
-                if (j.brainstem_html && BRAINSTEM_EL) {
-                    BRAINSTEM_EL.innerHTML = j.brainstem_html;
-                }
-            })
-            .catch(function(err) {
-                /* Silent: dashboard stays at last-good snapshot so a
-                   transient /api/dashboard_html failure doesn't blank
-                   the operator's view. */
-                console.warn('dashboard refresh failed', err);
-            });
-    }
-    setInterval(tick, REFRESH_MS);
-    /* Trigger one immediate tick so any divergence between server-render
-       time and the current second is corrected on first browser paint. */
-    tick();
-})();
-"""
-
-
 def render_index_html(
     snapshot_provider: Callable[[], PublicSnapshot],
     refresh_seconds: int = 8,
 ) -> str:
-    """Render the public dashboard as a compact inner-only HTML fragment.
+    """Render the public telemetry dashboard as a standalone HTML document.
 
-    Returns a single ``<div class="ashat-root">...</div>`` wrapper
-    containing a scoped ``<style>`` block (every selector prefixed
-    with ``.ashat-root``) plus the page body (header + status row +
-    BrainStem card + footer) and a ``<script>`` that polls
-    ``/api/dashboard_html`` every ``refresh_seconds`` for live updates.
+    Returns a complete ``<!DOCTYPE html>`` page with embedded CSS, the
+    server-rendered status row + BrainStem lane card, a Plotly time-series
+    chart (generation speed + latency), and a JavaScript ``setInterval``
+    polling loop that fetches ``/api/dashboard_html`` every
+    ``refresh_seconds`` and swaps the innerHTML of the status and
+    brainstem container divs in place, plus updates the Plotly chart
+    from ``/api/dashboard_timeseries``.
 
-    Why compact inner-only instead of a standalone ``<!DOCTYPE html>``
-    document: the value flows through ``gr.HTML(value=...)`` and into
-    a Gradio Blocks UI; browsers silently strip DOCTYPE/html/head/body
-    tags injected via ``innerHTML``, so an unscoped full-document body
-    would lose its background / typography class hooks. Scoping all
-    global CSS rules under ``.ashat-root`` and wrapping everything in
-    a single styled div makes the dashboard render correctly inside
-    Gradio's chrome-less container — and the inline styles already
-    painted on each card stay identical to the standalone version.
-
-    ``refresh_seconds`` is clamped to ``>= 1`` so a misconfigured
-    zero/negative value can't loop the JS poll at full CPU.
+    The first paint is server-rendered so the page is meaningful before
+    the first poll lands.  No Gradio runtime, no auth shim — pure HTML.
     """
     safe_refresh = max(1, int(refresh_seconds))
     initial_snapshot = snapshot_provider()
@@ -716,31 +626,190 @@ def render_index_html(
     brainstem_html = _build_cards_html(initial_snapshot)
     footer_html = _build_footer_html()
 
-    return f"""<div class="ashat-root">
-  <style>
-    .ashat-root {{
-      background: {_BG}; color: {_PRIMARY};
-      margin: 0; padding: 0; min-height: 100vh;
-      font-family: sans-serif;
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AshatOS Neural Host \u2014 Public Telemetry</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+  *, *::before, *::after {{ box-sizing: border-box; }}
+  body {{
+    background: {_BG}; color: {_PRIMARY};
+    margin: 0; padding: 0; min-height: 100vh;
+    font-family: sans-serif;
+  }}
+  a {{ color: {_ACCENT}; }}
+  .container {{
+    max-width: 760px; margin: 0 auto; padding: 0 24px;
+  }}
+  #status, #brainstem {{
+    line-height: 1.4;
+  }}
+  #chart {{
+    margin-top: 24px; margin-bottom: 24px;
+  }}
+  #chart .plotly .main-svg {{
+    background: transparent !important;
+  }}
+</style>
+</head>
+<body>
+{header_html}
+<div id="status">{status_html}</div>
+<div class="container">
+  <div id="brainstem">{brainstem_html}</div>
+</div>
+<div id="chart" class="container"></div>
+{footer_html}
+<script>
+(function() {{
+    var REFRESH_MS = {safe_refresh * 1000};
+    var STATUS_EL = document.getElementById('status');
+    var BRAINSTEM_EL = document.getElementById('brainstem');
+    var CHART_EL = document.getElementById('chart');
+    var chartReady = false;
+
+    var CHART_COLORS = {{
+        bg: '{_BG}',
+        panel: '{_PANEL}',
+        primary: '{_PRIMARY}',
+        secondary: '{_SECONDARY}',
+        muted: '{_MUTED}',
+        accent: '{_ACCENT}',
+        green: '{_GREEN}',
+        coral: '{_CORAL}'
+    }};
+
+    function buildLayout(title) {{
+        return {{
+            title: {{
+                text: title,
+                font: {{ color: CHART_COLORS.secondary, size: 13, family: 'sans-serif' }}
+            }},
+            paper_bgcolor: CHART_COLORS.bg,
+            plot_bgcolor: CHART_COLORS.panel,
+            font: {{ color: CHART_COLORS.muted, size: 10, family: 'sans-serif' }},
+            margin: {{ l: 50, r: 50, t: 40, b: 40 }},
+            height: 320,
+            legend: {{
+                orientation: 'h', y: 1.12,
+                font: {{ color: CHART_COLORS.secondary, size: 11 }}
+            }},
+            xaxis: {{
+                gridcolor: 'rgba(148,163,184,0.10)',
+                zerolinecolor: 'rgba(148,163,184,0.15)',
+                color: CHART_COLORS.muted,
+                tickformat: '%H:%M:%S'
+            }},
+            yaxis: {{
+                title: {{ text: 'tok/s', font: {{ color: CHART_COLORS.accent, size: 11 }} }},
+                gridcolor: 'rgba(148,163,184,0.10)',
+                zerolinecolor: 'rgba(148,163,184,0.15)',
+                color: CHART_COLORS.accent
+            }},
+            yaxis2: {{
+                title: {{ text: 'ms', font: {{ color: CHART_COLORS.coral, size: 11 }} }},
+                overlaying: 'y', side: 'right',
+                gridcolor: 'rgba(148,163,184,0.05)',
+                color: CHART_COLORS.coral
+            }},
+            hovermode: 'x unified',
+            hoverlabel: {{
+                bgcolor: CHART_COLORS.panel,
+                font: {{ color: CHART_COLORS.primary, size: 11 }}
+            }}
+        }};
     }}
-    .ashat-root a {{ color: {_ACCENT}; }}
-    .ashat-root .container {{
-      max-width: 760px; margin: 0 auto; padding: 0 24px;
+
+    function updateChart(data) {{
+        var brainstem = (data && data.brainstem) || [];
+        var timestamps = [];
+        var genSpeeds = [];
+        var latencies = [];
+        for (var i = 0; i < brainstem.length; i++) {{
+            var pt = brainstem[i];
+            if (pt.generation_tokens_per_second > 0 || pt.total_latency_ms > 0) {{
+                timestamps.push(pt.timestamp);
+                genSpeeds.push(pt.generation_tokens_per_second || 0);
+                latencies.push(pt.total_latency_ms || 0);
+            }}
+        }}
+
+        if (timestamps.length === 0) {{
+            CHART_EL.innerHTML = '<div style="text-align:center; color:' + CHART_COLORS.muted
+                + '; font-family:sans-serif; font-size:0.82em; padding:40px 0;">'
+                + 'No inference data yet \u2014 chart appears after the first request.</div>';
+            chartReady = false;
+            return;
+        }}
+
+        var genTrace = {{
+            x: timestamps, y: genSpeeds,
+            type: 'scatter', mode: 'lines+markers',
+            name: 'Gen tok/s',
+            line: {{ color: CHART_COLORS.accent, width: 2, shape: 'spline', smoothing: 0.4 }},
+            marker: {{ size: 3, color: CHART_COLORS.accent }},
+            yaxis: 'y',
+            hovertemplate: '%{{y:.1f}} tok/s<extra>Gen speed</extra>'
+        }};
+        var latTrace = {{
+            x: timestamps, y: latencies,
+            type: 'scatter', mode: 'lines+markers',
+            name: 'Latency',
+            line: {{ color: CHART_COLORS.coral, width: 1.8, shape: 'spline', smoothing: 0.4, dash: 'dot' }},
+            marker: {{ size: 3, color: CHART_COLORS.coral }},
+            yaxis: 'y2',
+            hovertemplate: '%{{y:.0f}} ms<extra>Total latency</extra>'
+        }};
+
+        var layout = buildLayout('BrainStem \u2014 Generation Speed &amp; Latency Over Time');
+        var config = {{ displayModeBar: false, responsive: true }};
+
+        if (chartReady) {{
+            Plotly.react(CHART_EL, [genTrace, latTrace], layout, config);
+        }} else {{
+            Plotly.newPlot(CHART_EL, [genTrace, latTrace], layout, config);
+            chartReady = true;
+        }}
     }}
-    .ashat-root #status, .ashat-root #brainstem {{
-      line-height: 1.4;
+
+    function tick() {{
+        fetch('/api/dashboard_html', {{ cache: 'no-store' }})
+            .then(function(r) {{
+                if (!r.ok) throw new Error('status ' + r.status);
+                return r.json();
+            }})
+            .then(function(j) {{
+                if (j.status_html && STATUS_EL) {{
+                    STATUS_EL.innerHTML = j.status_html;
+                }}
+                if (j.brainstem_html && BRAINSTEM_EL) {{
+                    BRAINSTEM_EL.innerHTML = j.brainstem_html;
+                }}
+            }})
+            .catch(function(err) {{
+                /* Silent: dashboard stays at last-good snapshot. */
+                console.warn('dashboard refresh failed', err);
+            }});
+
+        fetch('/api/dashboard_timeseries', {{ cache: 'no-store' }})
+            .then(function(r) {{
+                if (!r.ok) throw new Error('status ' + r.status);
+                return r.json();
+            }})
+            .then(function(data) {{
+                updateChart(data);
+            }})
+            .catch(function(err) {{
+                console.warn('timeseries fetch failed', err);
+            }});
     }}
-  </style>
-  {header_html}
-  <div id="status">{status_html}</div>
-  <div class="container">
-    <div id="brainstem">{brainstem_html}</div>
-  </div>
-  {footer_html}
-</div>"""
-    # Live-refresh polling is wired INSIDE app.py via gr.HTML's `js_on_load`
-    # parameter, not by embedding a <script> tag here. Browsers do NOT
-    # execute <script> tags injected via innerHTML (which is how Gradio's
-    # gr.HTML(value=...) renders its content into the DOM); only Gradio's
-    # `js_on_load=` runs on render. The polling snippet is exported as
-    # `render_dashboard_refresh_js(refresh_ms)` for the caller to wire in.
+
+    setInterval(tick, REFRESH_MS);
+    tick();
+}})();
+</script>
+</body>
+</html>"""

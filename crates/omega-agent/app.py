@@ -5,7 +5,7 @@ The heavy lifting now lives in purpose-built modules:
     * :mod:`domain`            — Lane enum + per-lane config (single BRAINSTEM)
     * :mod:`run_errors`        — typed exception hierarchy + RunError\u2192JSON codes
     * :mod:`lane_resolver`     — strict route-or-model lane routing
-    * :mod:`lane_keygate`      — single auth authority for both surfaces
+    * :mod:`lane_resolver`     — strict route-or-model lane routing
     * :mod:`backend_launcher`  — per-request llama-server lifecycle
     * :mod:`completion_client` — HTTP-only client to the live backend
     * :mod:`run_metrics`       — sanitized metric + event recording
@@ -45,12 +45,7 @@ from backend_launcher import BackendLauncher, LiveBackend
 from completion_client import CompletionClient, CompletionResult
 from domain import LANE_CONFIG, Lane, lane_cfg
 from installer import InstallerResult, ensure_llama_server
-from lane_keygate import (
-    AuthError,
-    LaneKeyGate,
-    headers_from_fastapi,
-    headers_from_gradio,
-)
+
 from lane_resolver import LaneResolver
 from metrics_store import METRICS, MetricRecord
 from run_errors import (
@@ -122,7 +117,6 @@ def _binary_path_getter() -> str | None:
 
 # Pipeline collaborators instantiated once at module import.
 _RESOLVER = LaneResolver()
-_KEY_GATE = LaneKeyGate()
 _BACKEND_LAUNCHER = BackendLauncher(
     binary_path_getter=_binary_path_getter,
     port=LLAMA_SERVER_PORT,
@@ -490,15 +484,7 @@ def _make_http_chat_completions():
                 "error": {"message": exc.message, "type": exc.code.lower()},
             })
 
-        # 3. Auth
-        try:
-            _KEY_GATE.check(headers_from_fastapi(request), lane)
-        except AuthError:
-            return JSONResponse(status_code=401, content={
-                "error": {"message": "unauthorized", "type": "authentication_error"},
-            })
-
-        # 4. Validate
+        # 3. Validate
         try:
             err = validate_request(body, lane)
             if err:
@@ -527,7 +513,7 @@ def _make_http_chat_completions():
 
 from public_snapshot import PublicSnapshot, RuntimeState
 from telemetry import TELEMETRY
-from dashboard import render_index_html, render_dashboard_html_json, render_dashboard_refresh_js
+from dashboard import render_index_html, render_dashboard_html_json
 
 
 def _snapshot() -> PublicSnapshot:
@@ -768,20 +754,20 @@ except Exception as exc:
 _chat_completions_handler = _make_http_chat_completions()
 
 
-_app = FastAPI(title="AshatOS Neural Host")
+app = FastAPI(title="AshatOS Neural Host")
 
 
-@_app.get("/api/public_status")
+@app.get("/api/public_status")
 async def http_public_status() -> JSONResponse:
     return JSONResponse(content=_build_status())
 
 
-@_app.get("/api/public_metrics")
+@app.get("/api/public_metrics")
 async def http_public_metrics() -> JSONResponse:
     return JSONResponse(content=_snapshot().render_metrics())
 
 
-@_app.get("/api/dashboard_html")
+@app.get("/api/dashboard_html")
 async def http_dashboard_html() -> JSONResponse:
     """Live-refresh companion to GET /; client JS polls this endpoint.
 
@@ -795,7 +781,21 @@ async def http_dashboard_html() -> JSONResponse:
     return JSONResponse(content=render_dashboard_html_json(snap))
 
 
-@_app.get("/health")
+@app.get("/api/dashboard_timeseries")
+async def http_dashboard_timeseries() -> JSONResponse:
+    """Plotly time-series companion. Returns per-lane frame data for
+    client-side Plotly chart rendering.
+
+    Each frame entry: timestamp, generation_tokens_per_second,
+    total_latency_ms, time_to_first_token_ms, prompt_tokens_per_second,
+    and success flag.  Safe for public consumption — no prompts, keys,
+    or paths.
+    """
+    frames = _snapshot().render_frames()
+    return JSONResponse(content=frames)
+
+
+@app.get("/health")
 async def http_health() -> JSONResponse:
     return JSONResponse(content={
         "status": "ok",
@@ -808,7 +808,7 @@ async def http_health() -> JSONResponse:
     })
 
 
-@_app.get("/v1/models")
+@app.get("/v1/models")
 async def http_list_models() -> JSONResponse:
     return JSONResponse(content={
         "object": "list",
@@ -823,12 +823,12 @@ async def http_list_models() -> JSONResponse:
     })
 
 
-@_app.post("/v1/chat/completions")
+@app.post("/v1/chat/completions")
 async def http_chat_completions(request: FastRequest) -> JSONResponse:
     return await _chat_completions_handler(request)
 
 
-@_app.get("/", response_class=HTMLResponse)
+@app.get("/", response_class=HTMLResponse)
 async def http_landing() -> HTMLResponse:
     """Public-telemetry dashboard.
 
@@ -846,88 +846,7 @@ async def http_landing() -> HTMLResponse:
     )
 
 
-# ──────────────────────────────────────────────────────────────────────────
-# 13.  Gradio thin-mount for ZeroGPU
-#      HF Spaces `sdk: gradio` requires a Gradio Blocks instance at
-#      module scope so the runner can call .launch(). To stay on
-#      ZeroGPU (zero-a10g) AND ship a public-only telemetry surface,
-#      we wrap our pure-FastAPI app inside a minimal Gradio Blocks
-#      whose ONLY component is a static HTML embed of our dashboard.
-#      The user lands on `/` and sees our dashboard directly — no
-#      Gradio chrome, no inference controls, no login form.
-#
-#      Defense-in-depth against the Login auth shim:
-#        (a) env-pop GRADIO_AUTH / GRADIO_AUTH_MESSAGE /
-#            GRADIO_OAUTH_CLIENT_ID / GRADIO_OAUTH_CLIENT_SECRET
-#            BEFORE `import gradio as gr` — Gradio caches these at
-#            import time.  Clearing them at this scope forces the
-#            module to load as if the Space were never authenticated.
-#        (b) `gr.Blocks(...)` is constructed with no `auth=`, no
-#            `auth_dependency=`, no `oauth_client_id=`, no
-#            `auth_message=` — every Gradio auth slot is left at
-#            its None default.
-#        (c) `gr.mount_gradio_app(_app, demo, path="/")` returns
-#            the parent FastAPI app with `demo` mounted at `/` —
-#            the parent's other routes (`/health`, `/v1/*`, `/api/*`)
-#            remain reachable through the same Starlette router.
-#
-#      Result: HF proxy lands on `/`, gets our telemetry HTML, never
-#      hits a Gradio UI that could ask for credentials, never passes
-#      through a Gradio login challenge. The shim is structurally
-#      impossible at the app layer; if the Live probe still shows
-#      one, it would have to come from an HF-infrastructure layer
-#      outside our code (e.g. an HF-managed proxy on private domains).
-# ──────────────────────────────────────────────────────────────────────────
-os.environ.pop("GRADIO_AUTH", None)
-os.environ.pop("GRADIO_AUTH_MESSAGE", None)
-os.environ.pop("GRADIO_OAUTH_CLIENT_ID", None)
-os.environ.pop("GRADIO_OAUTH_CLIENT_SECRET", None)
-import gradio as gr  # noqa: E402  -- after env-pops on purpose
 
-_demo_html = render_index_html(
-    snapshot_provider=_snapshot,
-    refresh_seconds=PUBLIC_REFRESH_SECONDS,
-)
-
-demo = gr.Blocks(
-    title="AshatOS Neural Host",
-    theme=gr.themes.Base(),
-    css=(
-        "body { background: #070B14 !important; margin: 0; }"
-        " footer { display: none !important; }"
-        " .gradio-container { max-width: 100% !important; padding: 0 !important; }"
-        " .contain { max-width: 760px !important; }"
-    ),
-)
-with demo:
-    # `js_on_load` runs the polling loop on component render (browsers do
-    # NOT execute <script> tags injected via innerHTML — see the warning
-    # that gr.HTML raises when value contains <script>). The JS expression
-    # builds a 1-minute-of-glitches-resistant setInterval that fetches
-    # /api/dashboard_html and innerHTML-swaps status + brainstem cards.
-    gr.HTML(value=_demo_html, js_on_load=render_dashboard_refresh_js(
-        PUBLIC_REFRESH_SECONDS * 1000,
-    ))
-
-
-# Compose final ASGI app: FastAPI `_app` (with /health, /v1/*, /api/*)
-# wrapped by Gradio's UI at `/`. `gr.mount_gradio_app` is the canonical
-# way to make a Gradio Blocks instance live inside an existing
-# FastAPI app — our `_app`'s routes stay, plus the dashboard is at /.
-_log.info(
-    "FastAPI routes owned by `_app`: /, /v1/chat/completions, /v1/models, "
-    "/health, /api/public_status, /api/public_metrics, /api/dashboard_html."
-)
-# Compose the final ASGI app. Gradio 6.20 removed the `app=` parameter
-# from `Blocks.launch()`, so the canonical Gradio 6 API to host Gradio
-# INSIDE an existing FastAPI app is `gr.mount_gradio_app(parent_app,
-# blocks, path)`. It mutates `parent_app` in place: mounts `blocks.app`
-# at `path` and returns the same `parent_app`. Starlette first-match-wins
-# means our module-scope routes (`GET /`, `GET /health`, `GET
-# /api/public_status`, `GET /api/public_metrics`, `GET
-# /api/dashboard_html`, `GET /v1/models`, `POST /v1/chat/completions`)
-# all match before Gradio's catch-all fallbacks.
-app = gr.mount_gradio_app(_app, demo, path="/")
 
 
 if __name__ == "__main__":
