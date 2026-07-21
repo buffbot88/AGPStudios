@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+runtime/
+.runtime/
+cache/
+logs/
+*.log
+.env
+.env.*
+metrics_snapshot.json
