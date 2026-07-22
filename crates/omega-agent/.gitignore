@@ -10,3 +10,4 @@ logs/
 .env
 .env.*
 metrics_snapshot.json
+/.freebuff
