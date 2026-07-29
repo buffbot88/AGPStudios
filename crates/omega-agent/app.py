@@ -105,11 +105,35 @@ _BRAINSTEM_GPU_DURATION = int(os.getenv("BRAINSTEM_GPU_DURATION", "120"))
 # ──────────────────────────────────────────────────────────────────────────
 
 _started_at: float = time.time()
-_inference_lock = threading.Lock()
+_inference_lock = threading.BoundedSemaphore(int(os.getenv("QUEUE_LIMIT", "16")))
 _active_processes: list[subprocess.Popen[str]] = []
 _llama_bin_path: str | None = None
 _queue_depth: int = 0
 _queue_depth_lock = threading.Lock()
+
+# Per-key concurrency: maps a key-hash to a semaphore allowing up to
+# ``PER_KEY_CONCURRENCY`` concurrent requests per unique key.
+# A sentinel key is used for unauthenticated requests.
+# This REPLACES the previous global threading.Lock — the per-key
+# semaphore is the primary gate; the BoundedSemaphore above is a
+# total-concurrency safety cap.
+_PER_KEY_CONCURRENCY = 2
+_key_semaphores: dict[str, threading.BoundedSemaphore] = {}
+_key_semaphores_lock = threading.Lock()
+
+
+def _get_key_semaphore(key_id: str) -> threading.BoundedSemaphore:
+    """Return (or create) a bounded semaphore for the given key, allowing
+    at most ``_PER_KEY_CONCURRENCY`` concurrent acquisitions.
+
+    ``BoundedSemaphore`` prevents drift — if ``release()`` is ever called
+    more times than ``acquire()``, it raises ``ValueError`` instead of
+    silently allowing more concurrency than intended.
+    """
+    with _key_semaphores_lock:
+        if key_id not in _key_semaphores:
+            _key_semaphores[key_id] = threading.BoundedSemaphore(_PER_KEY_CONCURRENCY)
+        return _key_semaphores[key_id]
 
 
 def _get_queue_depth() -> int:
@@ -374,7 +398,8 @@ def _record_returned_result(
     _RUN_METRICS.record_from_envelope(lane, result)
 
 
-def execute_lane(lane_str: str, payload: dict[str, Any]) -> dict[str, Any]:
+def execute_lane(lane_str: str, payload: dict[str, Any], *,
+                 key_id: str | None = None) -> dict[str, Any]:
     """Serializing entry point \u2014 one inference at a time across the Space.
 
     The ``@spaces.GPU`` functions run in an isolated worker process (on
@@ -384,12 +409,20 @@ def execute_lane(lane_str: str, payload: dict[str, Any]) -> dict[str, Any]:
 
     Tracks queue depth via :func:`_inc_queue_depth` / :func:`_dec_queue_depth`
     so the dashboard can display how many requests are waiting.
+
+    Per-key concurrency: when ``key_id`` is provided, a key-specific
+    semaphore allows ``PER_KEY_CONCURRENCY`` requests to run in parallel
+    for that key.  Without a key, the global ``_inference_lock`` is used.
     """
     lane = Lane.parse(lane_str)
+    sem = _get_key_semaphore(key_id or "_anonymous_")
     _inc_queue_depth()
     try:
-        with _inference_lock:
-            result = _execute_brainstem_gpu(payload)
+        # Per-key semaphore is the primary concurrency gate (2 per key).
+        # The BoundedSemaphore (QUEUE_LIMIT) is the total-cap safety net.
+        with sem:
+            with _inference_lock:
+                result = _execute_brainstem_gpu(payload)
     finally:
         _dec_queue_depth()
 
@@ -745,6 +778,7 @@ async def http_dashboard_timeseries() -> JSONResponse:
 
 @app.get("/health")
 async def http_health() -> JSONResponse:
+    _is_zerogpu = bool(int(os.environ.get("SPACES_ZERO_GPU", "0")))
     return JSONResponse(content={
         "status": "ok",
         "uptime_seconds": round(time.time() - _started_at, 1),
@@ -753,6 +787,11 @@ async def http_health() -> JSONResponse:
             and os.path.isfile(LANE_CONFIG[Lane.BRAINSTEM].model_path)
         ),
         "llama_server_available": _llama_bin_path is not None,
+        # Reports whether the Space is configured for ZeroGPU (from env
+        # var), NOT whether a slot is currently available. Slot availability
+        # is dynamic and depends on current GPU quota usage; check the
+        # ``spaces.zero`` runtime API for live slot status.
+        "spaces_zero_gpu_configured": _is_zerogpu,
     })
 
 

@@ -41,23 +41,25 @@ from public_snapshot import (
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Constants — colour system (spec §13)
+# Constants — Black & Gold colour system (v4)
 # ──────────────────────────────────────────────────────────────────────────
 
-_BG = "#070B14"
-_PANEL = "#111827"
-_RAISED = "#172033"
-_PRIMARY = "#F8FAFC"
-_SECONDARY = "#94A3B8"
-_MUTED = "#64748B"
-_BORDER = "rgba(148,163,184,0.18)"
-_GREEN = "#34D399"
-_AMBER = "#FBBF24"
-_CORAL = "#FB7185"
+_BG = "#050505"
+_PANEL = "#14110B"
+_RAISED = "#1C1810"
+_PRIMARY = "#FFF8E7"
+_SECONDARY = "#C4A55A"
+_MUTED = "#8B7D5B"
+_BORDER = "rgba(212,175,55,0.15)"
+_GREEN = "#7ECF7E"
+_AMBER = "#E8B830"
+_CORAL = "#E06050"
 
-_ACCENT = "#8B5CF6"
-_GLOW = "rgba(139,92,246,0.18)"
-_BRIGHT = "#A78BFA"
+_ACCENT = "#F0C040"
+_GLOW = "rgba(240,192,64,0.12)"
+_BRIGHT = "#FFD700"
+_GOLD_SOLID = "#D4AF37"
+_GOLD_MED = "rgba(212,175,55,0.25)"
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -450,35 +452,55 @@ def _short_model_name(filename: str) -> str:
 # ──────────────────────────────────────────────────────────────────────────
 
 def _build_header_html() -> str:
-    """Static brand header with glowing brain badge."""
+    """Black & gold AI-themed brand header with animated sparkle badge."""
     return f"""\
 <style>
-  @media (prefers-reduced-motion: no-preference) {{
-    @keyframes brain-pulse {{
-      0%, 100% {{ box-shadow: 0 0 12px rgba(139,92,246,0.15), 0 0 28px rgba(139,92,246,0.06); }}
-      50% {{ box-shadow: 0 0 18px rgba(139,92,246,0.30), 0 0 40px rgba(139,92,246,0.12); }}
-    }}
-    .brain-badge {{ animation: brain-pulse 3s ease-in-out infinite; }}
+  @keyframes sparkle-glow {{
+    0%, 100% {{ box-shadow: 0 0 15px rgba(255,215,0,0.10), 0 0 30px rgba(255,215,0,0.05); }}
+    50% {{ box-shadow: 0 0 25px rgba(255,215,0,0.25), 0 0 50px rgba(255,215,0,0.10); }}
   }}
-  .brain-badge {{
+  @keyframes float-sparkle {{
+    0%, 100% {{ transform: translateY(0) scale(1); opacity: 0.5; }}
+    50% {{ transform: translateY(-3px) scale(1.1); opacity: 1; }}
+  }}
+  .gold-badge {{
     display: inline-flex; align-items: center; justify-content: center;
-    width: 56px; height: 56px; border-radius: 16px;
-    background: linear-gradient(135deg, rgba(139,92,246,0.12) 0%, rgba(244,114,182,0.08) 100%);
-    border: 1px solid rgba(139,92,246,0.20);
-    font-size: 30px; line-height: 1;
+    width: 60px; height: 60px; border-radius: 18px;
+    background: linear-gradient(135deg, rgba(255,215,0,0.10) 0%, rgba(212,175,55,0.06) 100%);
+    border: 1px solid {_GOLD_MED};
+    font-size: 32px; line-height: 1;
     margin-bottom: 6px;
-    transition: box-shadow 0.4s ease;
+    animation: sparkle-glow 3s ease-in-out infinite;
+    position: relative;
+  }}
+  .sparkle-1 {{ position: absolute; top: -6px; right: -4px; font-size: 12px;
+    animation: float-sparkle 2.5s ease-in-out infinite; }}
+  .sparkle-2 {{ position: absolute; bottom: -4px; left: -3px; font-size: 10px;
+    animation: float-sparkle 3.2s ease-in-out infinite 0.5s; }}
+  .v4-badge {{
+    display: inline-block;
+    padding: 2px 10px; border-radius: 8px;
+    background: {_GOLD_SOLID};
+    color: #1C1810; font-size: 0.55em; font-weight: 700;
+    letter-spacing: 0.06em;
+    margin-left: 8px;
+    vertical-align: middle;
+    font-family: sans-serif;
   }}
 </style>
-<div style="text-align: center; padding: 28px 20px 6px;">
-  <div class="brain-badge">\U0001f9e0</div>
-  <h1 style="margin: 4px 0 0; font-size: 1.7em; font-weight: 700;
+<div style="text-align: center; padding: 32px 20px 8px;">
+  <div class="gold-badge">
+    <span class="sparkle-1">\u2728</span>
+    \U0001f9e0
+    <span class="sparkle-2">\u2728</span>
+  </div>
+  <h1 style="margin: 6px 0 0; font-size: 1.7em; font-weight: 700;
       color: {_PRIMARY}; letter-spacing: 0.04em;
       font-family: sans-serif;">
-    ASHAT NEURAL HOST</h1>
+    ASHAT NEURAL HOST<span class="v4-badge">v4</span></h1>
   <p style="color: {_SECONDARY}; font-size: 0.82em; margin: 2px 0 0;
       font-family: sans-serif; letter-spacing: 0.02em;">
-    BrainStem Neural Inference \u00b7 Public Telemetry</p>
+    \u2728 BrainStem Neural Inference \u00b7 Gold Edition \u2728</p>
 </div>"""
 
 
@@ -488,10 +510,10 @@ def _build_status_row_html(snapshot: PublicSnapshot) -> str:
     host_state = _global_host_state(status)
 
     state_colors = {
-        "Operational": _GREEN,
+        "Operational": _ACCENT,
         "Starting": _AMBER,
-        "Degraded": _AMBER,
-        "Offline": _CORAL,
+        "Degraded": _CORAL,
+        "Offline": _MUTED,
     }
     dot_color = state_colors.get(host_state, _MUTED)
 
@@ -535,7 +557,7 @@ def _build_status_row_html(snapshot: PublicSnapshot) -> str:
     queue = status.get("queue", {})
     queue_depth = queue.get("depth", 0)
     queue_limit = queue.get("limit", 16)
-    queue_color = _AMBER if queue_depth > 0 else _MUTED
+    queue_color = _ACCENT if queue_depth > 0 else _MUTED
     queue_html = (
         f'<span style="color: {_MUTED};">\u00b7</span>'
         f'<span style="color: {queue_color};">Queue: {queue_depth}/{queue_limit}</span>'
@@ -545,7 +567,7 @@ def _build_status_row_html(snapshot: PublicSnapshot) -> str:
     if headline_code and headline_msg:
         headline_html = (
             f'<div style="margin: 6px 20px 0; text-align: center; '
-            f'font-family: sans-serif; font-size: 0.78em; color: {_CORAL};">'
+            f'font-family: sans-serif; font-size: 0.78em; color: {_AMBER};">'
             f'\u26a0 <span style="font-weight: 600;">{headline_code.replace("_", " ").title()}</span>'
             f' \u00b7 <span>{headline_msg}</span>'
             f'</div>'
@@ -554,12 +576,12 @@ def _build_status_row_html(snapshot: PublicSnapshot) -> str:
     return f"""\
 <div style="text-align: center; padding: 6px 20px 12px;">
   <span style="display: inline-flex; align-items: center; gap: 6px;
-       font-size: 0.8em; font-family: sans-serif; color: {_SECONDARY};">
+       font-size: 0.8em; font-family: sans-serif; color: {_MUTED};">
     <span style="width: 7px; height: 7px; border-radius: 50%;
-         background: {dot_color};"></span>
+         background: {dot_color}; box-shadow: 0 0 6px {dot_color}40;"></span>
     <span style="font-weight: 600; color: {dot_color};">{host_state}</span>
     <span style="color: {_MUTED};">\u00b7</span>
-    <span>{online_count}/{total_count} lanes online</span>
+    <span>{online_count}/{total_count} lanes <span style="color: {_SECONDARY};">\u2728</span></span>
     <span style="color: {_MUTED};">\u00b7</span>
     <span>Updated {last_refresh or 'just now'}</span>
     {queue_html}
@@ -583,12 +605,21 @@ def _build_cards_html(snapshot: PublicSnapshot) -> str:
 
 
 def _build_footer_html() -> str:
-    """Static footer bar."""
+    """Black & gold AI-themed footer with version v4 badge."""
     return f"""\
-<div style="text-align: center; padding: 16px 20px 24px;">
-  <span style="font-size: 0.68em; color: {_MUTED}; font-family: sans-serif;
+<div style="text-align: center; padding: 20px 20px 28px;">
+  <div style="display: inline-flex; align-items: center; gap: 10px;
+       font-size: 0.68em; color: {_MUTED}; font-family: sans-serif;
        letter-spacing: 0.03em;">
-    BrainStem inference engine \u00b7 Public telemetry only</span>
+    <span>\U0001f9e0 BrainStem v4</span>
+    <span style="color: {_SECONDARY};">\u00b7</span>
+    <span>\u2728 Gold Edition</span>
+    <span style="color: {_SECONDARY};">\u00b7</span>
+    <span>Powered by \U0001f916 AI</span>
+  </div>
+  <div style="font-size: 0.6em; color: {_MUTED}70; margin-top: 4px;
+       font-family: sans-serif;">
+    Public telemetry \u00b7 No prompts or keys stored</div>
 </div>"""
 
 
@@ -709,21 +740,21 @@ def render_index_html(
                 font: {{ color: CHART_COLORS.secondary, size: 11 }}
             }},
             xaxis: {{
-                gridcolor: 'rgba(148,163,184,0.10)',
-                zerolinecolor: 'rgba(148,163,184,0.15)',
+                gridcolor: 'rgba(212,175,55,0.08)',
+                zerolinecolor: 'rgba(212,175,55,0.12)',
                 color: CHART_COLORS.muted,
                 tickformat: '%H:%M:%S'
             }},
             yaxis: {{
                 title: {{ text: 'tok/s', font: {{ color: CHART_COLORS.accent, size: 11 }} }},
-                gridcolor: 'rgba(148,163,184,0.10)',
-                zerolinecolor: 'rgba(148,163,184,0.15)',
+                gridcolor: 'rgba(212,175,55,0.08)',
+                zerolinecolor: 'rgba(212,175,55,0.12)',
                 color: CHART_COLORS.accent
             }},
             yaxis2: {{
                 title: {{ text: 'ms', font: {{ color: CHART_COLORS.coral, size: 11 }} }},
                 overlaying: 'y', side: 'right',
-                gridcolor: 'rgba(148,163,184,0.05)',
+                gridcolor: 'rgba(212,175,55,0.04)',
                 color: CHART_COLORS.coral
             }},
             hovermode: 'x unified',

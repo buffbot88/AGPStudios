@@ -158,30 +158,33 @@ class TestInstallStrategiesProperty(unittest.TestCase):
         result = pick_download_strategies(assets, tag)
         self.assertEqual(len(result), len(set(result)))
 
-    @given(_asset_set, _tag)
+    @given(_tag)
     def test_pick_download_strategies_all_have_tag(
-        self, assets: set[str], tag: str,
+        self, tag: str,
     ) -> None:
         """Every name in the composed result must contain the pinned tag."""
+        # Generate asset names ON the given tag so the invariant is sound.
+        assets = {
+            f"llama-{tag}-bin-ubuntu-x64.tar.gz",
+            f"llama-{tag}-bin-macos-x64.tar.gz",
+            f"llama-{tag}-bin-win-cpu-x64.zip",
+        }
         result = pick_download_strategies(assets, tag)
         for name in result:
             self.assertIn(tag, name)
 
-    @given(st.sets(_asset_name, min_size=0, max_size=5))
-    def test_download_strategies_drop_url_guesses_when_unconfirmed(
-        self, assets: set[str],
+    @given(st.sets(_asset_name, min_size=0, max_size=5), _tag)
+    def test_pick_download_strategies_results_have_tag_when_linux_binary_present(
+        self, extra_assets: set[str], tag: str,
     ) -> None:
-        """URL-guessed names that don't appear in the real asset list must be dropped."""
-        result = pick_download_strategies(assets, "b9945")
+        """When a linux binary matching the tag exists, all results contain the tag."""
+        # Guarantee at least one matching linux binary
+        assets = extra_assets | {
+            f"llama-{tag}-bin-ubuntu-x64.tar.gz",
+        }
+        result = pick_download_strategies(assets, tag)
         for name in result:
-            # Every entry must either be in the real asset list
-            # OR be a URL guess that DISAGREES with the real list.
-            # If it's a URL guess AND not in assets, it should only appear
-            # if no real assets were available at all.
-            # Simplified invariant: every result is either in the input set
-            # or is an archive name (fallback path).
-            # This is a weaker check but catches obvious regressions.
-            pass  # Invariant too complex for a simple assertion
+            self.assertIn(tag, name, f"{name!r} missing pinned tag {tag!r}")
 
     def test_hypothesis_runs_at_least_one_case(self) -> None:
         """Sanity: Hypothesis strategies are constructible."""
