@@ -36,7 +36,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from domain import Lane, lane_cfg
+from domain import Lane, LaneConfig, lane_cfg
 from metrics_store import MetricRecord, MetricsStore
 
 
@@ -93,6 +93,10 @@ class RuntimeState:
     llama_server_available: bool
     llama_server_path: str | None
     """Full path to the llama-server binary, or ``None`` if degraded."""
+    queue_depth: int = 0
+    """Number of requests currently waiting for the inference lock."""
+    queue_limit: int = 16
+    """Maximum concurrent requests allowed (from ``QUEUE_LIMIT`` env var)."""
 
     @property
     def uptime_seconds(self) -> float:
@@ -234,14 +238,14 @@ class PublicSnapshot:
 
     metrics: MetricsStore
     runtime: RuntimeState
-    lane_configs: dict[Lane, dict[str, Any]] = field(default_factory=dict)
+    lane_configs: dict[Lane, LaneConfig] = field(default_factory=dict)
 
     @classmethod
     def from_metrics(
         cls,
         metrics: MetricsStore,
         runtime: RuntimeState,
-        lane_configs: dict[Lane, dict[str, Any]],
+        lane_configs: dict[Lane, LaneConfig],
     ) -> "PublicSnapshot":
         return cls(
             metrics=metrics,
@@ -255,7 +259,7 @@ class PublicSnapshot:
         lanes: dict[str, Any] = {}
         for lane in Lane:
             cfg = self.lane_configs.get(lane, lane_cfg(lane))
-            model_path = cfg.get("model_path", "")
+            model_path = cfg.model_path
             available = bool(model_path and os.path.isfile(model_path))
             summary = self.metrics.get_summary(lane.value)
             lane_state = _derive_lane_state(
@@ -284,9 +288,9 @@ class PublicSnapshot:
                 pass
             effective_state = override_state or lane_state
             lanes[lane.value] = {
-                "label": cfg.get("label", lane.value),
-                "model": cfg.get("file", ""),
-                "ctx": cfg.get("ctx", 0),
+                "label": cfg.label,
+                "model": cfg.file,
+                "ctx": cfg.ctx,
                 "available": available,
                 "ready": available,
                 "lane_state": effective_state,
@@ -300,6 +304,10 @@ class PublicSnapshot:
             "llama_server_available": self.runtime.llama_server_available,
             "degraded": not self.runtime.llama_server_available,
             "llama_server": _redact_path(self.runtime.llama_server_path),
+            "queue": {
+                "depth": self.runtime.queue_depth,
+                "limit": self.runtime.queue_limit,
+            },
             "lanes": lanes,
             "all_ready": (
                 lanes.get("brainstem", {}).get("ready", False)

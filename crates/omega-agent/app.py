@@ -35,7 +35,6 @@ import sys
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import FastAPI, Request as FastRequest
@@ -47,7 +46,7 @@ from domain import LANE_CONFIG, Lane, lane_cfg
 from installer import InstallerResult, ensure_llama_server
 
 from lane_resolver import LaneResolver
-from metrics_store import METRICS, MetricRecord
+from metrics_store import METRICS
 from run_errors import (
     ERROR_CODE_TO_HTTP_STATUS,
     HfCreditsExhaustedError,
@@ -109,6 +108,27 @@ _started_at: float = time.time()
 _inference_lock = threading.Lock()
 _active_processes: list[subprocess.Popen[str]] = []
 _llama_bin_path: str | None = None
+_queue_depth: int = 0
+_queue_depth_lock = threading.Lock()
+
+
+def _get_queue_depth() -> int:
+    """Return the current request queue depth (thread-safe)."""
+    with _queue_depth_lock:
+        return _queue_depth
+
+
+def _inc_queue_depth() -> None:
+    with _queue_depth_lock:
+        global _queue_depth
+        _queue_depth += 1
+
+
+def _dec_queue_depth() -> None:
+    with _queue_depth_lock:
+        global _queue_depth
+        if _queue_depth > 0:
+            _queue_depth -= 1
 
 
 def _binary_path_getter() -> str | None:
@@ -173,8 +193,8 @@ from domain import validate_request
 
 def _is_cold_start(lane: Lane) -> bool:
     """Returns True the first time this lane is asked to run."""
-    return not LANE_CONFIG[lane]["model_path"] or not os.path.isfile(
-        LANE_CONFIG[lane]["model_path"]
+    return not LANE_CONFIG[lane].model_path or not os.path.isfile(
+        LANE_CONFIG[lane].model_path
     )
 
 
@@ -199,7 +219,7 @@ def _build_success_envelope(
         "id": f"ashat-{request_id[:8]}",
         "object": "chat.completion",
         "created": int(time.time()),
-        "model": cfg["file"],
+        "model": cfg.file,
         "lane": lane.value,
         "choices": [
             {
@@ -336,22 +356,6 @@ def _execute_brainstem_gpu(payload: dict[str, Any]) -> dict[str, Any]:
 #      Gradio/FastAPI process, so the dashboard timer can read them.
 # ──────────────────────────────────────────────────────────────────────────
 
-def _safe_float(value: Any, default: float = 0.0) -> float:
-    try:
-        parsed = float(value)
-        return parsed if parsed >= 0 else default
-    except (TypeError, ValueError):
-        return default
-
-
-def _safe_int(value: Any, default: int = 0) -> int:
-    try:
-        parsed = int(value)
-        return parsed if parsed >= 0 else default
-    except (TypeError, ValueError):
-        return default
-
-
 def _record_returned_result(
     lane: Lane,
     result: dict[str, Any],
@@ -359,80 +363,15 @@ def _record_returned_result(
     """
     Record a sanitized ZeroGPU result in the main dashboard process.
 
+    Delegates to :meth:`RunMetrics.record_from_envelope` to eliminate
+    the duplicate ``MetricRecord`` construction that previously existed
+    here and in :meth:`RunMetrics.record_success`.
+
     Called by :func:`execute_lane` after the ``@spaces.GPU`` function
     returns.  Never stores prompts, generated text, request IDs, keys,
     or headers — only sanitized aggregates.
     """
-    if not isinstance(result, dict):
-        METRICS.record(
-            MetricRecord(
-                timestamp=datetime.now(timezone.utc).isoformat(),
-                lane=lane.value,
-                success=False,
-                error_category="INVALID_MODEL_RESPONSE",
-            )
-        )
-        METRICS.add_event(f"{lane.value}: INVALID_MODEL_RESPONSE")
-        return
-
-    ok = bool(result.get("ok"))
-    performance = result.get("performance") or {}
-    usage = result.get("usage") or {}
-    error = result.get("error") or {}
-
-    if not isinstance(performance, dict):
-        performance = {}
-    if not isinstance(usage, dict):
-        usage = {}
-    if not isinstance(error, dict):
-        error = {}
-
-    ttft_raw = performance.get("time_to_first_token_ms")
-    # Treat zero or negative TTFT as unmeasured (same as None).
-    ttft_parsed = _safe_float(ttft_raw) if ttft_raw is not None else None
-
-    rec = MetricRecord(
-        timestamp=datetime.now(timezone.utc).isoformat(),
-        lane=lane.value,
-        success=ok,
-        cold_start=bool(performance.get("cold_start", False)),
-        server_start_ms=_safe_float(performance.get("server_start_ms")),
-        model_load_ms=_safe_float(performance.get("model_load_ms")),
-        prompt_tokens=_safe_int(usage.get("prompt_tokens")),
-        completion_tokens=_safe_int(usage.get("completion_tokens")),
-        prompt_tokens_per_second=_safe_float(
-            performance.get("prompt_tokens_per_second")
-        ),
-        generation_tokens_per_second=_safe_float(
-            performance.get("generation_tokens_per_second")
-        ),
-        time_to_first_token_ms=(
-            ttft_parsed if (ttft_parsed is not None and ttft_parsed > 0) else None
-        ),
-        total_latency_ms=_safe_float(performance.get("total_latency_ms")),
-        backend=str(performance.get("backend", "unknown")),
-        gpu_offload_verified=bool(
-            performance.get("gpu_offload_verified", False)
-        ),
-        finish_reason=(
-            str(result.get("choices", [{}])[0].get("finish_reason", "stop"))
-            if ok
-            else ""
-        ),
-        error_category=(
-            None if ok else str(error.get("code", "INFERENCE_FAILED"))
-        ),
-    )
-
-    METRICS.record(rec)
-
-    if ok:
-        METRICS.add_event(
-            f"{lane.value}: inference completed "
-            f"({rec.prompt_tokens}+{rec.completion_tokens} tokens)"
-        )
-    else:
-        METRICS.add_event(f"{lane.value}: {rec.error_category}")
+    _RUN_METRICS.record_from_envelope(lane, result)
 
 
 def execute_lane(lane_str: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -442,10 +381,17 @@ def execute_lane(lane_str: str, payload: dict[str, Any]) -> dict[str, Any]:
     HF Spaces with ZeroGPU).  We record metrics here, in the *main*
     process, after the result returns, so the dashboard timer can read
     them from the same in-memory ``METRICS`` singleton.
+
+    Tracks queue depth via :func:`_inc_queue_depth` / :func:`_dec_queue_depth`
+    so the dashboard can display how many requests are waiting.
     """
     lane = Lane.parse(lane_str)
-    with _inference_lock:
-        result = _execute_brainstem_gpu(payload)
+    _inc_queue_depth()
+    try:
+        with _inference_lock:
+            result = _execute_brainstem_gpu(payload)
+    finally:
+        _dec_queue_depth()
 
     _record_returned_result(lane, result)
     return result
@@ -524,6 +470,8 @@ def _snapshot() -> PublicSnapshot:
             started_at=_started_at,
             llama_server_available=_llama_bin_path is not None,
             llama_server_path=_llama_bin_path,
+            queue_depth=_get_queue_depth(),
+            queue_limit=QUEUE_LIMIT,
         ),
         LANE_CONFIG,
     )
@@ -801,8 +749,8 @@ async def http_health() -> JSONResponse:
         "status": "ok",
         "uptime_seconds": round(time.time() - _started_at, 1),
         "brainstem_ready": bool(
-            LANE_CONFIG[Lane.BRAINSTEM]["model_path"]
-            and os.path.isfile(LANE_CONFIG[Lane.BRAINSTEM]["model_path"])
+            LANE_CONFIG[Lane.BRAINSTEM].model_path
+            and os.path.isfile(LANE_CONFIG[Lane.BRAINSTEM].model_path)
         ),
         "llama_server_available": _llama_bin_path is not None,
     })
@@ -814,7 +762,7 @@ async def http_list_models() -> JSONResponse:
         "object": "list",
         "data": [
             {
-                "id": lane_cfg(Lane.BRAINSTEM)["file"],
+                "id": lane_cfg(Lane.BRAINSTEM).file,
                 "object": "model",
                 "created": int(_started_at),
                 "owned_by": "ashatos",

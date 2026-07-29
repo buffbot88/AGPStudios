@@ -222,15 +222,15 @@ class BackendLauncher:
         env_key = f"{lane.value.upper()}_MODEL_PATH"
         env_path = os.getenv(env_key, "").strip()
         if env_path and os.path.isfile(env_path):
-            cfg["model_path"] = env_path
+            cfg.model_path = env_path
             return env_path
         # Cached path wins.
-        if cfg["model_path"] and os.path.isfile(cfg["model_path"]):
-            return cfg["model_path"]
+        if cfg.model_path and os.path.isfile(cfg.model_path):
+            return cfg.model_path
 
         token = os.getenv("HF_TOKEN") or None
-        repo = cfg["repo"]
-        filename = cfg["file"]
+        repo = cfg.repo
+        filename = cfg.file
 
         # Check if this is a storage bucket (path starts with "buckets/")
         if repo.startswith("buckets/"):
@@ -252,7 +252,7 @@ class BackendLauncher:
                 lane.value, "model", classified.code,
             )
             raise classified
-        cfg["model_path"] = path
+        cfg.model_path = path
         _log.info("%s: downloaded to %s", lane.value, path)
         return path
 
@@ -281,7 +281,7 @@ class BackendLauncher:
         if dest.is_file() and dest.stat().st_size > 0:
             _log.info("%s: bucket model already cached at %s", lane.value, dest)
             cfg = lane_cfg(lane)
-            cfg["model_path"] = str(dest)
+            cfg.model_path = str(dest)
             return str(dest)
 
         _log.info(
@@ -356,7 +356,7 @@ class BackendLauncher:
             lane.value, dest, dest.stat().st_size // (1024 * 1024),
         )
         cfg = lane_cfg(lane)
-        cfg["model_path"] = str(dest)
+        cfg.model_path = str(dest)
         return str(dest)
 
     def launch(
@@ -389,7 +389,7 @@ class BackendLauncher:
             raise
 
         _offload = gpu_offload_requested
-        cmd = self._build_command(binary, model_path, cfg["ctx"],
+        cmd = self._build_command(binary, model_path, cfg.ctx,
                                   gpu_offload=_offload)
         start_t = time.perf_counter()
         try:

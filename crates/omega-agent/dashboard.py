@@ -531,6 +531,16 @@ def _build_status_row_html(snapshot: PublicSnapshot) -> str:
         )
     )
 
+    # Queue info
+    queue = status.get("queue", {})
+    queue_depth = queue.get("depth", 0)
+    queue_limit = queue.get("limit", 16)
+    queue_color = _AMBER if queue_depth > 0 else _MUTED
+    queue_html = (
+        f'<span style="color: {_MUTED};">\u00b7</span>'
+        f'<span style="color: {queue_color};">Queue: {queue_depth}/{queue_limit}</span>'
+    ) if queue_depth > 0 else ""
+
     headline_html = ""
     if headline_code and headline_msg:
         headline_html = (
@@ -552,6 +562,7 @@ def _build_status_row_html(snapshot: PublicSnapshot) -> str:
     <span>{online_count}/{total_count} lanes online</span>
     <span style="color: {_MUTED};">\u00b7</span>
     <span>Updated {last_refresh or 'just now'}</span>
+    {queue_html}
   </span>
 </div>{headline_html}"""
 

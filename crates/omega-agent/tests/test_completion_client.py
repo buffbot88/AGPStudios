@@ -79,7 +79,7 @@ class TestCompletionClient(unittest.TestCase):
         from domain import lane_cfg
         self.assertEqual(
             kwargs["json"]["model"],
-            lane_cfg(self.lane)["file"],
+            lane_cfg(self.lane).file,
         )
 
     def test_non_200_raises_protocol_error(self) -> None:
@@ -154,7 +154,7 @@ class TestCompletionClient(unittest.TestCase):
             )
         kwargs = post.call_args.kwargs
         from domain import lane_cfg
-        self.assertEqual(kwargs["json"]["max_tokens"], lane_cfg(self.lane)["max_tokens"])
+        self.assertEqual(kwargs["json"]["max_tokens"], lane_cfg(self.lane).max_tokens)
 
     # ── Server-side timings parsing ─────────────────────────────────────
 

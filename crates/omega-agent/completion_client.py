@@ -51,12 +51,12 @@ class CompletionClient:
         import requests
         cfg = lane_cfg(lane)
         max_tokens = min(
-            int(payload.get("max_tokens", cfg["max_tokens"])),
-            cfg["max_tokens"],
+            int(payload.get("max_tokens", cfg.max_tokens)),
+            cfg.max_tokens,
         )
 
         body = {
-            "model": cfg["file"],
+            "model": cfg.file,
             "messages": payload.get("messages", []),
             "max_tokens": max_tokens,
             "temperature": float(payload.get("temperature", 0.7)),

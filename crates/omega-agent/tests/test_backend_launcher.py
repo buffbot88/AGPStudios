@@ -58,9 +58,9 @@ class TestBackendLauncherCommand(unittest.TestCase):
         cmd = self.launcher._build_command(
             "/fake/llama-server",
             "/fake/main.gguf",
-            lane_cfg(Lane.BRAINSTEM)["ctx"],
+            lane_cfg(Lane.BRAINSTEM).ctx,
         )
-        self.assertIn(str(lane_cfg(Lane.BRAINSTEM)["ctx"]), cmd)
+        self.assertIn(str(lane_cfg(Lane.BRAINSTEM).ctx), cmd)
 
 
 class TestBackendLauncherBinaryGate(unittest.TestCase):

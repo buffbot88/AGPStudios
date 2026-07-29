@@ -32,7 +32,7 @@ class TestLaneResolver(unittest.TestCase):
     def test_default_filename_resolves(self) -> None:
         from domain import lane_cfg
         self.assertEqual(
-            self.resolver.resolve({"model": lane_cfg(Lane.BRAINSTEM)["file"]}, None),
+            self.resolver.resolve({"model": lane_cfg(Lane.BRAINSTEM).file}, None),
             Lane.BRAINSTEM,
         )
 

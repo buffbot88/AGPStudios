@@ -1,12 +1,16 @@
 """Thread-safe in-memory metrics store (extracted from app.py).
 
 Small, dependency-light module. Holds a rolling deque of :class:`MetricRecord`
-per lane and a parallel event log. Public consumers ask for summaries; this
-module never writes to disk.
+per lane and a parallel event log. Public consumers ask for summaries.
+
+Optionally persists every record as a JSONL file when ``persist_path``
+is set, so operators have history across restarts.
 """
 
 from __future__ import annotations
 
+import json as _json
+import os as _os
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -35,17 +39,51 @@ class MetricRecord:
 
 
 class MetricsStore:
-    """Thread-safe in-memory rolling metrics store (no disk writes)."""
+    """Thread-safe in-memory rolling metrics store.
 
-    def __init__(self, maxlen: int = 500, event_maxlen: int = 200) -> None:
+    When ``persist_path`` is set, each call to :meth:`record` appends a JSON
+    line to that file, giving operators history across restarts.
+    """
+
+    def __init__(
+        self,
+        maxlen: int = 500,
+        event_maxlen: int = 200,
+        persist_path: str | None = None,
+    ) -> None:
         self._maxlen = maxlen
         self._brainstem: deque[MetricRecord] = deque(maxlen=maxlen)
         self._events: deque[str] = deque(maxlen=event_maxlen)
         self._lock = Lock()
+        self._persist_path = persist_path
+        if persist_path:
+            _os.makedirs(_os.path.dirname(persist_path) or ".", exist_ok=True)
 
     def record(self, rec: MetricRecord) -> None:
         with self._lock:
             self._brainstem.append(rec)
+        # Persist outside the lock — file I/O is fast enough that holding
+        # the lock is fine, and we want atomic append semantics.
+        if self._persist_path:
+            try:
+                with open(self._persist_path, "a") as f:
+                    f.write(_json.dumps({
+                        "timestamp": rec.timestamp,
+                        "lane": rec.lane,
+                        "success": rec.success,
+                        "cold_start": rec.cold_start,
+                        "prompt_tokens": rec.prompt_tokens,
+                        "completion_tokens": rec.completion_tokens,
+                        "prompt_tokens_per_second": rec.prompt_tokens_per_second,
+                        "generation_tokens_per_second": rec.generation_tokens_per_second,
+                        "time_to_first_token_ms": rec.time_to_first_token_ms,
+                        "total_latency_ms": rec.total_latency_ms,
+                        "backend": rec.backend,
+                        "gpu_offload_verified": rec.gpu_offload_verified,
+                        "error_category": rec.error_category,
+                    }) + "\n")
+            except OSError:
+                pass  # Non-fatal — silent persist failure
 
     def add_event(self, event: str) -> None:
         with self._lock:
@@ -150,4 +188,6 @@ class MetricsStore:
 
 # Module-level singleton — same single instance shared by app.py and
 # run_metrics.py. (Avoids creating parallel metric collections.)
-METRICS = MetricsStore()
+# Persists to ``./logs/metrics.jsonl`` when the ``logs/`` directory exists.
+_DEFAULT_PERSIST_PATH = _os.environ.get("METRICS_PERSIST_PATH", "./logs/metrics.jsonl")
+METRICS = MetricsStore(persist_path=_DEFAULT_PERSIST_PATH)

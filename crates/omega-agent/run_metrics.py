@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Any
 
 import metrics_store as metrics_store_module
 from backend_launcher import LiveBackend
@@ -55,6 +56,24 @@ class RecordedRun:
     prompt_tokens_per_second: float
     generation_tokens_per_second: float
     total_latency_ms: float
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    """Parse a value as a non-negative float; return ``default`` on failure."""
+    try:
+        parsed = float(value)
+        return parsed if parsed >= 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    """Parse a value as a non-negative int; return ``default`` on failure."""
+    try:
+        parsed = int(value)
+        return parsed if parsed >= 0 else default
+    except (TypeError, ValueError):
+        return default
 
 
 class RunMetrics:
@@ -157,3 +176,88 @@ class RunMetrics:
         self._store.add_event(
             f"{lane_label}: {error.code}"
         )
+
+    def record_from_envelope(
+        self,
+        lane: Lane,
+        envelope: Any,
+    ) -> None:
+        """
+        Record a sanitized metric from a ZeroGPU envelope dict.
+
+        This method consolidates the ``MetricRecord`` construction that was
+        previously duplicated between :meth:`record_success` and the old
+        ``_record_returned_result`` in ``app.py``. It parses the envelope's
+        ``performance``, ``usage``, and ``error`` sub-dicts defensively and
+        never stores prompts, keys, or paths.
+        """
+        if not isinstance(envelope, dict):
+            self._store.record(
+                metrics_store_module.MetricRecord(
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    lane=lane.value,
+                    success=False,
+                    error_category="INVALID_MODEL_RESPONSE",
+                )
+            )
+            self._store.add_event(f"{lane.value}: INVALID_MODEL_RESPONSE")
+            return
+
+        ok = bool(envelope.get("ok"))
+        performance = envelope.get("performance") or {}
+        usage = envelope.get("usage") or {}
+        error = envelope.get("error") or {}
+
+        if not isinstance(performance, dict):
+            performance = {}
+        if not isinstance(usage, dict):
+            usage = {}
+        if not isinstance(error, dict):
+            error = {}
+
+        ttft_raw = performance.get("time_to_first_token_ms")
+        # Treat zero or negative TTFT as unmeasured (same as None).
+        ttft_parsed = _safe_float(ttft_raw) if ttft_raw is not None else None
+
+        rec = metrics_store_module.MetricRecord(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            lane=lane.value,
+            success=ok,
+            cold_start=bool(performance.get("cold_start", False)),
+            server_start_ms=_safe_float(performance.get("server_start_ms")),
+            model_load_ms=_safe_float(performance.get("model_load_ms")),
+            prompt_tokens=_safe_int(usage.get("prompt_tokens")),
+            completion_tokens=_safe_int(usage.get("completion_tokens")),
+            prompt_tokens_per_second=_safe_float(
+                performance.get("prompt_tokens_per_second")
+            ),
+            generation_tokens_per_second=_safe_float(
+                performance.get("generation_tokens_per_second")
+            ),
+            time_to_first_token_ms=(
+                ttft_parsed if (ttft_parsed is not None and ttft_parsed > 0) else None
+            ),
+            total_latency_ms=_safe_float(performance.get("total_latency_ms")),
+            backend=str(performance.get("backend", "unknown")),
+            gpu_offload_verified=bool(
+                performance.get("gpu_offload_verified", False)
+            ),
+            finish_reason=(
+                str(envelope.get("choices", [{}])[0].get("finish_reason", "stop"))
+                if ok
+                else ""
+            ),
+            error_category=(
+                None if ok else str(error.get("code", "INFERENCE_FAILED"))
+            ),
+        )
+
+        self._store.record(rec)
+
+        if ok:
+            self._store.add_event(
+                f"{lane.value}: inference completed "
+                f"({rec.prompt_tokens}+{rec.completion_tokens} tokens)"
+            )
+        else:
+            self._store.add_event(f"{lane.value}: {rec.error_category}")

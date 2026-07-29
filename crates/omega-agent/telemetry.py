@@ -21,15 +21,13 @@ Design:
 from __future__ import annotations
 
 import logging
-import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
 
-from domain import Lane, lane_cfg
+from domain import Lane, LaneConfig, lane_cfg
 from metrics_store import METRICS, MetricRecord, MetricsStore
-from public_snapshot import _derive_lane_state as _public_derive_lane_state
+from public_snapshot import PublicSnapshot, RuntimeState
 
 _log = logging.getLogger("ashatos")
 
@@ -104,8 +102,13 @@ class TelemetryRelay:
     Thread-safe: all reads from the MetricsStore are lock-guarded.
     """
 
-    def __init__(self, store: MetricsStore | None = None) -> None:
+    def __init__(
+        self,
+        store: MetricsStore | None = None,
+        lane_configs: dict[Lane, LaneConfig] | None = None,
+    ) -> None:
         self._store = store or METRICS
+        self._lane_configs = lane_configs
         # Last-known-good cache — never null once seed_boot() is called.
         self._last: TelemetryPackage | None = None
 
@@ -173,9 +176,9 @@ class TelemetryRelay:
         )
 
         pkg = TelemetryPackage(
-            lane_label=cfg.get("label", "BrainStem"),
-            model_name=cfg.get("file", ""),
-            context_size=cfg.get("ctx", 0),
+            lane_label=cfg.label,
+            model_name=cfg.file,
+            context_size=cfg.ctx,
             lane_state=lane_state,
             host_state=host_state,
             backend=backend,
@@ -184,77 +187,95 @@ class TelemetryRelay:
         self._last = pkg
         _log.info(
             "telemetry: boot seed for %s \u2014 model=%s backend=%s lane_state=%s",
-            lane.value, cfg.get("file", ""), backend, lane_state,
+            lane.value, cfg.file, backend, lane_state,
         )
         return pkg
 
-    def package(self, lane: Lane = Lane.BRAINSTEM) -> TelemetryPackage:
+    def package(
+        self,
+        lane: Lane = Lane.BRAINSTEM,
+        runtime_state: RuntimeState | None = None,
+    ) -> TelemetryPackage:
         """Build a fresh TelemetryPackage from current metric store state.
 
-        Guaranteed to never return None — if the store is empty and no
-        ``seed_boot`` was called, it returns a default "starting" package.
+        Delegates to :class:`PublicSnapshot` for status/metrics derivation,
+        then extracts the dashboard-specific ``TelemetryPackage`` fields
+        from the snapshot. Eliminates the duplicate summary/metrics reading
+        that previously existed between this method and ``PublicSnapshot``.
+
+        If ``runtime_state`` is omitted, a default is built from ``seed_boot``
+        metadata (uptime starts at 0, llama-server assumed available).
         """
+        if runtime_state is None:
+            runtime_state = RuntimeState(
+                started_at=time.time() - 1.0,
+                llama_server_available=True,
+                llama_server_path=None,
+            )
+
+        snapshot = PublicSnapshot.from_metrics(
+            self._store,
+            runtime_state,
+            self._lane_configs or {},
+        )
+        status = snapshot.render_status()
+        frames = snapshot.render_frames()
+
         cfg = lane_cfg(lane)
         lane_key = lane.value
-        summary = self._store.get_summary(lane_key)
-        records = self._store.get_lane_metrics(lane_key)
-        events = self._store.get_events()
+        lane_info = status.get("lanes", {}).get(lane_key, {})
 
-        # Determine host and lane state (uses public_snapshot's derive logic)
-        model_path = cfg.get("model_path", "")
-        model_available = bool(model_path and os.path.isfile(model_path))
-        # Note: llama_available is True here since this runs in main process
-        lane_state = _public_derive_lane_state(
-            lane_key, model_available, summary, llama_available=True,
-        )
-
-        total_req = summary.get("total_requests", 0)
-        last_success = summary.get("last_success", True)
-
-        # Sparkline data from recent records
+        # Sparkline data from frames (delegated to snapshot)
+        lane_frames = frames.get(lane_key, [])
         recent_gen = [
-            r.generation_tokens_per_second
-            for r in records[-30:]
-            if r.generation_tokens_per_second > 0
+            f["generation_tokens_per_second"]
+            for f in lane_frames[-30:]
+            if f.get("generation_tokens_per_second", 0) > 0
         ]
         recent_lat = [
-            r.total_latency_ms
-            for r in records[-30:]
-            if r.total_latency_ms > 0
+            f["total_latency_ms"]
+            for f in lane_frames[-30:]
+            if f.get("total_latency_ms", 0) > 0
         ]
 
+        lane_state = lane_info.get("lane_state", "waking")
+
         pkg = TelemetryPackage(
-            uptime_seconds=round(time.time() - self._get_start_time(), 1),
+            uptime_seconds=status.get("uptime_seconds", 0.0),
             host_state="operational" if lane_state == "online" else (
                 "starting" if lane_state == "waking" else
                 "degraded" if lane_state == "degraded" else "offline"
             ),
-            llama_server="available",
-            lane_label=cfg.get("label", "BrainStem"),
+            llama_server=(
+                "available"
+                if status.get("llama_server_available")
+                else "not found"
+            ),
+            lane_label=cfg.label,
             lane_state=lane_state,
-            model_name=cfg.get("file", ""),
-            context_size=cfg.get("ctx", 0),
-            total_requests=total_req,
-            total_prompt_tokens=summary.get("total_prompt_tokens", 0),
-            total_completion_tokens=summary.get("total_completion_tokens", 0),
-            success_rate=summary.get("success_rate", 100.0),
-            generation_tokens_per_second=summary.get(
+            model_name=cfg.file,
+            context_size=cfg.ctx,
+            total_requests=lane_info.get("total_requests", 0),
+            total_prompt_tokens=lane_info.get("total_prompt_tokens", 0),
+            total_completion_tokens=lane_info.get("total_completion_tokens", 0),
+            success_rate=lane_info.get("success_rate", 100.0),
+            generation_tokens_per_second=lane_info.get(
                 "latest_generation_tokens_per_second", 0.0
             ),
-            prompt_tokens_per_second=summary.get(
+            prompt_tokens_per_second=lane_info.get(
                 "avg_prompt_tokens_per_second", 0.0
             ),
-            fastest_gen_tps=summary.get("quickest_generation_tokens_per_second", 0.0),
-            slowest_gen_tps=summary.get("slowest_generation_tokens_per_second", 0.0),
-            avg_latency_ms=summary.get("avg_total_latency_ms", 0.0),
-            time_to_first_token_ms=summary.get("last_time_to_first_token_ms"),
-            avg_time_to_first_token_ms=summary.get("avg_time_to_first_token_ms"),
+            fastest_gen_tps=lane_info.get("quickest_generation_tokens_per_second", 0.0),
+            slowest_gen_tps=lane_info.get("slowest_generation_tokens_per_second", 0.0),
+            avg_latency_ms=lane_info.get("avg_total_latency_ms", 0.0),
+            time_to_first_token_ms=lane_info.get("last_time_to_first_token_ms"),
+            avg_time_to_first_token_ms=lane_info.get("avg_time_to_first_token_ms"),
             recent_gen_speeds=recent_gen,
             recent_latencies=recent_lat,
-            last_request_time=summary.get("last_request_time"),
-            last_success=last_success,
-            backend=records[-1].backend if records else "cpu",
-            gpu_offload_verified=records[-1].gpu_offload_verified if records else False,
+            last_request_time=lane_info.get("last_request_time"),
+            last_success=lane_info.get("last_success", True),
+            backend=lane_info.get("backend", "cpu"),
+            gpu_offload_verified=lane_info.get("gpu_offload_verified", False),
         )
 
         self._last = pkg
