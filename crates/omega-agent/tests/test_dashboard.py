@@ -27,19 +27,28 @@ class TestDashboardRender(unittest.TestCase):
         html = render_index_html(self._snapshot, refresh_seconds=8)
 
         for marker in (
-            "Ashat Neural Network · BrainStem Telemetry",
+            # Page title
+            "ASHAT Hub · Neural Host Telemetry",
+            # DOM anchors for polling
             'id="status"',
             'id="brainstem"',
             'id="chart"',
+            # Polling endpoints
             "/api/dashboard_html",
             "/api/dashboard_timeseries",
             "setInterval(tick, REFRESH_MS)",
+            # Ashat Hub branding
             "ASHAT",
             "Hub",
             "v5.8",
             "agpstudios.org",
             "Community",
             "Documentation",
+            # New design tokens
+            "Instrument Serif",
+            "JetBrains Mono",
+            "backdrop-filter",
+            "Private Inference",
         ):
             with self.subTest(marker=marker):
                 self.assertIn(marker, html)

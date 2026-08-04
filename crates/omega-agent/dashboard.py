@@ -38,27 +38,37 @@ from public_snapshot import (
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Constants — Ashat Hub-inspired dark gradient system
+# Constants — Ashat Hub design tokens
 # ──────────────────────────────────────────────────────────────────────────
 
-_BG = "#09090B"
-_PANEL = "#111114"
-_RAISED = "#18181B"
-_PRIMARY = "#FAFAFA"
-_SECONDARY = "#A1A1AA"
-_MUTED = "#71717A"
-_BORDER = "rgba(255,255,255,0.10)"
-_GREEN = "#4ADE80"
-_AMBER = "#FBBF24"
-_CORAL = "#FB7185"
+# Background & Surface
+_BG = "#0b0b0c"  # Deep Obsidian / Near Black
+_CARD_BG = "#121316"  # Surface Cards
+_BORDER = "#27272a"  # Subtle border separation
 
-_ACCENT = "#A78BFA"
-_GLOW = "rgba(124,58,237,0.20)"
-_BRIGHT = "#EDE9FE"
+# Text
+_PRIMARY = "#f4f4f5"  # Soft Off-White
+_SECONDARY = "#9ca3af"  # Cool Gray (muted)
+_MUTED = "#6b7280"  # Even more muted
+
+# Accent
+_ACCENT = "#f97316"  # Vibrant Burnished Orange
+_ACCENT_GLOW = "rgba(249, 115, 22, 0.15)"
+
+# Status Colors
+_GREEN = "#22c55e"  # Emerald Green (operational)
+_AMBER = "#f59e0b"  # Amber (warnings)
+_CORAL = "#ef4444"  # Red (errors/offline)
+
+# Legacy aliases for compatibility
+_PANEL = _CARD_BG
+_RAISED = "#1a1b1e"
+_BRIGHT = _PRIMARY
+_GLOW = _ACCENT_GLOW
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Sparkline — inline SVG (spec §7)
+# Sparkline — inline SVG
 # ──────────────────────────────────────────────────────────────────────────
 
 def _build_sparkline(
@@ -134,7 +144,7 @@ def _build_sparkline(
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Format helpers — unchanged from the pre-pivot version
+# Format helpers
 # ──────────────────────────────────────────────────────────────────────────
 
 def _fmt_count(n: int) -> str:
@@ -195,7 +205,7 @@ def _status_pill_html(
     *,
     override: tuple[str, str] | None = None,
 ) -> str:
-    """Build the coloured status pill for a card."""
+    """Build the coloured status pill for a card — Ashat Hub capsule style."""
     if override is not None:
         color, label = override
     else:
@@ -209,18 +219,18 @@ def _status_pill_html(
         color, label = colors.get(state, (_MUTED, state.upper()))
     safe_label = escape(str(label))
     return (
-        f'<span style="display: inline-flex; align-items: center; gap: 4px; '
-        f'padding: 2px 10px; border-radius: 10px; font-size: 0.7em; '
-        f'font-weight: 600; font-family: sans-serif; '
-        f'letter-spacing: 0.04em; '
-        f'background: {color}20; color: {color}; border: 1px solid {color}40;">'
+        f'<span style="display: inline-flex; align-items: center; gap: 6px; '
+        f'padding: 4px 12px; border-radius: 9999px; font-size: 0.7em; '
+        f'font-weight: 600; font-family: Inter, sans-serif; '
+        f'letter-spacing: 0.05em; text-transform: uppercase; '
+        f'background: {_CARD_BG}; color: {color}; border: 1px solid {_BORDER};">'
         f'<span style="width: 6px; height: 6px; border-radius: 50%; '
-        f'background: {color};"></span>{safe_label}</span>'
+        f'background: {color}; box-shadow: 0 0 6px {color}80;"></span>{safe_label}</span>'
     )
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Card builder — single BrainStem lane
+# Card builder — single BrainStem lane (Ashat Hub sleek card style)
 # ──────────────────────────────────────────────────────────────────────────
 
 def _build_card_html(
@@ -299,7 +309,7 @@ def _build_card_html(
             f'border: 1px solid {diag_color}66; border-radius: 10px; '
             f'background: {diag_color}14; color: {diag_color}; '
             f'font-size: 0.78em; line-height: 1.4; '
-            f'font-family: sans-serif;">'
+            f'font-family: Inter, sans-serif;">'
             f'<div style="font-weight: 700; letter-spacing: 0.04em; '
             f'margin-bottom: 4px; font-size: 0.82em;">'
             f'\u26a0  {safe_failure_code}'
@@ -311,26 +321,22 @@ def _build_card_html(
         )
 
     return f"""\
-<article class="lane-card" style="background: linear-gradient(145deg, {_PANEL} 0%, {_RAISED} 100%);
+<article class="lane-card" style="background: {_CARD_BG};
      border: 1px solid {_BORDER};
-     border-radius: 24px;
-     padding: 28px;
-     min-height: 380px;
+     border-radius: 12px;
+     padding: 24px;
+     min-height: 360px;
      position: relative;
      overflow: hidden;
-     box-shadow: 0 20px 60px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.05);
-     font-family: sans-serif;">
-  <div style="position: absolute; top: -40px; left: 50%; transform: translateX(-50%);
-       width: 180px; height: 80px; border-radius: 50%;
-       background: {glow}; filter: blur(24px); pointer-events: none;"></div>
+     font-family: Inter, sans-serif;">
 
-  <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px;">
+  <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px;">
     <div>
-      <div style="font-size: 1.05em; font-weight: 700; color: {_PRIMARY};
-           letter-spacing: 0.03em; font-family: sans-serif;">
+      <div style="font-size: 1.1em; font-weight: 700; color: {_PRIMARY};
+           letter-spacing: 0.02em; font-family: Inter, sans-serif;">
         {lane_display.upper()}</div>
-      <div style="font-size: 0.78em; color: {_SECONDARY}; margin-top: 2px;
-           font-family: sans-serif;">
+      <div style="font-size: 0.78em; color: {_SECONDARY}; margin-top: 4px;
+           font-family: Inter, sans-serif;">
         Primary Inference Lane</div>
     </div>
     {_status_pill_html(state, override=override_pill)}
@@ -339,79 +345,79 @@ def _build_card_html(
   {diagnostic_html}
 
   <div style="margin-bottom: 18px; padding-bottom: 14px; border-bottom: 1px solid {_BORDER};">
-    <div style="font-size: 0.85em; font-weight: 600; color: {bright};
-         font-family: monospace;" title="{model_tooltip}">
+    <div style="font-size: 0.88em; font-weight: 600; color: {_PRIMARY};
+         font-family: 'JetBrains Mono', monospace;" title="{model_tooltip}">
       {escape(short_model)}</div>
-    <div style="font-size: 0.75em; color: {_MUTED}; margin-top: 3px;
-         font-family: monospace;">
+    <div style="font-size: 0.75em; color: {_MUTED}; margin-top: 4px;
+         font-family: 'JetBrains Mono', monospace;">
       Context {ctx_fmt} \u00b7 <span title="{model_tooltip}" style="cursor: help; border-bottom: 1px dotted {_MUTED};">{model_display}</span>
     </div>
   </div>
 
-  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; margin-bottom: 14px;">
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
     <div>
-      <div style="font-size: 0.65em; color: {_MUTED}; letter-spacing: 0.06em;
-           font-weight: 600; font-family: sans-serif; text-transform: uppercase;">
+      <div style="font-size: 0.65em; color: {_MUTED}; letter-spacing: 0.08em;
+           font-weight: 600; font-family: Inter, sans-serif; text-transform: uppercase;">
         Tokens In</div>
-      <div style="font-size: 1.4em; font-weight: 700; color: {_PRIMARY};
-           font-family: monospace; line-height: 1.3;">{total_prompt}</div>
+      <div style="font-size: 1.5em; font-weight: 700; color: {_PRIMARY};
+           font-family: 'JetBrains Mono', monospace; line-height: 1.3;">{total_prompt}</div>
       <div style="font-size: 0.6em; color: {_MUTED};">Since restart</div>
     </div>
     <div>
-      <div style="font-size: 0.65em; color: {_MUTED}; letter-spacing: 0.06em;
-           font-weight: 600; font-family: sans-serif; text-transform: uppercase;">
+      <div style="font-size: 0.65em; color: {_MUTED}; letter-spacing: 0.08em;
+           font-weight: 600; font-family: Inter, sans-serif; text-transform: uppercase;">
         Tokens Out</div>
-      <div style="font-size: 1.4em; font-weight: 700; color: {_PRIMARY};
-           font-family: monospace; line-height: 1.3;">{total_completion}</div>
+      <div style="font-size: 1.5em; font-weight: 700; color: {_PRIMARY};
+           font-family: 'JetBrains Mono', monospace; line-height: 1.3;">{total_completion}</div>
       <div style="font-size: 0.6em; color: {_MUTED};">Since restart</div>
     </div>
     <div>
-      <div style="font-size: 0.65em; color: {_MUTED}; letter-spacing: 0.06em;
-           font-weight: 600; font-family: sans-serif; text-transform: uppercase;">
+      <div style="font-size: 0.65em; color: {_MUTED}; letter-spacing: 0.08em;
+           font-weight: 600; font-family: Inter, sans-serif; text-transform: uppercase;">
         Fastest</div>
       <div style="font-size: 1.3em; font-weight: 700; color: {accent};
-           font-family: monospace; line-height: 1.3;">{fastest}</div>
+           font-family: 'JetBrains Mono', monospace; line-height: 1.3;">{fastest}</div>
       <div style="font-size: 0.6em; color: {_MUTED};">tokens/sec</div>
     </div>
     <div>
-      <div style="font-size: 0.65em; color: {_MUTED}; letter-spacing: 0.06em;
-           font-weight: 600; font-family: sans-serif; text-transform: uppercase;">
+      <div style="font-size: 0.65em; color: {_MUTED}; letter-spacing: 0.08em;
+           font-weight: 600; font-family: Inter, sans-serif; text-transform: uppercase;">
         Slowest</div>
       <div style="font-size: 1.3em; font-weight: 700; color: {accent};
-           font-family: monospace; line-height: 1.3;">{slowest}</div>
+           font-family: 'JetBrains Mono', monospace; line-height: 1.3;">{slowest}</div>
       <div style="font-size: 0.6em; color: {_MUTED};">tokens/sec</div>
     </div>
   </div>
 
-  <div style="display: flex; gap: 20px; margin-bottom: 12px; padding: 8px 0;
+  <div style="display: flex; gap: 24px; margin-bottom: 12px; padding: 10px 0;
        border-bottom: 1px solid {_BORDER};">
     <div>
-      <div style="font-size: 0.6em; color: {_MUTED}; letter-spacing: 0.06em;
-           font-weight: 600; font-family: sans-serif; text-transform: uppercase;">
+      <div style="font-size: 0.6em; color: {_MUTED}; letter-spacing: 0.08em;
+           font-weight: 600; font-family: Inter, sans-serif; text-transform: uppercase;">
         TTFT \u2014 Last</div>
       <div style="font-size: 1.1em; font-weight: 700; color: {accent};
-           font-family: monospace; line-height: 1.3;">{last_ttft}</div>
+           font-family: 'JetBrains Mono', monospace; line-height: 1.3;">{last_ttft}</div>
       <div style="font-size: 0.6em; color: {_MUTED};">ms (server-side)</div>
     </div>
     <div>
-      <div style="font-size: 0.6em; color: {_MUTED}; letter-spacing: 0.06em;
-           font-weight: 600; font-family: sans-serif; text-transform: uppercase;">
+      <div style="font-size: 0.6em; color: {_MUTED}; letter-spacing: 0.08em;
+           font-weight: 600; font-family: Inter, sans-serif; text-transform: uppercase;">
         TTFT \u2014 Avg</div>
       <div style="font-size: 1.1em; font-weight: 700; color: {accent};
-           font-family: monospace; line-height: 1.3;">{avg_ttft}</div>
+           font-family: 'JetBrains Mono', monospace; line-height: 1.3;">{avg_ttft}</div>
       <div style="font-size: 0.6em; color: {_MUTED};">ms (server-side)</div>
     </div>
   </div>
 
   <div style="margin-bottom: 10px;">
-    <div style="font-size: 0.6em; color: {_MUTED}; letter-spacing: 0.06em;
-         font-weight: 600; font-family: sans-serif; text-transform: uppercase;
-         margin-bottom: 2px;">
+    <div style="font-size: 0.6em; color: {_MUTED}; letter-spacing: 0.08em;
+         font-weight: 600; font-family: Inter, sans-serif; text-transform: uppercase;
+         margin-bottom: 4px;">
       Recent Generation Speed</div>
     {sparkline}
   </div>
 
-  <div style="font-size: 0.7em; padding-top: 8px; border-top: 1px solid {_BORDER};
+  <div style="font-size: 0.7em; padding-top: 10px; border-top: 1px solid {_BORDER};
        display: flex; justify-content: space-between; align-items: center;">
     {footer}
   </div>
@@ -454,20 +460,28 @@ def _short_model_name(filename: str) -> str:
 # ──────────────────────────────────────────────────────────────────────────
 
 def _build_header_html() -> str:
-    """Build the Ashat Hub-inspired product header."""
+    """Build the Ashat Hub header with backdrop blur navigation."""
     return f"""\
 <header class="hub-header">
   <nav class="hub-nav" aria-label="Primary navigation">
-    <a class="hub-brand" href="https://agpstudios.org" rel="noopener">
-      <span class="brand-mark" aria-hidden="true"><span></span></span>
-      <span>ASHAT<span class="hub-accent">Hub</span></span>
-    </a>
-    <span class="version-badge">v5.8</span>
+    <div class="nav-left">
+      <a class="hub-brand" href="https://agpstudios.org" rel="noopener">
+        <span class="brand-mark" aria-hidden="true"><img src="/images/lion-logo-32.png" alt="ASHAT Hub"></span>
+        <span>ASHAT<span class="hub-accent">Hub</span></span>
+      </a>
+      <span class="version-badge">v5.8</span>
+    </div>
     <div class="nav-links">
       <a class="hub-link" href="https://agpstudios.org" rel="noopener">Chat</a>
       <a class="hub-link" href="https://agpstudios.org" rel="noopener">Community</a>
       <a class="hub-link" href="https://agpstudios.org" rel="noopener">Documentation</a>
       <a class="hub-link" href="https://agpstudios.org" rel="noopener">Support</a>
+    </div>
+    <div class="nav-right">
+      <span class="status-pill">
+        <span class="status-dot"></span>
+        Operational
+      </span>
     </div>
   </nav>
 </header>"""
@@ -479,7 +493,7 @@ def _build_status_row_html(snapshot: PublicSnapshot) -> str:
     host_state = _global_host_state(status)
 
     state_colors = {
-        "Operational": _ACCENT,
+        "Operational": _GREEN,
         "Starting": _AMBER,
         "Degraded": _CORAL,
         "Offline": _MUTED,
@@ -534,14 +548,14 @@ def _build_status_row_html(snapshot: PublicSnapshot) -> str:
     if headline_code and headline_msg:
         headline_html = (
             f'<div style="margin: 6px 20px 0; text-align: center; '
-            f'font-family: sans-serif; font-size: 0.78em; color: {_AMBER};">'
+            f'font-family: Inter, sans-serif; font-size: 0.78em; color: {_AMBER};">'
             f'\u26a0 <span style="font-weight: 600;">{escape(headline_code.replace("_", " ").title())}</span>'
             f' \u00b7 <span>{headline_msg}</span>'
             f'</div>'
         )
 
     return f"""\
-<div class="status-strip" style="display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; padding: 0 0 22px; color: {_MUTED}; font-size: 0.78em; font-family: sans-serif;">
+<div class="status-strip" style="display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; padding: 0 0 24px; color: {_MUTED}; font-size: 0.78em; font-family: Inter, sans-serif;">
   <span style="display: inline-flex; align-items: center; gap: 8px;">
     <span style="width: 7px; height: 7px; border-radius: 50%; background: {dot_color}; box-shadow: 0 0 8px {dot_color}80;"></span>
     <span style="font-weight: 650; color: {dot_color};">{host_state}</span>
@@ -569,13 +583,13 @@ def _build_cards_html(snapshot: PublicSnapshot) -> str:
 
 
 def _build_footer_html() -> str:
-    """Build the quiet Ashat Hub-inspired footer."""
+    """Build the Ashat Hub footer."""
     return f"""\
 <footer class="hub-footer">
   <div class="footer-rule"></div>
   <div class="footer-nav-row">
     <a class="footer-brand" href="https://agpstudios.org" rel="noopener">
-      <span class="brand-mark" aria-hidden="true"><span></span></span>
+      <span class="brand-mark" aria-hidden="true"><img src="/images/lion-logo-32.png" alt="ASHAT Hub"></span>
       <span>ASHAT<span class="hub-accent">Hub</span></span>
     </a>
     <div class="footer-links">
@@ -587,7 +601,7 @@ def _build_footer_html() -> str:
     </div>
   </div>
   <div class="footer-copyright">
-    AGP Studios, Inc. · &copy; 2026 · ASHAT Hub · v5.8 · All rights reserved.
+    AGP Studios, Inc. \u00b7 &copy; 2026 \u00b7 ASHAT Hub \u00b7 v5.8 \u00b7 All rights reserved.
   </div>
 </footer>"""
 
@@ -641,70 +655,390 @@ def render_index_html(
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Ashat Neural Network · BrainStem Telemetry</title>
+<title>ASHAT Hub \u00b7 Neural Host Telemetry</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 <style>
+  /* ═══════════════════════════════════════════════════════════════════
+     ASHAT HUB DESIGN TOKENS
+     ═══════════════════════════════════════════════════════════════════ */
+  :root {{
+    --bg-primary: {_BG};
+    --bg-card: {_CARD_BG};
+    --border-color: {_BORDER};
+    --text-primary: {_PRIMARY};
+    --text-muted: {_SECONDARY};
+    --accent: {_ACCENT};
+    --success: {_GREEN};
+  }}
+
   *, *::before, *::after {{ box-sizing: border-box; }}
   :root {{ color-scheme: dark; }}
+
   body {{
-    background: {_BG}; color: {_PRIMARY};
-    margin: 0; padding: 0; min-height: 100vh;
-    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    background-image: radial-gradient(circle at 50% -12%, rgba(124,58,237,0.18), transparent 34rem),
-                      linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
-                      linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
-    background-size: auto, 56px 56px, 56px 56px;
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    margin: 0;
+    padding: 0;
+    min-height: 100vh;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }}
-  body::before {{ content: ""; position: fixed; inset: 0; pointer-events: none;
-    background: linear-gradient(180deg, rgba(9,9,11,0.05), {_BG} 72%); z-index: -1; }}
-  ::selection {{ background: rgba(139,92,246,0.35); color: {_PRIMARY}; }}
-  a {{ color: {_PRIMARY}; text-decoration: none; }}
-  .hub-header, .container, .hub-footer {{ max-width: 920px; margin: 0 auto; padding-left: 28px; padding-right: 28px; }}
-  .hub-header {{ padding-top: 26px; }}
-  .hub-nav {{ display: flex; justify-content: space-between; align-items: center; gap: 16px; }}
-  .hub-brand {{ display: inline-flex; align-items: center; gap: 10px; font-size: 0.78rem; font-weight: 750; letter-spacing: 0.14em; }}
-  .hub-accent {{ color: #F97316; font-weight: 750; }}
-  .brand-mark {{ width: 24px; height: 24px; display: grid; place-items: center; border-radius: 8px; background: linear-gradient(135deg, #8B5CF6, #38BDF8); box-shadow: 0 0 24px rgba(139,92,246,0.35); }}
-  .brand-mark span {{ width: 8px; height: 8px; border-radius: 50%; background: white; box-shadow: 0 0 12px white; }}
-  .version-badge {{ background: {_RAISED}; color: {_SECONDARY}; font-size: 0.65rem; padding: 2px 8px; border-radius: 6px; border: 1px solid {_BORDER}; font-weight: 600; letter-spacing: 0.05em; }}
-  .nav-links {{ display: flex; gap: 24px; align-items: center; }}
-  .hub-link {{ color: {_SECONDARY}; font-size: 0.78rem; transition: color 180ms ease; text-decoration: none; }}
-  .hub-link:hover {{ color: {_PRIMARY}; }}
-  .hero-copy {{ padding: 92px 0 54px; max-width: 700px; }}
-  .hero-eyebrow {{ display: inline-flex; align-items: center; gap: 9px; color: {_SECONDARY}; font-size: 0.72rem; letter-spacing: 0.1em; text-transform: uppercase; }}
-  .live-dot {{ width: 7px; height: 7px; border-radius: 50%; background: {_GREEN}; box-shadow: 0 0 0 5px rgba(74,222,128,0.1), 0 0 14px rgba(74,222,128,0.7); }}
-  .hero-copy h1 {{ margin: 18px 0 12px; font-size: clamp(2.8rem, 8vw, 5.8rem); line-height: 0.98; letter-spacing: -0.075em; font-weight: 720; }}
-  .hero-copy h1 span {{ color: transparent; background: linear-gradient(100deg, #C4B5FD 10%, #818CF8 46%, #38BDF8 92%); background-clip: text; -webkit-background-clip: text; }}
-  .hero-copy p {{ margin: 0; color: {_SECONDARY}; font-size: 1.05rem; letter-spacing: -0.01em; }}
-  #status, #brainstem {{ line-height: 1.4; }}
-  #chart {{ margin-top: 28px; margin-bottom: 28px; }}
-  #chart .plotly .main-svg {{ background: transparent !important; }}
-  .hub-footer {{ padding-top: 10px; padding-bottom: 34px; }}
-  .footer-rule {{ height: 1px; background: {_BORDER}; margin-bottom: 18px; }}
-  .footer-nav-row {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; }}
-  .footer-brand {{ display: inline-flex; align-items: center; gap: 10px; font-size: 0.78rem; font-weight: 750; letter-spacing: 0.14em; text-decoration: none; }}
-  .footer-links {{ display: flex; gap: 20px; align-items: center; }}
-  .footer-link {{ color: {_SECONDARY}; font-size: 0.72rem; transition: color 180ms ease; text-decoration: none; }}
-  .footer-link:hover {{ color: {_PRIMARY}; }}
-  .footer-copyright {{ text-align: center; color: {_MUTED}; font-size: 0.65rem; letter-spacing: 0.04em; padding-top: 18px; border-top: 1px solid {_BORDER}; }}
-  @media (max-width: 640px) {{
-    .hub-header, .container, .hub-footer {{ padding-left: 18px; padding-right: 18px; }}
-    .hub-nav {{ flex-wrap: wrap; }}
-    .nav-links {{ flex-wrap: wrap; gap: 16px; }}
-    .footer-nav-row {{ flex-direction: column; gap: 16px; }}
-    .footer-links {{ flex-wrap: wrap; gap: 16px; }}
+
+  ::selection {{ background: rgba(249, 115, 22, 0.3); color: var(--text-primary); }}
+
+  a {{ color: var(--text-primary); text-decoration: none; transition: color 0.2s ease; }}
+  a:hover {{ color: var(--accent); }}
+
+  /* ═══════════════════════════════════════════════════════════════════
+     NAVIGATION — Backdrop blur, fixed top bar
+     ═══════════════════════════════════════════════════════════════════ */
+  .hub-header {{
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: rgba(11, 11, 12, 0.85);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border-color);
+  }}
+
+  .hub-nav {{
+    max-width: 1200px;
+    margin: 0 auto;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem 2rem;
+    gap: 2rem;
+  }}
+
+  .nav-left, .nav-right {{
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }}
+
+  .hub-brand {{
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 0.95rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: var(--text-primary);
+  }}
+
+  .hub-accent {{ color: var(--accent); font-weight: 700; }}
+
+  .brand-mark {{
+    width: 28px;
+    height: 28px;
+    display: grid;
+    place-items: center;
+    border-radius: 6px;
+    overflow: hidden;
+  }}
+
+  .brand-mark img {{
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }}
+
+  .hero-logo {{
+    width: 120px;
+    height: 120px;
+    margin: 0 auto 2rem;
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow: 0 0 40px rgba(249, 115, 22, 0.2);
+  }}
+
+  .hero-logo img {{
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }}
+
+  .version-badge {{
+    background: var(--bg-card);
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+    letter-spacing: 0.03em;
+  }}
+
+  .nav-links {{
+    display: flex;
+    gap: 2rem;
+    align-items: center;
+  }}
+
+  .hub-link {{
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    font-weight: 500;
+    transition: color 0.2s ease;
+    text-decoration: none;
+  }}
+
+  .hub-link:hover {{ color: var(--text-primary); }}
+
+  .status-pill {{
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 14px;
+    border-radius: 9999px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--success);
+  }}
+
+  .status-dot {{
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--success);
+    box-shadow: 0 0 8px var(--success);
+    animation: pulse 2s infinite;
+  }}
+
+  @keyframes pulse {{
+    0%, 100% {{ opacity: 1; }}
+    50% {{ opacity: 0.6; }}
+  }}
+
+  /* ═══════════════════════════════════════════════════════════════════
+     HERO SECTION — Editorial style with italic accent
+     ═══════════════════════════════════════════════════════════════════ */
+  .hero {{
+    text-align: center;
+    padding: 4rem 2rem 3rem;
+    max-width: 800px;
+    margin: 0 auto;
+  }}
+
+  .hero-badge {{
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    border-radius: 9999px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    margin-bottom: 2rem;
+  }}
+
+  .hero-badge .live-dot {{
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--success);
+    box-shadow: 0 0 6px var(--success);
+  }}
+
+  .hero h1 {{
+    font-family: 'Inter', sans-serif;
+    font-size: clamp(2.5rem, 6vw, 4rem);
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    line-height: 1.1;
+    margin: 0 0 1.5rem 0;
+    color: var(--text-primary);
+  }}
+
+  .hero h1 .accent {{
+    font-family: 'Instrument Serif', Georgia, serif;
+    font-style: italic;
+    color: var(--accent);
+    font-weight: 400;
+    font-size: 1.1em;
+  }}
+
+  .hero-subtitle {{
+    font-size: 1.1rem;
+    color: var(--text-muted);
+    max-width: 600px;
+    margin: 0 auto 2rem;
+    line-height: 1.6;
+  }}
+
+  .hero-meta {{
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    letter-spacing: 0.02em;
+  }}
+
+  .hero-meta span {{
+    margin: 0 0.5rem;
+    opacity: 0.5;
+  }}
+
+  /* ═══════════════════════════════════════════════════════════════════
+     CONTENT CONTAINER
+     ═══════════════════════════════════════════════════════════════════ */
+  .container {{
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 0 2rem;
+  }}
+
+  #status, #brainstem {{
+    line-height: 1.4;
+  }}
+
+  #chart {{
+    margin-top: 2rem;
+    margin-bottom: 2rem;
+  }}
+
+  #chart .plotly .main-svg {{
+    background: transparent !important;
+  }}
+
+  /* ═══════════════════════════════════════════════════════════════════
+     FOOTER
+     ═══════════════════════════════════════════════════════════════════ */
+  .hub-footer {{
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 1rem 2rem 3rem;
+  }}
+
+  .footer-rule {{
+    height: 1px;
+    background: var(--border-color);
+    margin-bottom: 1.5rem;
+  }}
+
+  .footer-nav-row {{
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1.5rem;
+  }}
+
+  .footer-brand {{
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 0.88rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-decoration: none;
+    color: var(--text-primary);
+  }}
+
+  .footer-links {{
+    display: flex;
+    gap: 1.5rem;
+    align-items: center;
+  }}
+
+  .footer-link {{
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    font-weight: 500;
+    transition: color 0.2s ease;
+    text-decoration: none;
+  }}
+
+  .footer-link:hover {{ color: var(--text-primary); }}
+
+  .footer-copyright {{
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    letter-spacing: 0.02em;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border-color);
+  }}
+
+  /* ═══════════════════════════════════════════════════════════════════
+     RESPONSIVE
+     ═══════════════════════════════════════════════════════════════════ */
+  @media (max-width: 768px) {{
+    .hub-nav {{
+      flex-wrap: wrap;
+      padding: 1rem;
+    }}
+
+    .nav-links {{
+      order: 3;
+      width: 100%;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 1rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--border-color);
+    }}
+
+    .hero {{
+      padding: 2rem 1rem;
+    }}
+
+    .container, .hub-footer {{
+      padding-left: 1rem;
+      padding-right: 1rem;
+    }}
+
+    .footer-nav-row {{
+      flex-direction: column;
+      gap: 1rem;
+      text-align: center;
+    }}
+
+    .footer-links {{
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 1rem;
+    }}
   }}
 </style>
 </head>
 <body>
 {header_html}
+
+<div class="hero">
+  <div class="hero-logo">
+    <img src="/images/lion-logo-128.png" alt="ASHAT Neural Host">
+  </div>
+  <div class="hero-badge">
+    <span class="live-dot"></span>
+    Neural infrastructure \u00b7 Live telemetry
+  </div>
+  <h1>Private Inference <span class="accent">for Ashat</span></h1>
+  <p class="hero-subtitle">
+    A dedicated neural lane powering the Ashat ecosystem.
+    Real-time telemetry from your BrainStem host.
+  </p>
+  <div class="hero-meta">
+    Free \u00b7 No setup \u00b7 Your keys, your models
+  </div>
+</div>
+
 <div class="container">
   <div id="status">{status_html}</div>
-
   <div id="brainstem">{brainstem_html}</div>
 </div>
+
 <div id="chart" class="container"></div>
+
 {footer_html}
+
 <script>
 (function() {{
     var REFRESH_MS = {safe_refresh * 1000};
@@ -715,7 +1049,7 @@ def render_index_html(
 
     var CHART_COLORS = {{
         bg: '{_BG}',
-        panel: '{_PANEL}',
+        panel: '{_CARD_BG}',
         primary: '{_PRIMARY}',
         secondary: '{_SECONDARY}',
         muted: '{_MUTED}',
@@ -728,11 +1062,11 @@ def render_index_html(
         return {{
             title: {{
                 text: title,
-                font: {{ color: CHART_COLORS.secondary, size: 13, family: 'sans-serif' }}
+                font: {{ color: CHART_COLORS.secondary, size: 13, family: 'Inter, sans-serif' }}
             }},
             paper_bgcolor: CHART_COLORS.bg,
             plot_bgcolor: CHART_COLORS.panel,
-            font: {{ color: CHART_COLORS.muted, size: 10, family: 'sans-serif' }},
+            font: {{ color: CHART_COLORS.muted, size: 10, family: 'Inter, sans-serif' }},
             margin: {{ l: 50, r: 50, t: 40, b: 40 }},
             height: 320,
             legend: {{
@@ -740,21 +1074,21 @@ def render_index_html(
                 font: {{ color: CHART_COLORS.secondary, size: 11 }}
             }},
             xaxis: {{
-                gridcolor: 'rgba(255,255,255,0.08)',
-                zerolinecolor: 'rgba(255,255,255,0.12)',
+                gridcolor: 'rgba(255,255,255,0.06)',
+                zerolinecolor: 'rgba(255,255,255,0.1)',
                 color: CHART_COLORS.muted,
                 tickformat: '%H:%M:%S'
             }},
             yaxis: {{
                 title: {{ text: 'tok/s', font: {{ color: CHART_COLORS.accent, size: 11 }} }},
-                gridcolor: 'rgba(255,255,255,0.08)',
-                zerolinecolor: 'rgba(255,255,255,0.12)',
+                gridcolor: 'rgba(255,255,255,0.06)',
+                zerolinecolor: 'rgba(255,255,255,0.1)',
                 color: CHART_COLORS.accent
             }},
             yaxis2: {{
                 title: {{ text: 'ms', font: {{ color: CHART_COLORS.coral, size: 11 }} }},
                 overlaying: 'y', side: 'right',
-                gridcolor: 'rgba(255,255,255,0.04)',
+                gridcolor: 'rgba(255,255,255,0.03)',
                 color: CHART_COLORS.coral
             }},
             hovermode: 'x unified',
@@ -781,8 +1115,8 @@ def render_index_html(
 
         if (timestamps.length === 0) {{
             CHART_EL.innerHTML = '<div style="text-align:center; color:' + CHART_COLORS.muted
-                + '; font-family:sans-serif; font-size:0.82em; padding:40px 0;">'
-                + 'No inference data yet \u2014 chart appears after the first request.</div>';
+                + '; font-family:Inter,sans-serif; font-size:0.85em; padding:40px 0;">'
+                + 'No inference data yet \\u2014 chart appears after the first request.</div>';
             chartReady = false;
             return;
         }}
@@ -806,7 +1140,7 @@ def render_index_html(
             hovertemplate: '%{{y:.0f}} ms<extra>Total latency</extra>'
         }};
 
-        var layout = buildLayout('BrainStem \u2014 Generation Speed &amp; Latency Over Time');
+        var layout = buildLayout('BrainStem \\u2014 Generation Speed &amp; Latency Over Time');
         var config = {{ displayModeBar: false, responsive: true }};
 
         if (chartReady) {{

@@ -37,6 +37,7 @@ import requests
 
 from fastapi import FastAPI, Request as FastRequest
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from auth import is_valid_api_key
 from backend_launcher import BackendLauncher, LiveBackend
@@ -654,6 +655,9 @@ _chat_completions_handler = _make_http_chat_completions()
 
 
 app = FastAPI(title="AshatOS Neural Host")
+
+# Serve images directory for dashboard logos
+app.mount("/images", StaticFiles(directory="images"), name="images")
 
 
 @app.get("/api/public_status")
