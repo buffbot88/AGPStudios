@@ -659,7 +659,7 @@ def render_index_html(
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+
 <style>
   /* ═══════════════════════════════════════════════════════════════════
      ASHAT HUB DESIGN TOKENS
@@ -900,14 +900,7 @@ def render_index_html(
     line-height: 1.4;
   }}
 
-  #chart {{
-    margin-top: 2rem;
-    margin-bottom: 2rem;
-  }}
 
-  #chart .plotly .main-svg {{
-    background: transparent !important;
-  }}
 
   /* ═══════════════════════════════════════════════════════════════════
      FOOTER
@@ -1021,21 +1014,12 @@ def render_index_html(
     Neural infrastructure \u00b7 Live telemetry
   </div>
   <h1>Private Inference <span class="accent">for Ashat</span></h1>
-  <p class="hero-subtitle">
-    A dedicated neural lane powering the Ashat ecosystem.
-    Real-time telemetry from your BrainStem host.
-  </p>
-  <div class="hero-meta">
-    Free \u00b7 No setup \u00b7 Your keys, your models
-  </div>
 </div>
 
 <div class="container">
   <div id="status">{status_html}</div>
   <div id="brainstem">{brainstem_html}</div>
 </div>
-
-<div id="chart" class="container"></div>
 
 {footer_html}
 
@@ -1044,113 +1028,6 @@ def render_index_html(
     var REFRESH_MS = {safe_refresh * 1000};
     var STATUS_EL = document.getElementById('status');
     var BRAINSTEM_EL = document.getElementById('brainstem');
-    var CHART_EL = document.getElementById('chart');
-    var chartReady = false;
-
-    var CHART_COLORS = {{
-        bg: '{_BG}',
-        panel: '{_CARD_BG}',
-        primary: '{_PRIMARY}',
-        secondary: '{_SECONDARY}',
-        muted: '{_MUTED}',
-        accent: '{_ACCENT}',
-        green: '{_GREEN}',
-        coral: '{_CORAL}'
-    }};
-
-    function buildLayout(title) {{
-        return {{
-            title: {{
-                text: title,
-                font: {{ color: CHART_COLORS.secondary, size: 13, family: 'Inter, sans-serif' }}
-            }},
-            paper_bgcolor: CHART_COLORS.bg,
-            plot_bgcolor: CHART_COLORS.panel,
-            font: {{ color: CHART_COLORS.muted, size: 10, family: 'Inter, sans-serif' }},
-            margin: {{ l: 50, r: 50, t: 40, b: 40 }},
-            height: 320,
-            legend: {{
-                orientation: 'h', y: 1.12,
-                font: {{ color: CHART_COLORS.secondary, size: 11 }}
-            }},
-            xaxis: {{
-                gridcolor: 'rgba(255,255,255,0.06)',
-                zerolinecolor: 'rgba(255,255,255,0.1)',
-                color: CHART_COLORS.muted,
-                tickformat: '%H:%M:%S'
-            }},
-            yaxis: {{
-                title: {{ text: 'tok/s', font: {{ color: CHART_COLORS.accent, size: 11 }} }},
-                gridcolor: 'rgba(255,255,255,0.06)',
-                zerolinecolor: 'rgba(255,255,255,0.1)',
-                color: CHART_COLORS.accent
-            }},
-            yaxis2: {{
-                title: {{ text: 'ms', font: {{ color: CHART_COLORS.coral, size: 11 }} }},
-                overlaying: 'y', side: 'right',
-                gridcolor: 'rgba(255,255,255,0.03)',
-                color: CHART_COLORS.coral
-            }},
-            hovermode: 'x unified',
-            hoverlabel: {{
-                bgcolor: CHART_COLORS.panel,
-                font: {{ color: CHART_COLORS.primary, size: 11 }}
-            }}
-        }};
-    }}
-
-    function updateChart(data) {{
-        var brainstem = (data && data.brainstem) || [];
-        var timestamps = [];
-        var genSpeeds = [];
-        var latencies = [];
-        for (var i = 0; i < brainstem.length; i++) {{
-            var pt = brainstem[i];
-            if (pt.generation_tokens_per_second > 0 || pt.total_latency_ms > 0) {{
-                timestamps.push(pt.timestamp);
-                genSpeeds.push(pt.generation_tokens_per_second || 0);
-                latencies.push(pt.total_latency_ms || 0);
-            }}
-        }}
-
-        if (timestamps.length === 0) {{
-            CHART_EL.innerHTML = '<div style="text-align:center; color:' + CHART_COLORS.muted
-                + '; font-family:Inter,sans-serif; font-size:0.85em; padding:40px 0;">'
-                + 'No inference data yet \\u2014 chart appears after the first request.</div>';
-            chartReady = false;
-            return;
-        }}
-
-        var genTrace = {{
-            x: timestamps, y: genSpeeds,
-            type: 'scatter', mode: 'lines+markers',
-            name: 'Gen tok/s',
-            line: {{ color: CHART_COLORS.accent, width: 2, shape: 'spline', smoothing: 0.4 }},
-            marker: {{ size: 3, color: CHART_COLORS.accent }},
-            yaxis: 'y',
-            hovertemplate: '%{{y:.1f}} tok/s<extra>Gen speed</extra>'
-        }};
-        var latTrace = {{
-            x: timestamps, y: latencies,
-            type: 'scatter', mode: 'lines+markers',
-            name: 'Latency',
-            line: {{ color: CHART_COLORS.coral, width: 1.8, shape: 'spline', smoothing: 0.4, dash: 'dot' }},
-            marker: {{ size: 3, color: CHART_COLORS.coral }},
-            yaxis: 'y2',
-            hovertemplate: '%{{y:.0f}} ms<extra>Total latency</extra>'
-        }};
-
-        var layout = buildLayout('BrainStem \\u2014 Generation Speed &amp; Latency Over Time');
-        var config = {{ displayModeBar: false, responsive: true }};
-
-        if (chartReady) {{
-            Plotly.react(CHART_EL, [genTrace, latTrace], layout, config);
-        }} else {{
-            Plotly.newPlot(CHART_EL, [genTrace, latTrace], layout, config);
-            chartReady = true;
-        }}
-    }}
-
     function tick() {{
         fetch('/api/dashboard_html', {{ cache: 'no-store' }})
             .then(function(r) {{
@@ -1170,17 +1047,6 @@ def render_index_html(
                 console.warn('dashboard refresh failed', err);
             }});
 
-        fetch('/api/dashboard_timeseries', {{ cache: 'no-store' }})
-            .then(function(r) {{
-                if (!r.ok) throw new Error('status ' + r.status);
-                return r.json();
-            }})
-            .then(function(data) {{
-                updateChart(data);
-            }})
-            .catch(function(err) {{
-                console.warn('timeseries fetch failed', err);
-            }});
     }}
 
     setInterval(tick, REFRESH_MS);

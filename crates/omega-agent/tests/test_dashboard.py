@@ -32,10 +32,8 @@ class TestDashboardRender(unittest.TestCase):
             # DOM anchors for polling
             'id="status"',
             'id="brainstem"',
-            'id="chart"',
             # Polling endpoints
             "/api/dashboard_html",
-            "/api/dashboard_timeseries",
             "setInterval(tick, REFRESH_MS)",
             # Ashat Hub branding
             "ASHAT",

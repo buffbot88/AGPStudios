@@ -2,3 +2,5 @@
 /archive
 /bin
 /.freebuff/**
+.freebuff/desktop-v2.db
+.freebuff/desktop-v2.db-wal
