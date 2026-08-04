@@ -1,12 +1,10 @@
 """Response envelope → HTTP response adapter.
 
 Pure-function adapter that converts a Run ``envelope`` dict into a
-HTTP ``(status, body)`` tuple. Used by both FastAPI and Gradio handlers
-(Gradio wraps the body in ``json.dumps`` and discards the status — it
-returns the body as a string and uses a 200-equivalent for everything).
+HTTP ``(status, body)`` tuple used by the FastAPI handler.
 
 The adapter is intentionally tiny and dependency-free so it can be
-imported into unit tests without dragging in gradio or fastapi.
+imported into unit tests without dragging in FastAPI.
 """
 
 from __future__ import annotations

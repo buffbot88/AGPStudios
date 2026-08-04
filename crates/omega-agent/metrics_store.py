@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json as _json
 import os as _os
+
+from config import CONFIG
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -32,8 +34,7 @@ class MetricRecord:
     generation_tokens_per_second: float = 0.0
     time_to_first_token_ms: float | None = None
     total_latency_ms: float = 0.0
-    backend: str = "cuda"
-    gpu_offload_verified: bool = True
+    backend: str = "cpu"
     finish_reason: str = "stop"
     error_category: str | None = None
 
@@ -79,7 +80,6 @@ class MetricsStore:
                         "time_to_first_token_ms": rec.time_to_first_token_ms,
                         "total_latency_ms": rec.total_latency_ms,
                         "backend": rec.backend,
-                        "gpu_offload_verified": rec.gpu_offload_verified,
                         "error_category": rec.error_category,
                     }) + "\n")
             except OSError:
@@ -177,10 +177,9 @@ class MetricsStore:
                 if successes
                 else None
             ),
-            # Startup / inference failure diagnostic — drives the dashboard
-            # banner ("Out of HF credits" / "Rate limited" / "Model missing").
-            # Raw error text NEVER lives in the store; the dashboard looks up
-            # the public message from the error code (sanitized lookup table).
+            # Startup / inference failure diagnostic drives the dashboard
+            # banner. Raw error text NEVER lives in the store; the dashboard
+            # looks up a sanitized public message from the error code.
             "last_failure_code": last_failure.error_category if last_failure else None,
             "last_failure_at": last_failure.timestamp if last_failure else None,
         }
@@ -189,5 +188,5 @@ class MetricsStore:
 # Module-level singleton — same single instance shared by app.py and
 # run_metrics.py. (Avoids creating parallel metric collections.)
 # Persists to ``./logs/metrics.jsonl`` when the ``logs/`` directory exists.
-_DEFAULT_PERSIST_PATH = _os.environ.get("METRICS_PERSIST_PATH", "./logs/metrics.jsonl")
+_DEFAULT_PERSIST_PATH = CONFIG.metrics_persist_path
 METRICS = MetricsStore(persist_path=_DEFAULT_PERSIST_PATH)

@@ -26,7 +26,6 @@ def _make_live_backend(model_path: str = "/tmp/model.gguf") -> mock.Mock:
     backend.server_start_ms = 100.0
     backend.model_load_ms = 50.0
     backend.backend_mode = "cpu"
-    backend.gpu_offload_verified = False
     backend.process = mock.Mock()
     return backend
 

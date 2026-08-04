@@ -28,7 +28,6 @@ def _fake_live_backend() -> LiveBackend:
         server_start_ms=120.0,
         model_load_ms=80.0,
         backend_mode="cpu",
-        gpu_offload_verified=False,
     )
 
 

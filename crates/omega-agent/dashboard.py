@@ -1,9 +1,7 @@
-"""AshatOS Neural Host — server-rendered public-telemetry dashboard.
+"""Ashat Neural Network — server-rendered public-telemetry dashboard.
 
-Pivoted from Gradio-coupled dashboard (commit 153acd9 and prior) to a
-pure FastAPI HTML rendering path. The build_dashboard() function +
-DashboardTemplate dataclass from the prior version were Gradio-coupled
-(gr.HTML, gr.Timer, gr.Row, gr.Column) and are dropped.
+Server-rendered public telemetry dashboard for the Oracle BrainStem host.
+The page is pure FastAPI HTML with a small browser polling loop.
 
 ``render_index_html(snapshot_provider, refresh_seconds)`` returns a
 self-contained ``<!DOCTYPE html>`` document that:
@@ -14,23 +12,22 @@ self-contained ``<!DOCTYPE html>`` document that:
   * Embeds a tiny JavaScript ``setInterval`` that polls
     ``GET /api/dashboard_html`` every ``refresh_seconds`` and replaces
     the status + brainstem-card ``innerHTML`` in place. This mirrors
-    the previous Gradio ``gr.Timer`` behaviour with plain browser
-    fetch; no Gradio runtime, no Auth shim.
+    the previous timer-driven refresh behaviour with plain browser
+    fetch; no authentication is required for public telemetry.
 
 ``render_dashboard_html_json(snapshot)`` is the companion endpoint
 payload -- returns the ``status_html`` + ``brainstem_html`` strings
 that the JS poll swaps in.
 
-The CSS, color palette, status pill, sparkline (inline SVG), and
-BrainStem card markup are preserved unchanged from the pre-pivot
-version so the public telemetry surface looks identical except for
-the auto-refresh mechanism.
+The CSS, responsive layout, status pill, sparkline (inline SVG), and
+BrainStem card markup provide the public telemetry surface.
 """
 
 from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from html import escape
 from typing import Any
 
 from public_snapshot import (
@@ -41,25 +38,23 @@ from public_snapshot import (
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Constants — Black & Gold colour system (v4)
+# Constants — Ashat Hub-inspired dark gradient system
 # ──────────────────────────────────────────────────────────────────────────
 
-_BG = "#050505"
-_PANEL = "#14110B"
-_RAISED = "#1C1810"
-_PRIMARY = "#FFF8E7"
-_SECONDARY = "#C4A55A"
-_MUTED = "#8B7D5B"
-_BORDER = "rgba(212,175,55,0.15)"
-_GREEN = "#7ECF7E"
-_AMBER = "#E8B830"
-_CORAL = "#E06050"
+_BG = "#09090B"
+_PANEL = "#111114"
+_RAISED = "#18181B"
+_PRIMARY = "#FAFAFA"
+_SECONDARY = "#A1A1AA"
+_MUTED = "#71717A"
+_BORDER = "rgba(255,255,255,0.10)"
+_GREEN = "#4ADE80"
+_AMBER = "#FBBF24"
+_CORAL = "#FB7185"
 
-_ACCENT = "#F0C040"
-_GLOW = "rgba(240,192,64,0.12)"
-_BRIGHT = "#FFD700"
-_GOLD_SOLID = "#D4AF37"
-_GOLD_MED = "rgba(212,175,55,0.25)"
+_ACCENT = "#A78BFA"
+_GLOW = "rgba(124,58,237,0.20)"
+_BRIGHT = "#EDE9FE"
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -212,6 +207,7 @@ def _status_pill_html(
             "offline": (_CORAL, "OFFLINE"),
         }
         color, label = colors.get(state, (_MUTED, state.upper()))
+    safe_label = escape(str(label))
     return (
         f'<span style="display: inline-flex; align-items: center; gap: 4px; '
         f'padding: 2px 10px; border-radius: 10px; font-size: 0.7em; '
@@ -219,7 +215,7 @@ def _status_pill_html(
         f'letter-spacing: 0.04em; '
         f'background: {color}20; color: {color}; border: 1px solid {color}40;">'
         f'<span style="width: 6px; height: 6px; border-radius: 50%; '
-        f'background: {color};"></span>{label}</span>'
+        f'background: {color};"></span>{safe_label}</span>'
     )
 
 
@@ -241,6 +237,7 @@ def _build_card_html(
     short_model = _short_model_name(model)
     ctx = info.get("ctx", 0)
     ctx_fmt = f"{ctx:,}" if ctx else "\u2014"
+    lane_display = escape(str(lane_key or ""))
 
     last_failure_code: str | None = info.get("last_failure_code")
     reason_message: str | None = info.get("reason_message")
@@ -287,8 +284,13 @@ def _build_card_html(
         )
         footer = " \u00b7 ".join(footer_parts)
 
-    model_tooltip = model or ""
+    model_display = escape(str(model or ""))
+    model_tooltip = escape(str(model or ""), quote=True)
+    reason_display = escape(str(reason_message or ""))
 
+    safe_failure_code = escape(
+        str(last_failure_code or "").replace("_", " ").title()
+    )
     diagnostic_html = ""
     if last_failure_code and reason_message:
         diag_color, _ = override_pill if override_pill else (_CORAL, "")
@@ -300,23 +302,23 @@ def _build_card_html(
             f'font-family: sans-serif;">'
             f'<div style="font-weight: 700; letter-spacing: 0.04em; '
             f'margin-bottom: 4px; font-size: 0.82em;">'
-            f'\u26a0  {last_failure_code.replace("_", " ").title()}'
+            f'\u26a0  {safe_failure_code}'
             f'</div>'
             f'<div style="color: {_PRIMARY}; opacity: 0.92;">'
-            f'{reason_message}'
+            f'{reason_display}'
             f'</div>'
             f'</div>'
         )
 
     return f"""\
-<div style="background: linear-gradient(180deg, {_PANEL} 0%, {_RAISED} 100%);
+<article class="lane-card" style="background: linear-gradient(145deg, {_PANEL} 0%, {_RAISED} 100%);
      border: 1px solid {_BORDER};
-     border-radius: 20px;
-     padding: 24px 26px;
+     border-radius: 24px;
+     padding: 28px;
      min-height: 380px;
      position: relative;
      overflow: hidden;
-     box-shadow: 0 4px 24px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.04);
+     box-shadow: 0 20px 60px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.05);
      font-family: sans-serif;">
   <div style="position: absolute; top: -40px; left: 50%; transform: translateX(-50%);
        width: 180px; height: 80px; border-radius: 50%;
@@ -326,7 +328,7 @@ def _build_card_html(
     <div>
       <div style="font-size: 1.05em; font-weight: 700; color: {_PRIMARY};
            letter-spacing: 0.03em; font-family: sans-serif;">
-        {lane_key.upper()}</div>
+        {lane_display.upper()}</div>
       <div style="font-size: 0.78em; color: {_SECONDARY}; margin-top: 2px;
            font-family: sans-serif;">
         Primary Inference Lane</div>
@@ -339,10 +341,10 @@ def _build_card_html(
   <div style="margin-bottom: 18px; padding-bottom: 14px; border-bottom: 1px solid {_BORDER};">
     <div style="font-size: 0.85em; font-weight: 600; color: {bright};
          font-family: monospace;" title="{model_tooltip}">
-      {short_model}</div>
+      {escape(short_model)}</div>
     <div style="font-size: 0.75em; color: {_MUTED}; margin-top: 3px;
          font-family: monospace;">
-      Context {ctx_fmt} \u00b7 <span title="{model_tooltip}" style="cursor: help; border-bottom: 1px dotted {_MUTED};">{model}</span>
+      Context {ctx_fmt} \u00b7 <span title="{model_tooltip}" style="cursor: help; border-bottom: 1px dotted {_MUTED};">{model_display}</span>
     </div>
   </div>
 
@@ -413,7 +415,7 @@ def _build_card_html(
        display: flex; justify-content: space-between; align-items: center;">
     {footer}
   </div>
-</div>"""
+</article>"""
 
 
 def _short_model_name(filename: str) -> str:
@@ -452,56 +454,23 @@ def _short_model_name(filename: str) -> str:
 # ──────────────────────────────────────────────────────────────────────────
 
 def _build_header_html() -> str:
-    """Black & gold AI-themed brand header with animated sparkle badge."""
+    """Build the Ashat Hub-inspired product header."""
     return f"""\
-<style>
-  @keyframes sparkle-glow {{
-    0%, 100% {{ box-shadow: 0 0 15px rgba(255,215,0,0.10), 0 0 30px rgba(255,215,0,0.05); }}
-    50% {{ box-shadow: 0 0 25px rgba(255,215,0,0.25), 0 0 50px rgba(255,215,0,0.10); }}
-  }}
-  @keyframes float-sparkle {{
-    0%, 100% {{ transform: translateY(0) scale(1); opacity: 0.5; }}
-    50% {{ transform: translateY(-3px) scale(1.1); opacity: 1; }}
-  }}
-  .gold-badge {{
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 60px; height: 60px; border-radius: 18px;
-    background: linear-gradient(135deg, rgba(255,215,0,0.10) 0%, rgba(212,175,55,0.06) 100%);
-    border: 1px solid {_GOLD_MED};
-    font-size: 32px; line-height: 1;
-    margin-bottom: 6px;
-    animation: sparkle-glow 3s ease-in-out infinite;
-    position: relative;
-  }}
-  .sparkle-1 {{ position: absolute; top: -6px; right: -4px; font-size: 12px;
-    animation: float-sparkle 2.5s ease-in-out infinite; }}
-  .sparkle-2 {{ position: absolute; bottom: -4px; left: -3px; font-size: 10px;
-    animation: float-sparkle 3.2s ease-in-out infinite 0.5s; }}
-  .v4-badge {{
-    display: inline-block;
-    padding: 2px 10px; border-radius: 8px;
-    background: {_GOLD_SOLID};
-    color: #1C1810; font-size: 0.55em; font-weight: 700;
-    letter-spacing: 0.06em;
-    margin-left: 8px;
-    vertical-align: middle;
-    font-family: sans-serif;
-  }}
-</style>
-<div style="text-align: center; padding: 32px 20px 8px;">
-  <div class="gold-badge">
-    <span class="sparkle-1">\u2728</span>
-    \U0001f9e0
-    <span class="sparkle-2">\u2728</span>
-  </div>
-  <h1 style="margin: 6px 0 0; font-size: 1.7em; font-weight: 700;
-      color: {_PRIMARY}; letter-spacing: 0.04em;
-      font-family: sans-serif;">
-    ASHAT NEURAL HOST<span class="v4-badge">v4</span></h1>
-  <p style="color: {_SECONDARY}; font-size: 0.82em; margin: 2px 0 0;
-      font-family: sans-serif; letter-spacing: 0.02em;">
-    \u2728 BrainStem Neural Inference \u00b7 Gold Edition \u2728</p>
-</div>"""
+<header class="hub-header">
+  <nav class="hub-nav" aria-label="Primary navigation">
+    <a class="hub-brand" href="https://agpstudios.org" rel="noopener">
+      <span class="brand-mark" aria-hidden="true"><span></span></span>
+      <span>ASHAT<span class="hub-accent">Hub</span></span>
+    </a>
+    <span class="version-badge">v5.8</span>
+    <div class="nav-links">
+      <a class="hub-link" href="https://agpstudios.org" rel="noopener">Chat</a>
+      <a class="hub-link" href="https://agpstudios.org" rel="noopener">Community</a>
+      <a class="hub-link" href="https://agpstudios.org" rel="noopener">Documentation</a>
+      <a class="hub-link" href="https://agpstudios.org" rel="noopener">Support</a>
+    </div>
+  </nav>
+</header>"""
 
 
 def _build_status_row_html(snapshot: PublicSnapshot) -> str:
@@ -528,9 +497,7 @@ def _build_status_row_html(snapshot: PublicSnapshot) -> str:
         if l.get("last_failure_code")
     ]
     priority_order = (
-        "HF_CREDITS_EXHAUSTED",
-        "HF_RATE_LIMITED",
-        "MODEL_DOWNLOAD_FAILED",
+        "LOCAL_MODEL_UNAVAILABLE",
         "BINARY_INSTALL_FAILED",
     )
     headline_code: str | None = None
@@ -568,23 +535,20 @@ def _build_status_row_html(snapshot: PublicSnapshot) -> str:
         headline_html = (
             f'<div style="margin: 6px 20px 0; text-align: center; '
             f'font-family: sans-serif; font-size: 0.78em; color: {_AMBER};">'
-            f'\u26a0 <span style="font-weight: 600;">{headline_code.replace("_", " ").title()}</span>'
+            f'\u26a0 <span style="font-weight: 600;">{escape(headline_code.replace("_", " ").title())}</span>'
             f' \u00b7 <span>{headline_msg}</span>'
             f'</div>'
         )
 
     return f"""\
-<div style="text-align: center; padding: 6px 20px 12px;">
-  <span style="display: inline-flex; align-items: center; gap: 6px;
-       font-size: 0.8em; font-family: sans-serif; color: {_MUTED};">
-    <span style="width: 7px; height: 7px; border-radius: 50%;
-         background: {dot_color}; box-shadow: 0 0 6px {dot_color}40;"></span>
-    <span style="font-weight: 600; color: {dot_color};">{host_state}</span>
-    <span style="color: {_MUTED};">\u00b7</span>
-    <span>{online_count}/{total_count} lanes <span style="color: {_SECONDARY};">\u2728</span></span>
-    <span style="color: {_MUTED};">\u00b7</span>
-    <span>Updated {last_refresh or 'just now'}</span>
-    {queue_html}
+<div class="status-strip" style="display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; padding: 0 0 22px; color: {_MUTED}; font-size: 0.78em; font-family: sans-serif;">
+  <span style="display: inline-flex; align-items: center; gap: 8px;">
+    <span style="width: 7px; height: 7px; border-radius: 50%; background: {dot_color}; box-shadow: 0 0 8px {dot_color}80;"></span>
+    <span style="font-weight: 650; color: {dot_color};">{host_state}</span>
+    <span>{online_count}/{total_count} lanes ready</span>
+  </span>
+  <span style="display: inline-flex; align-items: center; gap: 8px; color: {_MUTED};">
+    <span>Updated {last_refresh or 'just now'}</span>{queue_html}
   </span>
 </div>{headline_html}"""
 
@@ -605,28 +569,32 @@ def _build_cards_html(snapshot: PublicSnapshot) -> str:
 
 
 def _build_footer_html() -> str:
-    """Black & gold AI-themed footer with version v4 badge."""
+    """Build the quiet Ashat Hub-inspired footer."""
     return f"""\
-<div style="text-align: center; padding: 20px 20px 28px;">
-  <div style="display: inline-flex; align-items: center; gap: 10px;
-       font-size: 0.68em; color: {_MUTED}; font-family: sans-serif;
-       letter-spacing: 0.03em;">
-    <span>\U0001f9e0 BrainStem v4</span>
-    <span style="color: {_SECONDARY};">\u00b7</span>
-    <span>\u2728 Gold Edition</span>
-    <span style="color: {_SECONDARY};">\u00b7</span>
-    <span>Powered by \U0001f916 AI</span>
+<footer class="hub-footer">
+  <div class="footer-rule"></div>
+  <div class="footer-nav-row">
+    <a class="footer-brand" href="https://agpstudios.org" rel="noopener">
+      <span class="brand-mark" aria-hidden="true"><span></span></span>
+      <span>ASHAT<span class="hub-accent">Hub</span></span>
+    </a>
+    <div class="footer-links">
+      <a class="footer-link" href="https://agpstudios.org" rel="noopener">Chat</a>
+      <a class="footer-link" href="https://agpstudios.org" rel="noopener">Docs</a>
+      <a class="footer-link" href="https://agpstudios.org" rel="noopener">Community</a>
+      <a class="footer-link" href="https://agpstudios.org" rel="noopener">Terms</a>
+      <a class="footer-link" href="https://agpstudios.org" rel="noopener">Privacy</a>
+    </div>
   </div>
-  <div style="font-size: 0.6em; color: {_MUTED}70; margin-top: 4px;
-       font-family: sans-serif;">
-    Public telemetry \u00b7 No prompts or keys stored</div>
-</div>"""
+  <div class="footer-copyright">
+    AGP Studios, Inc. · &copy; 2026 · ASHAT Hub · v5.8 · All rights reserved.
+  </div>
+</footer>"""
 
 
 # ──────────────────────────────────────────────────────────────────────────
 # Public rendering entry points — server-rendered HTML fragment,
-# companion JSON payload used by the JS poll loop, and the polling
-# function expression exported for gr.HTML's `js_on_load`.
+#    companion JSON payload used by the browser polling loop.
 # ──────────────────────────────────────────────────────────────────────────
 
 
@@ -658,7 +626,7 @@ def render_index_html(
     from ``/api/dashboard_timeseries``.
 
     The first paint is server-rendered so the page is meaningful before
-    the first poll lands.  No Gradio runtime, no auth shim — pure HTML.
+    the first poll lands. The page is pure HTML.
     """
     safe_refresh = max(1, int(refresh_seconds))
     initial_snapshot = snapshot_provider()
@@ -673,34 +641,66 @@ def render_index_html(
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AshatOS Neural Host \u2014 Public Telemetry</title>
+<title>Ashat Neural Network · BrainStem Telemetry</title>
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 <style>
   *, *::before, *::after {{ box-sizing: border-box; }}
+  :root {{ color-scheme: dark; }}
   body {{
     background: {_BG}; color: {_PRIMARY};
     margin: 0; padding: 0; min-height: 100vh;
-    font-family: sans-serif;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background-image: radial-gradient(circle at 50% -12%, rgba(124,58,237,0.18), transparent 34rem),
+                      linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+                      linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+    background-size: auto, 56px 56px, 56px 56px;
   }}
-  a {{ color: {_ACCENT}; }}
-  .container {{
-    max-width: 760px; margin: 0 auto; padding: 0 24px;
-  }}
-  #status, #brainstem {{
-    line-height: 1.4;
-  }}
-  #chart {{
-    margin-top: 24px; margin-bottom: 24px;
-  }}
-  #chart .plotly .main-svg {{
-    background: transparent !important;
+  body::before {{ content: ""; position: fixed; inset: 0; pointer-events: none;
+    background: linear-gradient(180deg, rgba(9,9,11,0.05), {_BG} 72%); z-index: -1; }}
+  ::selection {{ background: rgba(139,92,246,0.35); color: {_PRIMARY}; }}
+  a {{ color: {_PRIMARY}; text-decoration: none; }}
+  .hub-header, .container, .hub-footer {{ max-width: 920px; margin: 0 auto; padding-left: 28px; padding-right: 28px; }}
+  .hub-header {{ padding-top: 26px; }}
+  .hub-nav {{ display: flex; justify-content: space-between; align-items: center; gap: 16px; }}
+  .hub-brand {{ display: inline-flex; align-items: center; gap: 10px; font-size: 0.78rem; font-weight: 750; letter-spacing: 0.14em; }}
+  .hub-accent {{ color: #F97316; font-weight: 750; }}
+  .brand-mark {{ width: 24px; height: 24px; display: grid; place-items: center; border-radius: 8px; background: linear-gradient(135deg, #8B5CF6, #38BDF8); box-shadow: 0 0 24px rgba(139,92,246,0.35); }}
+  .brand-mark span {{ width: 8px; height: 8px; border-radius: 50%; background: white; box-shadow: 0 0 12px white; }}
+  .version-badge {{ background: {_RAISED}; color: {_SECONDARY}; font-size: 0.65rem; padding: 2px 8px; border-radius: 6px; border: 1px solid {_BORDER}; font-weight: 600; letter-spacing: 0.05em; }}
+  .nav-links {{ display: flex; gap: 24px; align-items: center; }}
+  .hub-link {{ color: {_SECONDARY}; font-size: 0.78rem; transition: color 180ms ease; text-decoration: none; }}
+  .hub-link:hover {{ color: {_PRIMARY}; }}
+  .hero-copy {{ padding: 92px 0 54px; max-width: 700px; }}
+  .hero-eyebrow {{ display: inline-flex; align-items: center; gap: 9px; color: {_SECONDARY}; font-size: 0.72rem; letter-spacing: 0.1em; text-transform: uppercase; }}
+  .live-dot {{ width: 7px; height: 7px; border-radius: 50%; background: {_GREEN}; box-shadow: 0 0 0 5px rgba(74,222,128,0.1), 0 0 14px rgba(74,222,128,0.7); }}
+  .hero-copy h1 {{ margin: 18px 0 12px; font-size: clamp(2.8rem, 8vw, 5.8rem); line-height: 0.98; letter-spacing: -0.075em; font-weight: 720; }}
+  .hero-copy h1 span {{ color: transparent; background: linear-gradient(100deg, #C4B5FD 10%, #818CF8 46%, #38BDF8 92%); background-clip: text; -webkit-background-clip: text; }}
+  .hero-copy p {{ margin: 0; color: {_SECONDARY}; font-size: 1.05rem; letter-spacing: -0.01em; }}
+  #status, #brainstem {{ line-height: 1.4; }}
+  #chart {{ margin-top: 28px; margin-bottom: 28px; }}
+  #chart .plotly .main-svg {{ background: transparent !important; }}
+  .hub-footer {{ padding-top: 10px; padding-bottom: 34px; }}
+  .footer-rule {{ height: 1px; background: {_BORDER}; margin-bottom: 18px; }}
+  .footer-nav-row {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; }}
+  .footer-brand {{ display: inline-flex; align-items: center; gap: 10px; font-size: 0.78rem; font-weight: 750; letter-spacing: 0.14em; text-decoration: none; }}
+  .footer-links {{ display: flex; gap: 20px; align-items: center; }}
+  .footer-link {{ color: {_SECONDARY}; font-size: 0.72rem; transition: color 180ms ease; text-decoration: none; }}
+  .footer-link:hover {{ color: {_PRIMARY}; }}
+  .footer-copyright {{ text-align: center; color: {_MUTED}; font-size: 0.65rem; letter-spacing: 0.04em; padding-top: 18px; border-top: 1px solid {_BORDER}; }}
+  @media (max-width: 640px) {{
+    .hub-header, .container, .hub-footer {{ padding-left: 18px; padding-right: 18px; }}
+    .hub-nav {{ flex-wrap: wrap; }}
+    .nav-links {{ flex-wrap: wrap; gap: 16px; }}
+    .footer-nav-row {{ flex-direction: column; gap: 16px; }}
+    .footer-links {{ flex-wrap: wrap; gap: 16px; }}
   }}
 </style>
 </head>
 <body>
 {header_html}
-<div id="status">{status_html}</div>
 <div class="container">
+  <div id="status">{status_html}</div>
+
   <div id="brainstem">{brainstem_html}</div>
 </div>
 <div id="chart" class="container"></div>
@@ -740,21 +740,21 @@ def render_index_html(
                 font: {{ color: CHART_COLORS.secondary, size: 11 }}
             }},
             xaxis: {{
-                gridcolor: 'rgba(212,175,55,0.08)',
-                zerolinecolor: 'rgba(212,175,55,0.12)',
+                gridcolor: 'rgba(255,255,255,0.08)',
+                zerolinecolor: 'rgba(255,255,255,0.12)',
                 color: CHART_COLORS.muted,
                 tickformat: '%H:%M:%S'
             }},
             yaxis: {{
                 title: {{ text: 'tok/s', font: {{ color: CHART_COLORS.accent, size: 11 }} }},
-                gridcolor: 'rgba(212,175,55,0.08)',
-                zerolinecolor: 'rgba(212,175,55,0.12)',
+                gridcolor: 'rgba(255,255,255,0.08)',
+                zerolinecolor: 'rgba(255,255,255,0.12)',
                 color: CHART_COLORS.accent
             }},
             yaxis2: {{
                 title: {{ text: 'ms', font: {{ color: CHART_COLORS.coral, size: 11 }} }},
                 overlaying: 'y', side: 'right',
-                gridcolor: 'rgba(212,175,55,0.04)',
+                gridcolor: 'rgba(255,255,255,0.04)',
                 color: CHART_COLORS.coral
             }},
             hovermode: 'x unified',

@@ -50,9 +50,9 @@ class TestBackendLauncherCommand(unittest.TestCase):
         self.assertIn("2", cmd)
         self.assertIn("-b", cmd)
         self.assertIn("128", cmd)
-        # GPU offload layer explicitly on (max layers).
+        # CPU deployment explicitly disables GPU layers by default.
         self.assertIn("-ngl", cmd)
-        self.assertIn("999", cmd)
+        self.assertIn("0", cmd)
 
     def test_command_respects_lane_context(self) -> None:
         cmd = self.launcher._build_command(

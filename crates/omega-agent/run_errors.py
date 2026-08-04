@@ -44,61 +44,11 @@ class BinaryInstallError(RunError):
     retryable: Final[bool] = False
 
 
-class ModelDownloadError(RunError):
-    """HF Hub GGUF download failed (generic network / I/O error)."""
-    code: Final[str] = "MODEL_DOWNLOAD_FAILED"
+class LocalModelUnavailableError(RunError):
+    """The configured local GGUF model is unavailable."""
+    code: Final[str] = "LOCAL_MODEL_UNAVAILABLE"
     http_status: Final[int] = 503
     retryable: Final[bool] = True
-
-
-class HfCreditsExhaustedError(RunError):
-    """HuggingFace Hub returned 402 / 403 indicating credits, quota, or
-    billing exhaustion. ``retryable=False`` because the condition will not
-    self-correct in a short window — the operator must top up their plan
-    or wait for the monthly cycle to reset.
-    """
-    code: Final[str] = "HF_CREDITS_EXHAUSTED"
-    http_status: Final[int] = 402
-    retryable: Final[bool] = False
-
-    def __init__(
-        self,
-        message: str = "HuggingFace credits exhausted",
-        *,
-        retry_after_hours: int = 24,
-    ) -> None:
-        super().__init__(message)
-        self.retry_after_hours = retry_after_hours
-
-    def to_envelope(self) -> dict:
-        base = super().to_envelope()
-        base["retry_after_hours"] = self.retry_after_hours
-        return base
-
-
-class HfRateLimitedError(RunError):
-    """HuggingFace Hub returned 429 — transient rate limit hit.
-
-    Surfaced distinctly from ``HfCreditsExhaustedError`` so the dashboard
-    can offer an auto-retry message instead of "add credits".
-    """
-    code: Final[str] = "HF_RATE_LIMITED"
-    http_status: Final[int] = 429
-    retryable: Final[bool] = True
-
-    def __init__(
-        self,
-        message: str = "HuggingFace rate limit hit",
-        *,
-        retry_after_s: int = 30,
-    ) -> None:
-        super().__init__(message)
-        self.retry_after_s = retry_after_s
-
-    def to_envelope(self) -> dict:
-        base = super().to_envelope()
-        base["retry_after_s"] = self.retry_after_s
-        return base
 
 
 class InferenceUnavailableError(RunError):
@@ -123,14 +73,14 @@ class BackendHealthTimeout(RunError):
 
 
 class GpuAllocationError(RunError):
-    """Could not allocate a ZeroGPU slot."""
+    """Legacy backend allocation error retained for parser compatibility."""
     code: Final[str] = "GPU_UNAVAILABLE"
     http_status: Final[int] = 503
     retryable: Final[bool] = True
 
 
 class GpuOffloadVerificationError(RunError):
-    """n-gpu-layers did not produce the expected log line."""
+    """Legacy GPU-offload verification error for optional backend tests."""
     code: Final[str] = "GPU_OFFLOAD_VERIFICATION_FAILED"
     http_status: Final[int] = 503
     retryable: Final[bool] = True
@@ -175,8 +125,7 @@ class InvalidRequestError(RunError):
 ERROR_CODE_TO_HTTP_STATUS: Final[dict[str, int]] = {
     e.code: e.http_status
     for e in [
-        BinaryInstallError, ModelDownloadError,
-        HfCreditsExhaustedError, HfRateLimitedError,
+        BinaryInstallError, LocalModelUnavailableError,
         InferenceUnavailableError,
         BackendStartError, BackendHealthTimeout, GpuAllocationError,
         GpuOffloadVerificationError, CompletionTimeout,

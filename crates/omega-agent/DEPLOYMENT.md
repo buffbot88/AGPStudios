@@ -1,92 +1,118 @@
-# Deployment Guide — AshatOS BrainStem Inference Host
+# Deployment Guide — Ashat Neural Network
 
-## Hugging Face Spaces
+This deployment runs the Ashat Neural Network's authenticated BrainStem lane on Oracle Linux ARM64.
+Nginx terminates HTTPS and proxies to FastAPI on localhost; FastAPI keeps one
+CPU-only `llama-server` process alive for reuse across requests.
 
-### Creating the Space
+## Runtime layout
 
-1. Go to https://huggingface.co/new-space
-2. Set Space name: `ashatos` (or your preferred name)
-3. SDK: **Gradio**
-4. Space hardware: **ZeroGPU** (or CPU basic for testing)
-5. License: MIT
-
-### Pushing the Code
-
-```bash
-git remote add space https://huggingface.co/spaces/YOUR_USERNAME/ashatos
-git push space main
-```
-
-### Environment Setup
-
-Add these **Space Secrets** in the Settings tab:
-
-| Key | Value |
+| Component | Location |
 |---|---|
-| `HF_TOKEN` | Your Hugging Face access token (for model downloads) |
-| `ASHAT_BRAINSTEM_KEY` | Random 256-bit key (generate with `secrets.token_urlsafe(48)`) |
-| `ASHAT_ADMIN_KEY` | Separate key for admin operations |
+| Application | `/home/opc/Projects/AshatNueralHost` |
+| Python environment | `/home/opc/Projects/AshatNueralHost/.venv` |
+| Native llama-server | `/usr/local/libexec/ashat-neural-host/llama-server` |
+| GGUF model | `/var/lib/ashat-neural-host/LFM2.5-1.2B-Instruct-Q8_0.gguf` |
+| Protected JSON configuration | `/home/opc/Projects/AshatNueralHost/server-config.json` |
+| Checked-in template | `server-config.example.json` |
+| FastAPI | `127.0.0.1:8000` |
+| llama-server | `127.0.0.1:18080` |
+| Public URL | `https://ashatneuralhost.agpstudios.org/` |
 
-### Optional Space Variables
+## Configuration
 
-These can be set as normal environment variables to override defaults:
-
-| Key | Default | Description |
-|---|---|---|
-| `BRAINSTEM_MODEL_REPO` | `buckets/stressthismess/ashatos-storage` | Override model repository |
-| `BRAINSTEM_MODEL_FILE` | `LFM2.5-1.2B-Instruct-Q8_0.gguf` | Override model file |
-| `LLAMA_SERVER_VERSION` | `b9945` | Pin a specific llama.cpp release (pinned default; set Space Secret to override) |
-| `LLAMA_SERVER_HF_REPO` | `stressthismess/llama-server-mirror` | HF mirror repo used as fallback when GitHub releases are unreachable |
-| `LLAMA_SERVER_HF_FILE` | `llama-server-{tag}` | Filename inside the mirror repo (auto-derived from tag if blank) |
-| `LOG_LEVEL` | `INFO` | Set to `DEBUG` for verbose logging |
-
-## Key Generation
-
-Generate secure random keys on your local machine:
+The application reads settings only from `server-config.json`; it does not
+require an environment file or environment-variable configuration. The real
+production file is outside Git and must be protected:
 
 ```bash
-python -c "import secrets; print('BRAINSTEM:', secrets.token_urlsafe(48))"
-python -c "import secrets; print('ADMIN:', secrets.token_urlsafe(48))"
+sudo chown root:opc /home/opc/Projects/AshatNueralHost/server-config.json
+sudo chmod 640 /home/opc/Projects/AshatNueralHost/server-config.json
+sudo chmod 750 /home/opc/Projects/AshatNueralHost
 ```
 
-## Verifying Deployment
+The repository includes `server-config.example.json` with a placeholder key
+for local testing. Copy it to `server-config.json` and replace the placeholder
+with a locally generated test key. Never commit the production file or a real
+BrainStem key.
 
-1. Wait for the Space to finish building (no more "Building..." status)
-2. Visit `https://YOUR_USERNAME-ashatos.hf.space/`
-3. You should see the **AshatOS Neural Host** dashboard
-4. Check the logs for model download status
-5. Send a test inference request:
+The production JSON contains the BrainStem key, model path, native binary
+path, CPU limits, queue limit, logging level, and model limits.
+The BrainStem key is never logged or displayed by the dashboard.
+
+## Services and OS startup
+
+The service is enabled in `multi-user.target`, waits for
+`network-online.target`, and uses `Restart=always`. Therefore FastAPI and its
+persistent llama-server process start again automatically after an OS reboot.
 
 ```bash
-curl -X POST https://YOUR_USERNAME-ashatos.hf.space/v1/chat/completions \
+sudo systemctl status ashat-neural-host.service
+sudo systemctl status nginx
+sudo systemctl status certbot-renew.timer
+sudo journalctl -u ashat-neural-host.service -f
+```
+
+When typing the commands, the service name is exactly
+`ashat-neural-host.service` (without spaces). The spaced form above is only a
+visual workaround for clients that rewrite the unit name; use the exact name
+in a shell command:
+
+```bash
+sudo systemctl status ashat-neural-host.service
+```
+
+## Health checks
+
+```bash
+curl https://ashatneuralhost.agpstudios.org/health
+curl http://127.0.0.1:18080/health
+```
+
+The application health response should report `brainstem_ready: true` and
+`llama_server_available: true`.
+
+## API usage
+
+The completion endpoint requires the `X-Ashat-Key` header:
+
+```bash
+curl https://ashatneuralhost.agpstudios.org/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "X-Ashat-Key: YOUR_BRAINSTEM_KEY" \
-  -d '{"messages":[{"role":"user","content":"Hello!"}],"max_tokens":64}'
+  -d '{
+    "model": "brainstem",
+    "messages": [{"role": "user", "content": "Hello!"}],
+    "max_tokens": 64,
+    "temperature": 0.7
+  }'
 ```
+
+The response is OpenAI-compatible and contains
+`choices[0].message.content`, usage counts, and sanitized performance data.
+Streaming is intentionally not enabled yet.
+
+## Model
+
+The deployed local model is:
+
+```text
+LFM2.5-1.2B-Instruct-Q8_0.gguf
+```
+
+The deployed local model is `LFM2.5-1.2B-Instruct-Q8_0.gguf`. Verify the
+model license and usage terms before commercial redistribution.
 
 ## Troubleshooting
 
-### "@spaces.GPU function not detected"
+```bash
+sudo systemctl restart ashat-neural-host.service
+sudo nginx -t && sudo systemctl reload nginx
+sudo journalctl -u ashat-neural-host.service -n 100 --no-pager
+free -h
+ps -ef | grep -E '[u]vicorn|[l]lama-server'
+```
 
-This error means the Space hardware is set to zeroGPU but the app doesn't have
-a `@spaces.GPU` decorated function. The app includes these — ensure you have
-the latest code pushed.
-
-### "llama-server did not become healthy"
-
-Check the logs at `/api/public_status` or the Gradio dashboard. Common causes:
-- GGUF file still downloading (first request always waits)
-- Port conflict (change `INTERNAL_PORT`)
-- Insufficient GPU memory
-
-### Model download fails
-
-Ensure `HF_TOKEN` is set as a Space secret if accessing private repos.
-Public repos from the buckets/stressthismess organization should work without it.
-
-### Authentication errors
-
-Verify that:
-- `ASHAT_BRAINSTEM_KEY` is set as a Space **Secret**
-- The keys match between the host and your client configuration
-- The `X-Ashat-Key` header is sent (not `Authorization`)
+If the model process is unhealthy, the Python backend invalidates its cached
+process after a failed completion and starts a replacement on the next request.
+The host is deliberately limited to one inference at a time because it has one
+OCPU and 4 GB RAM.

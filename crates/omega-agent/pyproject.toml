@@ -3,9 +3,9 @@ requires = ["setuptools>=64.0"]
 build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
-name = "ashatos-neural-host"
+name = "ashat-neural-network"
 version = "1.0.0"
-description = "AshatOS BrainStem Inference Host — private inference appliance on HF Spaces"
+description = "Ashat Neural Network BrainStem service — private Oracle Linux inference appliance"
 requires-python = ">=3.11"
 
 [tool.mypy]
@@ -24,9 +24,6 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = [
-    "spaces.*",
-    "huggingface_hub.*",
-    "gradio.*",
     "requests.*",
     "fastapi.*",
     "uvicorn.*",
@@ -37,5 +34,5 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 
 [tool.coverage.run]
-source = ["app.py", "domain.py", "install_strategies.py", "run_errors.py", "run_metrics.py", "metrics_store.py", "response_adapter.py", "llama_stderr_parser.py"]
+source = ["app.py", "domain.py", "run_errors.py", "run_metrics.py", "metrics_store.py", "response_adapter.py", "llama_stderr_parser.py"]
 omit = ["tests/*"]

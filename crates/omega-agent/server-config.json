@@ -1,0 +1,27 @@
+{
+  "BRAINSTEM_KEY": "WOGAJLhHgRUA1Jz8mGkaKLOpj4tK0yFM9vUDhsBeEr6jEBhZkeJHhayQVtfel9yh",
+  "web_only": false,
+  "logging": {
+    "level": "INFO"
+  },
+  "server": {
+    "binary_path": "/usr/local/libexec/ashat-neural-host/llama-server",
+    "port": 18080,
+    "threads": 1,
+    "batch": 32
+  },
+  "model": {
+    "file": "LFM2.5-1.2B-Instruct-Q8_0.gguf",
+    "path": "/var/lib/ashat-neural-host/LFM2.5-1.2B-Instruct-Q8_0.gguf"
+  },
+  "inference": {
+    "context": 4096,
+    "max_tokens": 1024,
+    "gpu_duration": 0,
+    "queue_limit": 1,
+    "public_refresh_seconds": 10
+  },
+  "metrics": {
+    "persist_path": "/home/opc/Projects/AshatNueralHost/logs/metrics.jsonl"
+  }
+}

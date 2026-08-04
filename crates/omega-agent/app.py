@@ -10,17 +10,11 @@ The heavy lifting now lives in purpose-built modules:
     * :mod:`completion_client` — HTTP-only client to the live backend
     * :mod:`run_metrics`       — sanitized metric + event recording
     * :mod:`metrics_store`     — thread-safe in-memory rolling deque
-    * :mod:`installer`         — bin installer + GitHub/HF mirror tiers
+    * :mod:`installer`         — local llama-server availability check
 
-What stays here: logging, configuration defaults, the FastAPI and Gradio
-wiring, the slim Run pipeline that composes the modules above, request
-validation, response envelope shaping, the atexit cleanup hook, and the
-homepage dashboard.
-
-Both the Gradio API lane endpoints and the FastAPI OpenAI-compatible route
-funnel into a single :func:`_run_pipeline`. There is no copy-paste in
-between; surface differences are encapsulated in two thin adapters that end
-up calling the same orchestrator.
+What stays here: logging, configuration defaults, FastAPI wiring, the slim
+Run pipeline that composes the modules above, request validation, response
+envelope shaping, the atexit cleanup hook, and the homepage dashboard.
 """
 
 from __future__ import annotations
@@ -30,6 +24,8 @@ import atexit
 import json
 import logging
 import os
+
+from config import CONFIG
 import subprocess
 import sys
 import threading
@@ -37,9 +33,12 @@ import time
 import uuid
 from typing import Any
 
+import requests
+
 from fastapi import FastAPI, Request as FastRequest
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from auth import is_valid_api_key
 from backend_launcher import BackendLauncher, LiveBackend
 from completion_client import CompletionClient, CompletionResult
 from domain import LANE_CONFIG, Lane, lane_cfg
@@ -49,28 +48,14 @@ from lane_resolver import LaneResolver
 from metrics_store import METRICS
 from run_errors import (
     ERROR_CODE_TO_HTTP_STATUS,
-    HfCreditsExhaustedError,
-    HfRateLimitedError,
     InferenceUnavailableError,
     InvalidRequestError,
-    ModelDownloadError,
+    LocalModelUnavailableError,
     RunError,
 )
 from run_metrics import RunMetrics
 from response_adapter import envelope_to_response
 
-# ZeroGPU compatibility — direct @spaces.GPU decorator (needed for static detection)
-try:
-    import spaces
-except ImportError:
-    import types as _types
-    spaces = _types.ModuleType("spaces")
-    class _GPU:
-        def __call__(self, fn=None, **kwargs):
-            if fn is not None:
-                return fn
-            return lambda f: f
-    spaces.GPU = _GPU()  # type: ignore[assignment]
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -78,7 +63,7 @@ except ImportError:
 # ──────────────────────────────────────────────────────────────────────────
 
 logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    level=CONFIG.log_level.upper(),
     format="%(asctime)s [%(levelname)s] %(message)s",
     stream=sys.stdout,
 )
@@ -86,18 +71,18 @@ _log = logging.getLogger("ashatos")
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# 2.  Configuration (env-overridable) — runtime-only knob names
+# 2.  Configuration — runtime-only knob names
 # ──────────────────────────────────────────────────────────────────────────
 
-LLAMA_SERVER_PORT = int(os.getenv("LLAMA_SERVER_PORT", "18080"))
-N_THREADS = int(os.getenv("N_THREADS", "2"))
-N_BATCH = int(os.getenv("N_BATCH", "128"))
-QUEUE_LIMIT = int(os.getenv("QUEUE_LIMIT", "16"))
-PUBLIC_REFRESH_SECONDS = int(os.getenv("PUBLIC_REFRESH_SECONDS", "10"))
-# GPU slot duration for ZeroGPU. Read once at import time and exposed
-# as a plain module-level Name so the @spaces.GPU decorator below is
-# trivially AST-readable by HF Spaces' static scanner.
-_BRAINSTEM_GPU_DURATION = int(os.getenv("BRAINSTEM_GPU_DURATION", "120"))
+LLAMA_SERVER_PORT = CONFIG.llama_server_port
+N_THREADS = CONFIG.n_threads
+N_BATCH = CONFIG.n_batch
+QUEUE_LIMIT = CONFIG.queue_limit
+PUBLIC_REFRESH_SECONDS = CONFIG.public_refresh_seconds
+BRAINSTEM_KEY = CONFIG.brainstem_key
+# Web-only boot keeps the public dashboard available while inference assets
+# are being installed. Production keeps this false in server-config.json.
+ASHAT_WEB_ONLY = CONFIG.web_only
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -105,7 +90,8 @@ _BRAINSTEM_GPU_DURATION = int(os.getenv("BRAINSTEM_GPU_DURATION", "120"))
 # ──────────────────────────────────────────────────────────────────────────
 
 _started_at: float = time.time()
-_inference_lock = threading.BoundedSemaphore(int(os.getenv("QUEUE_LIMIT", "16")))
+_inference_lock = threading.BoundedSemaphore(QUEUE_LIMIT)
+
 _active_processes: list[subprocess.Popen[str]] = []
 _llama_bin_path: str | None = None
 _queue_depth: int = 0
@@ -117,7 +103,7 @@ _queue_depth_lock = threading.Lock()
 # This REPLACES the previous global threading.Lock — the per-key
 # semaphore is the primary gate; the BoundedSemaphore above is a
 # total-concurrency safety cap.
-_PER_KEY_CONCURRENCY = 2
+_PER_KEY_CONCURRENCY = 1
 _key_semaphores: dict[str, threading.BoundedSemaphore] = {}
 _key_semaphores_lock = threading.Lock()
 
@@ -192,6 +178,7 @@ def _terminate_process(proc: subprocess.Popen[str] | None, name: str) -> None:
 
 
 def stop_all_servers() -> None:
+    _BACKEND_LAUNCHER.stop()
     for proc in list(_active_processes):
         _terminate_process(proc, "atexit")
 
@@ -208,11 +195,6 @@ from domain import validate_request
 
 # ──────────────────────────────────────────────────────────────────────────
 # 6.  Run pipeline — the slim orchestrator
-#     NOTE: This function runs inside the ZeroGPU worker process when
-#     called via @spaces.GPU. It must NOT record metrics — those writes
-#     would be lost because the worker's in-memory METRICS singleton is
-#     process-local.  Metrics are recorded in the main process by
-#     :func:`_record_returned_result` after the GPU function returns.
 # ──────────────────────────────────────────────────────────────────────────
 
 def _is_cold_start(lane: Lane) -> bool:
@@ -266,7 +248,6 @@ def _build_success_envelope(
             "prompt_tokens_per_second": completion.prompt_tokens_per_second or 0.0,
             "generation_tokens_per_second": completion.generation_tokens_per_second or 0.0,
             "backend": backend.backend_mode,
-            "gpu_offload_verified": backend.gpu_offload_verified,
         },
         "request_id": request_id,
         "ok": True,
@@ -289,15 +270,6 @@ def _build_failure_envelope(
 def _run_pipeline(lane: Lane, payload: dict[str, Any]) -> dict[str, Any]:
     """Slim Run. Composes :class:`BackendLauncher`, :class:`CompletionClient`
     into one request lifecycle.
-
-    .. caution::
-
-       This function is called from inside ``@spaces.GPU`` which may run
-       in an isolated worker process.  **It must not record metrics** —
-       those writes would land in a process-local copy of ``METRICS``
-       that the main Gradio process never sees.  Metrics are recorded in
-       the main process by :func:`_record_returned_result` after the GPU
-       function returns.
 
     Behavior:
       * Degraded-mode gate first — INFERENCE_UNAVAILABLE without spawning a
@@ -326,21 +298,16 @@ def _run_pipeline(lane: Lane, payload: dict[str, Any]) -> dict[str, Any]:
         )
         return _build_failure_envelope(lane, request_id, exc)
 
-    # On ZeroGPU, CUDA is managed by the spaces package. The llama-server
-    # subprocess must not request GPU offload (the -ngl flag).
-    _is_zerogpu = bool(int(os.environ.get("SPACES_ZERO_GPU", "0")))
+    # Oracle is CPU-only; keep one persistent llama-server process alive.
     try:
-        with _BACKEND_LAUNCHER.launch(
-            lane, gpu_offload_requested=not _is_zerogpu,
-        ) as backend:
-            _active_processes.append(backend.process)
-            try:
-                completion = _COMPLETION_CLIENT.complete(backend, lane, payload)
-            finally:
-                try:
-                    _active_processes.remove(backend.process)
-                except ValueError:
-                    pass
+        backend = _BACKEND_LAUNCHER.ensure_started(
+            lane, gpu_offload_requested=False,
+        )
+        try:
+            completion = _COMPLETION_CLIENT.complete(backend, lane, payload)
+        except RunError:
+            _BACKEND_LAUNCHER.invalidate()
+            raise
         total_ms = round((time.perf_counter() - started_at) * 1000, 1)
         return _build_success_envelope(
             lane, request_id, backend, completion, total_ms, cold_start,
@@ -365,19 +332,15 @@ def _run_pipeline(lane: Lane, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# 7.  @spaces.GPU wrapper — one entry for the single BrainStem lane
+# 7.  Single BrainStem execution entry point
 # ──────────────────────────────────────────────────────────────────────────
 
-@spaces.GPU
-def _execute_brainstem_gpu(payload: dict[str, Any]) -> dict[str, Any]:
+def _execute_brainstem(payload: dict[str, Any]) -> dict[str, Any]:
     return _run_pipeline(Lane.BRAINSTEM, payload)
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# 7b.  Metric recording in the main process
-#      The function above may run in a ZeroGPU worker (separate process).
-#      We record metrics HERE, after the result crosses back to the main
-#      Gradio/FastAPI process, so the dashboard timer can read them.
+# 7b.  Metric recording
 # ──────────────────────────────────────────────────────────────────────────
 
 def _record_returned_result(
@@ -385,27 +348,25 @@ def _record_returned_result(
     result: dict[str, Any],
 ) -> None:
     """
-    Record a sanitized ZeroGPU result in the main dashboard process.
+    Record a sanitized local inference result in the dashboard process.
 
     Delegates to :meth:`RunMetrics.record_from_envelope` to eliminate
     the duplicate ``MetricRecord`` construction that previously existed
     here and in :meth:`RunMetrics.record_success`.
 
-    Called by :func:`execute_lane` after the ``@spaces.GPU`` function
-    returns.  Never stores prompts, generated text, request IDs, keys,
-    or headers — only sanitized aggregates.
+    Called by :func:`execute_lane` after the inference function returns.
+    Never stores prompts, generated text, request IDs, keys, or headers —
+    only sanitized aggregates.
     """
     _RUN_METRICS.record_from_envelope(lane, result)
 
 
 def execute_lane(lane_str: str, payload: dict[str, Any], *,
                  key_id: str | None = None) -> dict[str, Any]:
-    """Serializing entry point \u2014 one inference at a time across the Space.
+    """Serializing entry point \u2014 one inference at a time on the host.
 
-    The ``@spaces.GPU`` functions run in an isolated worker process (on
-    HF Spaces with ZeroGPU).  We record metrics here, in the *main*
-    process, after the result returns, so the dashboard timer can read
-    them from the same in-memory ``METRICS`` singleton.
+    Metrics are recorded after the local inference result returns so the
+    dashboard reads them from the same in-memory ``METRICS`` singleton.
 
     Tracks queue depth via :func:`_inc_queue_depth` / :func:`_dec_queue_depth`
     so the dashboard can display how many requests are waiting.
@@ -422,7 +383,7 @@ def execute_lane(lane_str: str, payload: dict[str, Any], *,
         # The BoundedSemaphore (QUEUE_LIMIT) is the total-cap safety net.
         with sem:
             with _inference_lock:
-                result = _execute_brainstem_gpu(payload)
+                result = _execute_brainstem(payload)
     finally:
         _dec_queue_depth()
 
@@ -431,7 +392,7 @@ def execute_lane(lane_str: str, payload: dict[str, Any], *,
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# 8.  Surface adapters — fastapi (HTTP) and gradio (queue API)
+# 8.  HTTP surface adapter
 # ──────────────────────────────────────────────────────────────────────────
 
 def _envelope_to_response(envelope: dict[str, Any]) -> tuple[int, dict[str, Any]]:
@@ -446,7 +407,17 @@ def _make_http_chat_completions():
     resolver = _RESOLVER
 
     async def http_chat_completions(request: FastRequest) -> JSONResponse:
-        # 1. Parse JSON
+        # 1. Authenticate before parsing or queueing inference.
+        supplied = request.headers.get("X-Ashat-Key", "")
+        if not is_valid_api_key(supplied, BRAINSTEM_KEY):
+            return JSONResponse(status_code=401, content={
+                "error": {
+                    "message": "Missing or invalid X-Ashat-Key",
+                    "type": "authentication_error",
+                },
+            })
+
+        # 2. Parse JSON.
         try:
             body = await request.json()
         except Exception:
@@ -454,7 +425,7 @@ def _make_http_chat_completions():
                 "error": {"message": "Invalid JSON body", "type": "invalid_request_error"},
             })
 
-        # 2. Lane resolution (single BrainStem lane)
+        # 3. Lane resolution (single BrainStem lane)
         try:
             lane = resolver.resolve(body, route_hint=None)
         except InvalidRequestError as exc:
@@ -463,7 +434,7 @@ def _make_http_chat_completions():
                 "error": {"message": exc.message, "type": exc.code.lower()},
             })
 
-        # 3. Validate
+        # 4. Validate
         try:
             err = validate_request(body, lane)
             if err:
@@ -528,30 +499,34 @@ def _status_html() -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# 10.  Pure-FastAPI routes — registered directly on `_app` at the
-#      bottom of the file. The previous Gradio-mounted FastAPI +
-#      `_hf_register_routes` + `_LOCAL_FASTAPI` plumbing is gone
-#      now that we are on `sdk: docker` with no Gradio runtime.
+# 10.  FastAPI routes
 # ──────────────────────────────────────────────────────────────────────────
 
-_BINARY_FAILURE_EXC: dict[str, type[RunError]] = {
-    "HF_CREDITS_EXHAUSTED": HfCreditsExhaustedError,
-    "HF_RATE_LIMITED": HfRateLimitedError,
-}
+_BINARY_FAILURE_EXC: dict[str, type[RunError]] = {}
 
 
 def startup() -> None:
-    """Boot sequence — install binary, pre-fetch model, seed telemetry.
+    """Boot sequence — verify local runtime assets and seed telemetry.
 
-    Surfaces HF-specific failures (credits exhausted / rate limited /
-    model missing) into the metrics store and dashboard via typed error
-    codes rather than generic ``Exception`` silently. The seed telemetry
-    state is HONEST about reality \u2014 a broken boot never claims
-    ``lane_state="online"``.
+    The seed telemetry state is honest about reality: a broken boot never
+    claims ``lane_state="online"``.
+
     """
     global _llama_bin_path
     _log.info("=" * 60)
     _log.info("AshatOS Neural I/O Host \u2014 Single-Lane BrainStem Inference")
+    if ASHAT_WEB_ONLY:
+        _log.info("Web-only mode enabled; inference startup is deferred")
+        TELEMETRY.seed_boot(
+            Lane.BRAINSTEM,
+            backend="cpu",
+            lane_state="offline",
+            host_state="online",
+        )
+        METRICS.add_event(
+            "brainstem: web-only mode active (inference startup deferred)"
+        )
+        return
     _log.info("=" * 60)
 
     # Pass 1: llama-server binary.
@@ -583,7 +558,7 @@ def startup() -> None:
                     cold_start=True,
                 )
 
-    # Pass 2: model pre-download.
+    # Pass 2: local model verification.
     model_failure_code: str | None = None
     model_ready = False
     if _llama_bin_path:
@@ -591,48 +566,31 @@ def startup() -> None:
             try:
                 path = _BACKEND_LAUNCHER.ensure_model(lane)
                 _log.info(
-                    "%s model cached: %s", lane.value, path,
+                    "%s local model verified: %s", lane.value, path,
+                )
+                _BACKEND_LAUNCHER.ensure_started(
+                    lane, gpu_offload_requested=False,
                 )
                 model_ready = True
-            except HfCreditsExhaustedError as exc:
-                model_failure_code = "HF_CREDITS_EXHAUSTED"
-                _log.error(
-                    "%s model download: %s \u2014 %s",
-                    lane.value, exc.code, exc.message[:200],
-                )
-                _RUN_METRICS.record_failure(
-                    lane, request_id="startup-model",
-                    error=exc, elapsed_ms=0.0, cold_start=True,
-                )
-            except HfRateLimitedError as exc:
-                model_failure_code = "HF_RATE_LIMITED"
-                _log.error(
-                    "%s model download: %s \u2014 %s",
-                    lane.value, exc.code, exc.message[:200],
-                )
-                _RUN_METRICS.record_failure(
-                    lane, request_id="startup-model",
-                    error=exc, elapsed_ms=0.0, cold_start=True,
-                )
-            except ModelDownloadError as exc:
-                model_failure_code = "MODEL_DOWNLOAD_FAILED"
+            except LocalModelUnavailableError as exc:
+                model_failure_code = "LOCAL_MODEL_UNAVAILABLE"
                 _log.warning(
-                    "%s model pre-download failed: %s", lane.value, exc,
+                    "%s local model verification failed: %s", lane.value, exc,
                 )
                 _RUN_METRICS.record_failure(
                     lane, request_id="startup-model",
                     error=exc, elapsed_ms=0.0, cold_start=True,
                 )
             except Exception as exc:
-                model_failure_code = "MODEL_DOWNLOAD_FAILED"
+                model_failure_code = "LOCAL_MODEL_UNAVAILABLE"
                 _log.warning(
-                    "%s model pre-download failed (unknown): %s: %s",
+                    "%s local model verification failed (unknown): %s: %s",
                     lane.value, type(exc).__name__, exc,
                 )
                 _RUN_METRICS.record_failure(
                     lane, request_id="startup-model",
-                    error=ModelDownloadError(
-                        f"{lane.value}: pre-download raised "
+                    error=LocalModelUnavailableError(
+                        f"{lane.value}: local model verification raised "
                         f"{type(exc).__name__}: {exc}",
                     ),
                     elapsed_ms=0.0,
@@ -642,27 +600,15 @@ def startup() -> None:
     # Pass 3: seed boot telemetry with HONEST state for each lane.
     for lane in (Lane.BRAINSTEM,):
         if model_ready and _llama_bin_path:
-            TELEMETRY.seed_boot(lane, backend="cuda", gpu_offload=True)
+            TELEMETRY.seed_boot(lane, backend="cpu")
         elif not _llama_bin_path:
             TELEMETRY.seed_boot(
-                lane, backend="cpu", gpu_offload=False,
+                lane, backend="cpu",
                 lane_state="offline", host_state="offline",
-            )
-        elif model_failure_code == "HF_CREDITS_EXHAUSTED":
-            # Persistent failure (waiting on human action) \u2014 surface it
-            # prominently as a degraded lane (not transient "waking").
-            TELEMETRY.seed_boot(
-                lane, backend="cpu", gpu_offload=False,
-                lane_state="degraded", host_state="degraded",
-            )
-        elif model_failure_code == "HF_RATE_LIMITED":
-            TELEMETRY.seed_boot(
-                lane, backend="cpu", gpu_offload=False,
-                lane_state="waking", host_state="starting",
             )
         else:
             TELEMETRY.seed_boot(
-                lane, backend="cpu", gpu_offload=False,
+                lane, backend="cpu",
                 lane_state="waking", host_state="starting",
             )
 
@@ -676,27 +622,17 @@ def startup() -> None:
         )
 
 
-# Run startup() in a daemon thread so the FastAPI app can bind port 7860
-# IMMEDIATELY and start serving /health, /v1/models, /api/public_status, etc.
-# Instead of blocking the module-level import for the duration of the binary
-# install + model download (which can take 60s+ on cold cache and was the live
-# Space's "Starting..." symptom for the past several commits). The dashboard
-# reads `_llama_bin_path` as it gets populated; the lanes show `waking` until
-# startup completes, then flip to `online` automatically. Daemon=True so the
-# thread never blocks container exit if HF sends SIGTERM during shutdown.
-#
-# CRITICAL: any unhandled exception raised inside startup() would be swallowed
-# by Python's threading layer (no traceback on the console, the daemon just
-# dies). We wrap the target with a `_log.exception(...)` chokepoint so a
-# crash surfaces in HF Spaces' logs tab rather than leaving the operator
-# debugging a silent hang.
+# Run startup() in a daemon thread so FastAPI binds immediately while the
+# local runtime verification completes. The dashboard shows a waking state
+# until startup finishes. Any unhandled startup exception is logged instead
+# of being silently swallowed by the daemon thread.
 def _run_startup_with_logging() -> None:
     try:
         startup()
     except Exception:
         _log.exception(
-            "startup daemon thread crashed; Space will run degraded (binary "
-            "or model may be unreachable). Check HF Spaces logs for the cause."
+            "startup daemon thread crashed; host will run degraded (binary "
+            "or model may be unreachable). Check the service journal."
         )
 
 _startup_thread = threading.Thread(
@@ -704,29 +640,11 @@ _startup_thread = threading.Thread(
 )
 _startup_thread.start()
 
-# ── Sync startup report (lets ZeroGPU platform confirm readiness) ────
-try:
-    from spaces.config import Config as _SC
-    if _SC.zero_gpu:
-        from spaces.zero import client as _zclient
-        _zclient.startup_report()
-        _log.info("startup_report sent")
-except Exception as exc:
-    _log.warning("startup_report failed: %s", exc)
-
 
 # ──────────────────────────────────────────────────────────────────────────
-# -------------------------------------------------------------------------
-# 12.  Pure-FastAPI serving. The dashboard is rendered server-side as a
-#      complete <!DOCTYPE html> document at GET /; live updates come
-#      from a small JS setInterval polling /api/dashboard_html and
-#      swapping the innerHTML of the status + brainstem card divs in
-#      place. This mirrors the previous Gradio `gr.Timer` behavior but
-#      lives in plain FastAPI + browser fetch -- NO Gradio runtime at
-#      all, NO auth shim hazard, NO monkeypatch. With `sdk: docker`
-#      HF Spaces runs `uvicorn app:app --host 0.0.0.0 --port 7860`
-#      directly against this FastAPI.
-# -------------------------------------------------------------------------
+# 12.  FastAPI serving. The dashboard is rendered server-side and refreshed
+#      by a small browser polling loop.
+# ──────────────────────────────────────────────────────────────────────────
 
 
 # Hoist the chat-completions inner async handler to module scope so
@@ -778,7 +696,13 @@ async def http_dashboard_timeseries() -> JSONResponse:
 
 @app.get("/health")
 async def http_health() -> JSONResponse:
-    _is_zerogpu = bool(int(os.environ.get("SPACES_ZERO_GPU", "0")))
+    backend_healthy = False
+    try:
+        backend_healthy = requests.get(
+            f"http://127.0.0.1:{LLAMA_SERVER_PORT}/health", timeout=2,
+        ).status_code == 200
+    except Exception:
+        backend_healthy = False
     return JSONResponse(content={
         "status": "ok",
         "uptime_seconds": round(time.time() - _started_at, 1),
@@ -786,12 +710,7 @@ async def http_health() -> JSONResponse:
             LANE_CONFIG[Lane.BRAINSTEM].model_path
             and os.path.isfile(LANE_CONFIG[Lane.BRAINSTEM].model_path)
         ),
-        "llama_server_available": _llama_bin_path is not None,
-        # Reports whether the Space is configured for ZeroGPU (from env
-        # var), NOT whether a slot is currently available. Slot availability
-        # is dynamic and depends on current GPU quota usage; check the
-        # ``spaces.zero`` runtime API for live slot status.
-        "spaces_zero_gpu_configured": _is_zerogpu,
+        "llama_server_available": backend_healthy,
     })
 
 
@@ -817,14 +736,7 @@ async def http_chat_completions(request: FastRequest) -> JSONResponse:
 
 @app.get("/", response_class=HTMLResponse)
 async def http_landing() -> HTMLResponse:
-    """Public-telemetry dashboard.
-
-    Server-rendered HTML at request time; the embedded JS
-    setInterval polls /api/dashboard_html every
-    PUBLIC_REFRESH_SECONDS and updates the status row + the
-    single BrainStem lane card in place. Replaces the previous
-    Gradio `gr.Timer` behaviour with plain FastAPI + fetch.
-    """
+    """Public telemetry dashboard with periodic browser refresh."""
     return HTMLResponse(
         content=render_index_html(
             snapshot_provider=_snapshot,
@@ -837,30 +749,13 @@ async def http_landing() -> HTMLResponse:
 
 
 if __name__ == "__main__":
-    # Boot entry. We MUST serve via `uvicorn.run()` here because Gradio
-    # 6.20's `demo.launch()` no longer accepts a pre-built app (the `app=`
-    # keyword was removed). The unified app (our `_app` with Gradio's UI
-    # mounted inside via `mount_gradio_app`) is what we serve.
-    #
-    # Why bind 7860 directly (NOT port-hunt to 7861+)?
-    #   - HF Spaces' ingress proxy on `sdk: gradio` ONLY forwards to the
-    #     container's port 7860. There is no env-var override on this
-    #     Space (PORT=7860, GRADIO_SERVER_PORT unset). If our uvicorn
-    #     binds anything other than 7860, HF proxy never reaches us; it
-    #     hits whatever HF's local Gradio-sidecar has on 7860 (a default
-    #     Gradio HTML shell — exactly the symptom commit bfa5d5b
-    #     exhibited: 16577-byte Gradio HTML on /, /health, /api/*).
-    #   - If 7860 is genuinely held by another live process, uvicorn's
-    #     EADDRINUSE surfaces in the boot log with the actual cause so
-    #     the operator can see it instead of getting a silent misroute.
-    #     TIME_WAIT from prior failed boots clears in ~60s, after which
-    #     the next deploy succeeds.
+    # Local development entry point. Production uses the systemd unit.
+
     import uvicorn
 
-    _target_port = int(os.environ.get("GRADIO_SERVER_PORT") or 7860)
+    _target_port = 8000
     _log.info(
-        "Boot: uvicorn.run(app, host=0.0.0.0, port=%d) "
-        "(mount_gradio_app + direct-bind on 7860)",
+        "Boot: uvicorn.run(app, host=0.0.0.0, port=%d)",
         _target_port,
     )
     print(f"Running on local URL:  http://0.0.0.0:{_target_port}")

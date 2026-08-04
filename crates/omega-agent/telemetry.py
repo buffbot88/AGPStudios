@@ -82,7 +82,6 @@ class TelemetryPackage:
 
     # Backend info
     backend: str = "cpu"
-    gpu_offload_verified: bool = False
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -117,7 +116,6 @@ class TelemetryRelay:
         lane: Lane = Lane.BRAINSTEM,
         *,
         backend: str = "cpu",
-        gpu_offload: bool = False,
         lane_state: str = "online",
         host_state: str = "operational",
     ) -> TelemetryPackage:
@@ -129,10 +127,9 @@ class TelemetryRelay:
 
         ``lane_state`` and ``host_state`` are honest by default ("online" /
         "operational") but may be overridden ("waking" / "degraded" /
-        "offline") when boot succeeded mechanically but the lane is not
-        actually usable — e.g. HF download failed so the model file is
-        absent. The cached :class:`TelemetryPackage` is what the dashboard
-        renders during the cold-start window.
+        "offline") when the local runtime is not yet usable. The cached
+        :class:`TelemetryPackage` is what the dashboard renders during the
+        cold-start window.
 
         IMPORTANT: when ``lane_state != "online"`` this method only
         updates the cached package + event log — it does NOT write a
@@ -156,15 +153,13 @@ class TelemetryRelay:
                 time_to_first_token_ms=None,
                 total_latency_ms=0.0,
                 backend=backend,
-                gpu_offload_verified=gpu_offload,
                 finish_reason="n/a",
             )
             self._store.record(rec)
         else:
-            # Boot is *not* at the "online" steady state — e.g. HF credits
-            # exhausted or model file missing. Defer the typed failure
-            # record to the orchestrator's ``record_failure`` call so we
-            # don't double-count failures in the summary.
+            # Boot is not at the "online" steady state. Defer the typed
+            # failure record to the orchestrator's ``record_failure`` call
+            # so we don't double-count failures in the summary.
             _log.info(
                 "telemetry: seed_boot for %s lane_state=%s \u2014 "
                 "skipping MetricRecord; orchestrator records the typed failure",
@@ -172,7 +167,7 @@ class TelemetryRelay:
             )
         self._store.add_event(
             f"{lane.value}: server ready (backend={backend}, "
-            f"gpu_offload={gpu_offload}, state={lane_state})"
+            f"state={lane_state})"
         )
 
         pkg = TelemetryPackage(
@@ -182,7 +177,6 @@ class TelemetryRelay:
             lane_state=lane_state,
             host_state=host_state,
             backend=backend,
-            gpu_offload_verified=gpu_offload,
         )
         self._last = pkg
         _log.info(
@@ -275,7 +269,6 @@ class TelemetryRelay:
             last_request_time=lane_info.get("last_request_time"),
             last_success=lane_info.get("last_success", True),
             backend=lane_info.get("backend", "cpu"),
-            gpu_offload_verified=lane_info.get("gpu_offload_verified", False),
         )
 
         self._last = pkg

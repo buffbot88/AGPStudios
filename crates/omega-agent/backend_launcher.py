@@ -1,18 +1,4 @@
-"""BackendLauncher — per-request llama-server lifecycle owner.
-
-Owns subprocess.Popen, port health-polling, backend-mode detection, GPU-layer
-verification from stderr (deferred to a post-Run tick — today the backend
-mode is simple ``cuda`` if CUDA_VISIBLE_DEVICES is set), and safe terminate.
-
-The :class:`LiveBackend` value object returned by ``launch()`` carries just
-what the downstream completion client needs: a ``base_url``, the model path
-the server loaded, and the startup cost in milliseconds.
-
-Maintains back-compat: this module owns the same lifecycle semantics as the
-old inline code in ``execute_lane_inner``. Errors translate to typed
-exceptions from :mod:`run_errors` so callers don't have to know about
-``subprocess`` or ``urllib``.
-"""
+"""Persistent local llama-server lifecycle for the BrainStem lane."""
 
 from __future__ import annotations
 
@@ -20,7 +6,6 @@ import logging
 import os
 import socket
 import subprocess
-import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -29,8 +14,7 @@ from typing import Callable
 
 import requests
 
-from huggingface_hub import hf_hub_download
-
+from config import CONFIG
 from domain import Lane, lane_cfg
 from llama_stderr_parser import LlamaServerStderrParser
 from run_errors import (
@@ -39,109 +23,15 @@ from run_errors import (
     CleanupError,
     GpuAllocationError,
     GpuOffloadVerificationError,
-    HfCreditsExhaustedError,
-    HfRateLimitedError,
-    ModelDownloadError,
+    LocalModelUnavailableError,
     RunError,
 )
 
 _log = logging.getLogger("ashatos")
 
 
-# --------------------------------------------------------------------
-# HF error classification \u2014 translates raw HF Hub / requests exceptions
-# into the typed RunError family so the dashboard can show "Out of HF
-# credits" or "Rate limited" instead of a generic model download error.
-# --------------------------------------------------------------------
-
-_CREDIT_NEEDLES: tuple[str, ...] = (
-    "exceeded your monthly",
-    "monthly included compute",
-    "monthly hours",
-    "out of credits",
-    "credit balance",
-    "your plan",
-    "your subscription",
-    "billing",
-    "quota",
-    "payment required",
-    "402",
-)
-
-
-def _classify_hf_exception(
-    exc: BaseException,
-    what: str,
-    lane_value: str,
-) -> RunError:
-    """Classify a raw HF Hub exception into a typed :class:`RunError`.
-
-    ``what`` is a short noun ("model", "bucket", "llama-server mirror")
-    included in the user-facing error message.
-    """
-    status_code: int | None = None
-    body_text: str = ""
-    try:  # pragma: no cover - defensive
-        from huggingface_hub.utils import HfHubHTTPError
-
-        if isinstance(exc, HfHubHTTPError):
-            status_code = (
-                getattr(exc, "status_code", None)
-                or getattr(getattr(exc, "response", None), "status_code", None)
-            )
-            try:
-                body_text = (
-                    exc.response.text if exc.response is not None else ""
-                ) or ""
-            except Exception:
-                body_text = str(exc)
-        else:
-            body_text = str(exc)
-    except Exception:
-        body_text = str(exc)
-
-    return _classify_status_and_body(status_code, body_text, what, lane_value)
-
-
-def _classify_status_and_body(
-    status_code: int | None,
-    body_text: str,
-    what: str,
-    lane_value: str,
-) -> RunError:
-    """Pure body/status classifier — used by bucket path (no exception obj).
-
-    Returns :class:`HfRateLimitedError`, :class:`HfCreditsExhaustedError`,
-    or :class:`ModelDownloadError` based on HF Hub / HF Bucket response.
-    """
-    body_lc = (body_text or "").lower()
-    safe_body = (body_text or "")[:200]
-
-    if (
-        status_code == 429
-        or "too many requests" in body_lc
-        or "rate limit" in body_lc
-        or "rate-limit" in body_lc
-    ):
-        return HfRateLimitedError(
-            f"{lane_value}: HF {what} rate-limited: HTTP {status_code or '?'}: {safe_body}"
-        )
-
-    if (
-        status_code in (402, 403)
-        or any(needle in body_lc for needle in _CREDIT_NEEDLES)
-    ):
-        return HfCreditsExhaustedError(
-            f"{lane_value}: HF {what} credits exhausted: HTTP {status_code or '?'}: {safe_body}"
-        )
-
-    return ModelDownloadError(
-        f"{lane_value}: HF {what} download failed: HTTP {status_code or '?'}: {safe_body}"
-    )
-
-
 def is_port_open(port: int, host: str = "127.0.0.1") -> bool:
-    """True iff ``host:port`` accepts a TCP connect within 1 second."""
+    """True iff ``host:port`` accepts a TCP connect within one second."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.settimeout(1)
         return sock.connect_ex((host, port)) == 0
@@ -149,7 +39,7 @@ def is_port_open(port: int, host: str = "127.0.0.1") -> bool:
 
 @dataclass
 class LiveBackend:
-    """Live endpoint descriptor returned by :meth:`BackendLauncher.launch`."""
+    """Live local llama-server endpoint descriptor."""
 
     lane: Lane
     process: subprocess.Popen
@@ -158,7 +48,7 @@ class LiveBackend:
     server_start_ms: float
     model_load_ms: float | None
     backend_mode: str
-    gpu_offload_verified: bool
+    gpu_offload_verified: bool = False
     gpu_offload_layers: tuple[int, int] | None = None
     raw_log_lines: list[str] = field(default_factory=list)
     parser: "LlamaServerStderrParser | None" = None
@@ -170,7 +60,7 @@ class LiveBackend:
         self.close()
 
     def close(self) -> None:
-        """Terminate the subprocess safely; tolerate already-dead."""
+        """Terminate the subprocess safely."""
         proc = self.process
         if proc is None or proc.poll() is not None:
             return
@@ -181,25 +71,14 @@ class LiveBackend:
             try:
                 proc.kill()
                 proc.wait(timeout=2)
-            except Exception as cleanup_exc:
-                raise CleanupError(
-                    f"kill after terminate-timeout failed: {cleanup_exc}"
-                )
-        except Exception as cleanup_exc:
-            # CleanupError here is non-fatal; callers should not bubble it
-            # up — log + swallow. The orchestrator's outermost try/finally
-            # pattern guarantees cleanup even on exceptions during inference.
-            raise CleanupError(
-                f"subprocess terminate failed: {cleanup_exc}"
-            )
+            except Exception as exc:
+                raise CleanupError(f"kill after terminate-timeout failed: {exc}")
+        except Exception as exc:
+            raise CleanupError(f"subprocess terminate failed: {exc}")
 
 
 class BackendLauncher:
-    """Per-request lifecycle for a single llama-server process.
-
-    Stateless across requests; instantiated once at module import and
-    shared.
-    """
+    """Manage one persistent CPU llama-server process."""
 
     def __init__(
         self,
@@ -212,273 +91,120 @@ class BackendLauncher:
         self.port = port
         self.n_threads = n_threads
         self.n_batch = n_batch
-
-    # ── Public ────────────────────────────────────────────────────────
+        self._backend: LiveBackend | None = None
+        self._lock = threading.RLock()
 
     def ensure_model(self, lane: Lane) -> str:
-        """Resolve (download if necessary) the GGUF path for ``lane``."""
-        cfg = lane_cfg(lane)
-        # Env override wins.
-        env_key = f"{lane.value.upper()}_MODEL_PATH"
-        env_path = os.getenv(env_key, "").strip()
-        if env_path and os.path.isfile(env_path):
-            cfg.model_path = env_path
-            return env_path
-        # Cached path wins.
-        if cfg.model_path and os.path.isfile(cfg.model_path):
-            return cfg.model_path
-
-        token = os.getenv("HF_TOKEN") or None
-        repo = cfg.repo
-        filename = cfg.file
-
-        # Check if this is a storage bucket (path starts with "buckets/")
-        if repo.startswith("buckets/"):
-            return self._ensure_bucket_model(lane, repo, filename, token)
-
-        # Standard HF Hub model download.
-        _log.info("%s: downloading %s/%s ...", lane.value, repo, filename)
-        try:
-            path = hf_hub_download(
-                repo_id=repo,
-                filename=filename,
-                revision=os.getenv("MODEL_REVISION", "main"),
-                token=token,
+        """Require and return the configured local GGUF model path."""
+        path = CONFIG.model_path.strip()
+        if not path or not os.path.isfile(path):
+            raise LocalModelUnavailableError(
+                f"{lane.value}: configured local model is missing"
             )
-        except Exception as exc:
-            classified = _classify_hf_exception(exc, what="model", lane_value=lane.value)
-            _log.warning(
-                "%s: HF Hub %s download classified as %s",
-                lane.value, "model", classified.code,
-            )
-            raise classified
-        cfg.model_path = path
-        _log.info("%s: downloaded to %s", lane.value, path)
+        lane_cfg(lane).model_path = path
         return path
 
-    def _ensure_bucket_model(
-        self, lane: Lane, repo: str, filename: str, token: str | None,
-    ) -> str:
-        """Download a GGUF from a HuggingFace storage bucket.
+    def ensure_started(
+        self, lane: Lane, *, gpu_offload_requested: bool = False,
+    ) -> LiveBackend:
+        """Return a healthy shared backend, starting it when necessary."""
+        with self._lock:
+            if self._backend is not None and self._backend.process.poll() is None:
+                if self._backend_is_healthy():
+                    return self._backend
+                self._backend.close()
+                self._backend = None
+            self._backend = self.launch(
+                lane, gpu_offload_requested=gpu_offload_requested,
+            )
+            return self._backend
 
-        Storage buckets have a different URL pattern than model repos:
-        ``https://huggingface.co/buckets/{owner}/{bucket}/resolve/{filename}``
+    def invalidate(self) -> None:
+        """Drop the cached backend after a failed request."""
+        with self._lock:
+            backend, self._backend = self._backend, None
+            if backend is not None:
+                backend.close()
 
-        The ``buckets/`` prefix in ``repo`` identifies the bucket path.
-        Example repo: ``buckets/stressthismess/ashatos-storage``
-        """
-        # Strip "buckets/" prefix to get the bucket identifier
-        bucket_id = repo[len("buckets/"):]  # e.g. "stressthismess/ashatos-storage"
-        bucket_url = (
-            f"https://huggingface.co/buckets/{bucket_id}/resolve/{filename}"
-        )
-
-        # Cache path: same cache dir used for model repos
-        cache_dir = Path.home() / ".cache" / "ashatos" / "models"
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        dest = cache_dir / filename
-
-        if dest.is_file() and dest.stat().st_size > 0:
-            _log.info("%s: bucket model already cached at %s", lane.value, dest)
-            cfg = lane_cfg(lane)
-            cfg.model_path = str(dest)
-            return str(dest)
-
-        _log.info(
-            "%s: downloading from bucket %s ...", lane.value, bucket_url,
-        )
-        headers = {}
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-
+    def _backend_is_healthy(self) -> bool:
+        if self._backend is None:
+            return False
         try:
-            resp = requests.get(
-                bucket_url,
-                headers=headers,
-                timeout=600,
-                stream=True,
+            response = requests.get(
+                f"http://127.0.0.1:{self.port}/health", timeout=2,
             )
-            resp.raise_for_status()
+            return response.status_code == 200
+        except requests.RequestException:
+            return False
 
-            # Stream to disk with progress
-            total = int(resp.headers.get("content-length", 0))
-            downloaded = 0
-            with open(dest, "wb") as f:
-                for chunk in resp.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        if total and downloaded % (10 * 1024 * 1024) == 0:
-                            _log.info(
-                                "%s: downloaded %d/%d MB (%.0f%%)",
-                                lane.value,
-                                downloaded // (1024 * 1024),
-                                total // (1024 * 1024),
-                                downloaded / total * 100,
-                            )
-        except requests.HTTPError as exc:
-            # Classify 402/403/429 distinctly so the dashboard can show
-            # "Out of HF credits" / "Rate limited" rather than a generic
-            # 503 from the orchestrator. Clean up partial download first.
-            if dest.exists():
-                try:
-                    dest.unlink()
-                except OSError:
-                    pass
-            response = getattr(exc, "response", None)
-            sc = getattr(response, "status_code", None)
-            body = ""
-            try:
-                body = (response.text if response is not None else "") or ""
-            except Exception:
-                body = str(exc)
-            classified = _classify_status_and_body(
-                sc, body, "bucket", lane.value,
-            )
-            _log.warning(
-                "%s: bucket classified as %s", lane.value, classified.code,
-            )
-            raise classified
-        except Exception as exc:
-            # Clean up partial download on failure
-            if dest.exists():
-                try:
-                    dest.unlink()
-                except OSError:
-                    pass
-            raise ModelDownloadError(
-                f"{lane.value}: bucket download failed: "
-                f"{type(exc).__name__}: {exc}"
-            )
-
-        _log.info(
-            "%s: downloaded from bucket to %s (%d MB)",
-            lane.value, dest, dest.stat().st_size // (1024 * 1024),
-        )
-        cfg = lane_cfg(lane)
-        cfg.model_path = str(dest)
-        return str(dest)
+    def stop(self) -> None:
+        with self._lock:
+            backend, self._backend = self._backend, None
+            if backend is not None:
+                backend.close()
 
     def launch(
         self, lane: Lane, *, gpu_offload_requested: bool = True,
     ) -> LiveBackend:
-        """Boot a llama-server process for the lane. Caller must ``close()``.
-
-        Pipeline:
-            1. Drain a small stderr parser from a background reader thread
-               started the moment the subprocess is up.
-            2. Wait for ``/health`` to return 2xx.
-            3. If GPU offload was requested, parse the captured lines for
-               ``llm_load_tensors: offloaded N/M layers to GPU`` and raise
-               :class:`GpuOffloadVerificationError` if absent.
-            4. Build the :class:`LiveBackend` from the *parsed* mode, not
-               from a ``CUDA_VISIBLE_DEVICES`` env-var inference.
-        """
+        """Start the local llama-server and wait for its health endpoint."""
         binary = self._binary_path_getter()
         if not binary or not Path(binary).is_file():
-            # The orchestrator's degraded-mode gate must catch this, but
-            # double-check here as a defense-in-depth.
-            raise GpuAllocationError(
-                f"llama-server binary unavailable at: {binary!r}"
-            )
+            raise GpuAllocationError(f"local llama-server unavailable at {binary!r}")
 
-        cfg = lane_cfg(lane)
-        try:
-            model_path = self.ensure_model(lane)
-        except ModelDownloadError:
-            raise
-
-        _offload = gpu_offload_requested
-        cmd = self._build_command(binary, model_path, cfg.ctx,
-                                  gpu_offload=_offload)
+        model_path = self.ensure_model(lane)
+        cmd = self._build_command(
+            binary, model_path, lane_cfg(lane).ctx,
+            gpu_offload=gpu_offload_requested,
+        )
         start_t = time.perf_counter()
         try:
             proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,  # was DEVNULL — now drained by parser
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
             )
         except Exception as exc:
-            raise BackendStartError(
-                f"Popen failed: {type(exc).__name__}: {exc}"
-            )
+            raise BackendStartError(f"Popen failed: {type(exc).__name__}: {exc}")
 
-        # Start the stderr reader thread. The parser is the single source
-        # of truth for backend mode + offload verification.
         parser = LlamaServerStderrParser()
-        reader_thread = threading.Thread(
+        threading.Thread(
             target=_stderr_reader_loop,
             args=(proc.stderr, parser),
             name=f"llama-stderr-reader-{lane.value}",
             daemon=True,
-        )
-        reader_thread.start()
-
+        ).start()
         load_ms = round((time.perf_counter() - start_t) * 1000, 1)
 
         try:
-            healthy = self._wait_for_health(self.port, timeout=30.0)
-            if not healthy:
-                try:
-                    proc.terminate(); proc.wait(timeout=5)
-                except Exception:
-                    pass
-                # Surface the parser's findings for diagnostics even on
-                # health-timeout failure.
-                snap = parser.finalize()
+            if not self._wait_for_health(self.port, timeout=60.0):
+                snapshot = parser.finalize()
                 _log.warning(
-                    "%s: backend health timeout. "
-                    "stderr parser: mode=%s offloaded=%s lines=%d",
-                    lane.value, snap.parsed_mode, snap.offloaded_layers,
-                    snap.raw_lines_kept,
+                    "%s: local backend health timeout; mode=%s lines=%s",
+                    lane.value, snapshot.parsed_mode, snapshot.raw_lines_kept,
                 )
                 raise BackendHealthTimeout(
-                    f"llama-server did not become healthy on port {self.port}"
+                    f"local llama-server did not become healthy on port {self.port}"
                 )
-
-            # Wait for the offload line deterministically via the
-            # parser's threading.Event (replaces old timing-based drain).
             parser.await_offload(timeout=2.0)
             result = parser.finalize()
         except Exception:
-            # On any error from this branch, terminate the subprocess so we
-            # don't leak it (the reader thread will exit once stderr EOFs).
             try:
-                proc.terminate(); proc.wait(timeout=5)
+                proc.terminate()
+                proc.wait(timeout=5)
             except Exception:
                 pass
             raise
 
         if gpu_offload_requested and not result.offload_succeeded:
-            # Offload was requested but never confirmed in stderr. Mirror
-            # the parser findings into the log and raise.
-            _log.warning(
-                "%s: GPU offload verification FAILED. "
-                "stderr parser: mode=%s offloaded=%s lines=%s",
-                lane.value,
-                result.parsed_mode,
-                result.offloaded_layers,
-                repr(result.backends_seen),
-            )
             try:
-                proc.terminate(); proc.wait(timeout=5)
+                proc.terminate()
+                proc.wait(timeout=5)
             except Exception:
                 pass
             raise GpuOffloadVerificationError(
-                f"llama-server started but did not confirm GPU offload "
-                f"(mode={result.parsed_mode}, offloaded={result.offloaded_layers}). "
-                f"Set CUDA_VISIBLE_DEVICES, n_gpu_layers>0, or call "
-                f"launch(gpu_offload_requested=False) to opt out of verification."
+                f"local llama-server did not confirm GPU offload: {result.parsed_mode}"
             )
 
-        server_start_ms = round((time.perf_counter() - start_t) * 1000, 1)
-        gpu_ok = result.offload_succeeded
         backend_mode = result.parsed_mode if result.parsed_mode != "unknown" else "cpu"
-        _log.info(
-            "%s: backend=%s gpu_offload=%s layers=%s",
-            lane.value, backend_mode, gpu_ok, result.offloaded_layers,
-        )
-
+        server_start_ms = round((time.perf_counter() - start_t) * 1000, 1)
         return LiveBackend(
             lane=lane,
             process=proc,
@@ -487,35 +213,32 @@ class BackendLauncher:
             server_start_ms=server_start_ms,
             model_load_ms=load_ms,
             backend_mode=backend_mode,
-            gpu_offload_verified=gpu_ok,
+            gpu_offload_verified=result.offload_succeeded,
             gpu_offload_layers=result.offloaded_layers,
             raw_log_lines=list(parser.raw),
             parser=parser,
         )
 
-    # ── Private ───────────────────────────────────────────────────────
-
-    def _build_command(self, binary: str, model_path: str, ctx: int,
-                        gpu_offload: bool = True) -> list[str]:
+    def _build_command(
+        self, binary: str, model_path: str, ctx: int,
+        gpu_offload: bool = False,
+    ) -> list[str]:
         return [
-            binary,
-            "--host", "127.0.0.1",
-            "--port", str(self.port),
-            "-m", model_path,
-            "-c", str(ctx),
-            "-t", str(self.n_threads),
-            "-b", str(self.n_batch),
-            "-ngl", "999" if gpu_offload else "0",
+            binary, "--host", "127.0.0.1", "--port", str(self.port),
+            "-m", model_path, "-c", str(ctx), "-t", str(self.n_threads),
+            "-b", str(self.n_batch), "-ngl", "999" if gpu_offload else "0",
         ]
 
     def _wait_for_health(
-        self, port: int, timeout: float = 30.0, interval: float = 0.25,
+        self, port: int, timeout: float = 60.0, interval: float = 0.25,
     ) -> bool:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:
-                resp = requests.get(f"http://127.0.0.1:{port}/health", timeout=2)
-                if resp.status_code < 500:
+                response = requests.get(
+                    f"http://127.0.0.1:{port}/health", timeout=2,
+                )
+                if response.status_code < 500:
                     return True
             except requests.RequestException:
                 pass
@@ -525,34 +248,17 @@ class BackendLauncher:
         return False
 
 
-# ──────────────────────────────────────────────────────────────────────────
-# Module-level helpers — stderr reader loop and post-health drain.
-# ──────────────────────────────────────────────────────────────────────────
-
 def _stderr_reader_loop(stderr_file, parser: LlamaServerStderrParser) -> None:
-    """Drain subprocess stderr into ``parser`` line-by-line until EOF.
-
-    Runs on a daemon thread spawned by :meth:`BackendLauncher.launch`. The
-    parser is thread-safe-by-convention (``feed`` does not mutate shared
-    state outside ``_buffer`` and ``_backends`` but those mutations are
-    serialised because we never call ``feed`` from two threads at once).
-    """
+    """Drain llama-server stderr into the parser."""
     if stderr_file is None:
         return
     try:
         for raw_line in iter(stderr_file.readline, b""):
-            try:
-                text = raw_line.decode("utf-8", errors="replace")
-            except Exception:
-                continue
-            parser.feed(text)
+            parser.feed(raw_line.decode("utf-8", errors="replace"))
     except Exception as exc:
-        _log.info("llama: stderr reader stopped: %s: %s",
-                  type(exc).__name__, exc)
+        _log.info("local llama stderr reader stopped: %s: %s", type(exc).__name__, exc)
     finally:
         try:
             stderr_file.close()
         except Exception:
             pass
-
-

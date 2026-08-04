@@ -25,14 +25,10 @@ _log = logging.getLogger("ashatos")
 CATEGORIES = (
     "OK",
     "BINARY_INSTALL_FAILED",
-    "HF_CREDITS_EXHAUSTED",
-    "HF_RATE_LIMITED",
-    "MODEL_DOWNLOAD_FAILED",
+    "LOCAL_MODEL_UNAVAILABLE",
     "INFERENCE_UNAVAILABLE",
     "BACKEND_START_FAILED",
     "SERVER_START_FAILED",
-    "GPU_UNAVAILABLE",
-    "GPU_OFFLOAD_VERIFICATION_FAILED",
     "INFERENCE_TIMEOUT",
     "INFERENCE_FAILED",
     "INVALID_MODEL_RESPONSE",
@@ -104,7 +100,6 @@ class RunMetrics:
             time_to_first_token_ms=completion.time_to_first_token_ms,
             total_latency_ms=total_latency_ms,
             backend=backend.backend_mode,
-            gpu_offload_verified=backend.gpu_offload_verified,
             finish_reason=completion.finish_reason or "stop",
         )
         self._store.record(rec)
@@ -118,7 +113,6 @@ class RunMetrics:
         lane: Lane,
         *,
         backend_mode: str = "cpu",
-        gpu_offload_verified: bool = False,
         server_start_ms: float = 0.0,
         model_load_ms: float = 0.0,
         total_latency_ms: float = 0.0,
@@ -144,13 +138,11 @@ class RunMetrics:
             time_to_first_token_ms=None,
             total_latency_ms=total_latency_ms,
             backend=backend_mode,
-            gpu_offload_verified=gpu_offload_verified,
             finish_reason="n/a",
         )
         self._store.record(rec)
         self._store.add_event(
-            f"{lane.value}: server ready (backend={backend_mode}, "
-            f"gpu_offload={gpu_offload_verified})"
+            f"{lane.value}: server ready (backend={backend_mode})"
         )
 
     def record_failure(
@@ -183,11 +175,10 @@ class RunMetrics:
         envelope: Any,
     ) -> None:
         """
-        Record a sanitized metric from a ZeroGPU envelope dict.
+        Record a sanitized metric from the local inference envelope.
 
-        This method consolidates the ``MetricRecord`` construction that was
-        previously duplicated between :meth:`record_success` and the old
-        ``_record_returned_result`` in ``app.py``. It parses the envelope's
+        This method consolidates the ``MetricRecord`` construction shared by
+        success and failure response handling. It parses the envelope's
         ``performance``, ``usage``, and ``error`` sub-dicts defensively and
         never stores prompts, keys, or paths.
         """
@@ -239,9 +230,6 @@ class RunMetrics:
             ),
             total_latency_ms=_safe_float(performance.get("total_latency_ms")),
             backend=str(performance.get("backend", "unknown")),
-            gpu_offload_verified=bool(
-                performance.get("gpu_offload_verified", False)
-            ),
             finish_reason=(
                 str(envelope.get("choices", [{}])[0].get("finish_reason", "stop"))
                 if ok

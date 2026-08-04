@@ -1,77 +1,58 @@
-# Project knowledge
+# Ashat Neural Network project knowledge
 
 This file gives Freebuff context about your project: goals, commands, conventions, and gotchas.
 
 ## Project
 
-**AshatOS BrainStem Inference Host** — A private inference appliance running on Hugging Face Spaces (zeroGPU). It accepts authenticated requests, runs on-demand GGUF inference via `llama-server`, collects sanitized metrics, and displays a read-only public telemetry dashboard.
+**Ashat Neural Network BrainStem service** — A private inference appliance running on an Oracle Linux ARM64 server. It accepts authenticated requests, runs a persistent single CPU `llama-server` instance, collects sanitized metrics, and displays a read-only public telemetry dashboard.
 
 Key code locations:
-- `app.py` — Slim orchestrator: FastAPI wiring, `@spaces.GPU` entry point, Run pipeline
-- `domain.py` — `Lane` enum (single `BRAINSTEM`), per-lane config (`LANE_CONFIG`), request validation
-- `dashboard.py` — Server-rendered dashboard HTML (pure FastAPI, no Gradio)
-- `installer.py` / `install_strategies.py` — `llama-server` binary download + installation logic
-- `backend_launcher.py` — Per-request `llama-server` subprocess lifecycle
+- `app.py` — FastAPI wiring and inference orchestration
+- `config.py` — JSON-only runtime configuration loader
+- `domain.py` — `Lane` enum (single `BRAINSTEM`), per-lane config, request validation
+- `dashboard.py` — Server-rendered dashboard HTML
+- `installer.py` — local `llama-server` availability check
+- `backend_launcher.py` — persistent `llama-server` subprocess lifecycle
 - `completion_client.py` — HTTP client to live llama-server backend
-- `lane_resolver.py` — Strict route-or-model lane routing
-- `run_errors.py` — Typed exception hierarchy → JSON error codes
-- `run_metrics.py` / `metrics_store.py` — Sanitized metric recording + thread-safe rolling deque
-- `public_snapshot.py` — Public status/metrics projection (no prompts or keys)
-- `response_adapter.py` — Response envelope shaping
-- `telemetry.py` — Boot telemetry seeding
-- `llama_stderr_parser.py` — Streaming parser for llama-server stderr (CUDA offload detection)
-- `tests/` — unittest suite (11 test files), pure-logic tests don't need network
+- `metrics_store.py` / `run_metrics.py` — sanitized metric recording
+- `public_snapshot.py` — public status/metrics projection
+- `server-config.example.json` — safe checked-in local configuration template
+- `server-config.json` — ignored local/production configuration; never commit
+- `tests/` — unittest suite
 
 ## Commands
 
 | Action | Command |
 |---|---|
-| Install | `pip install -r requirements.txt` + `apt-get install ...` (see Dockerfile for system deps) |
+| Install | `pip install -r requirements.txt` |
 | Test | `python -m unittest discover tests -v` |
-| Run locally | `python app.py` (binds port 7860 via uvicorn) |
+| Run locally | `python -m uvicorn app:app --host 127.0.0.1 --port 8000` |
 | Docker build | `docker build -t ashatos-host .` |
-| Typecheck | Not configured — runtime uses `from __future__ import annotations` |
-| Lint | Not configured — no formatter/linter pinned |
 
 ## Architecture & Data Flow
 
-1. Boot: `app.py` starts, spawns daemon thread running `startup()` which:
-   - Installs `llama-server` binary (GitHub releases → HF mirror fallback)
-   - Pre-downloads GGUF model from HF Hub
-   - Seeds telemetry with honest lane state (online/waking/degraded/offline)
-2. Request arrives at `POST /v1/chat/completions` → `LaneResolver` maps model/alias → `Lane.BRAINSTEM`
-3. `validate_request()` checks messages, max_tokens, temperature, top_p, body size
-4. `execute_lane()` acquires `_inference_lock`, calls `@spaces.GPU`-decorated function
-5. ZeroGPU worker (isolated process) runs `_run_pipeline()`:
-   - `BackendLauncher.launch()` starts llama-server subprocess, waits for `/health`
-   - `CompletionClient.complete()` sends HTTP POST to local llama-server
-   - Returns success/failure envelope (no metrics recorded in worker!)
-6. Back in main process: `_record_returned_result()` writes sanitized metrics to `METRICS` store
-7. Dashboard polls `GET /api/dashboard_html` → `PublicSnapshot` renders status/card HTML
-
-**Critical:** Metrics are recorded in the *main* process after `@spaces.GPU` returns, because ZeroGPU workers have a process-local copy of `METRICS`.
+1. Boot: systemd starts FastAPI after `network-online.target`.
+2. `config.py` loads `/home/opc/Projects/AshatNueralHost/server-config.json` first, then local fallback paths.
+3. `startup()` verifies the llama-server binary, model, and persistent CPU backend.
+4. `POST /v1/chat/completions` authenticates with `X-Ashat-Key`, resolves BrainStem, validates the request, and serializes one inference at a time.
+5. `BackendLauncher` starts or reuses the local llama-server process on `127.0.0.1:18080`.
+6. The dashboard reads the sanitized in-memory metrics store.
 
 ## Conventions
 
-- **Strict lane typing:** `Lane` is a closed `str, Enum` (`BRAINSTEM = "brainstem"`). Never use free strings.
-- **Per-request llama-server:** Subprocess starts per request, terminates in `finally` block. No persistent process.
-- **No secrets in logs/metrics:** Prompts, responses, API keys, and paths are NEVER stored. Only sanitized aggregates.
-- **Env var config:** All config read from env vars at import time via `os.getenv()`. Space Secrets override defaults.
-- **Uniform error envelope:** All `RunError` subclasses → `{"ok": False, "error": {"code": ..., "message": ...}}`.
-- **OpenAI-compatible API:** Uses `/v1/chat/completions` format with `messages` array, `choices[0].message.content` response.
-- **Auth:** `X-Ashat-Key` header only (not `Authorization`). Constant-time HMAC comparison via `hmac.compare_digest()`.
-- **No Gradio runtime:** After pivot to `sdk: docker`, the app is pure FastAPI. No `gr.*` imports.
-- **Code style:** Python 3.11+, `from __future__ import annotations` everywhere, Google-style docstrings, `_` prefix for private names.
+- **JSON-only runtime configuration:** Runtime settings are loaded from `server-config.json`; production does not use an env file or environment variables.
+- **Secret separation:** `server-config.example.json` contains only a placeholder. Production `server-config.json` is ignored by Git and protected as `root:opc` mode `640`.
+- **Strict lane typing:** `Lane` is a closed `str, Enum` with one `BRAINSTEM` value.
+- **Persistent backend:** One CPU llama-server stays alive across requests and is restarted after health failure.
+- **No secrets in logs/metrics:** Prompts, responses, BrainStem keys, and tokens are never stored.
+- **Uniform error envelope:** All `RunError` subclasses map to sanitized JSON errors.
+- **Port layout:** FastAPI listens on `127.0.0.1:8000`; llama-server listens on `127.0.0.1:18080`; Nginx terminates public HTTPS.
+- **OS startup:** `ashat-neural-host.service` is enabled in `multi-user.target`, waits for network-online, and uses `Restart=always`.
 
 ## Gotchas
 
-- **ZeroGPU metrics isolation:** `_run_pipeline()` inside `@spaces.GPU` runs in a separate process. Never record metrics there — they'd be lost. Always record in the main process after the GPU function returns.
-- **`sdk: docker` means no Gradio:** HF Spaces no longer injects Gradio runtime. All routes (including dashboard) are pure FastAPI. The Dockerfile CMD runs `uvicorn app:app --port 7860`.
-- **Static `@spaces.GPU` detection:** The decorator parameters must be trivially readable by HF Spaces' AST scanner. Use plain module-level variables (e.g., `_BRAINSTEM_GPU_DURATION`), not dynamic lookups.
-- **Port 7860 is mandatory:** HF Spaces proxy only forwards to container port 7860. Never change the bind port.
-- **Startup runs in daemon thread:** Binary install + model download happens in a background thread so FastAPI can bind immediately. `startup()` is wrapped with `log.exception()` because Python silently swallows exceptions in daemon threads.
-- **Singleton METRICS:** `METRICS` is a module-level `MetricsStore` singleton. The dashboard timer reads from it directly — no database, no file I/O.
-- **Constant-time auth:** Always use `hmac.compare_digest()` for key comparison, never `==`.
-- **GPU offload verification:** `LlamaServerStderrParser` parses llama-server stderr to confirm actual GPU offload. The `await_offload()` Event replaces old timing-based drains.
-- **env-var override timing:** Config from env vars is read at module import time. Space Secrets changes require a restart.
-- **No streaming:** `"stream": true` in a request returns an error. Not yet implemented.
+- `server-config.json` is intentionally ignored; do not overwrite the production copy during source synchronization.
+- The deployed local model is `LFM2.5-1.2B-Instruct-Q8_0.gguf`.
+- The Oracle host is CPU-only and constrained to one thread and one concurrent inference by default.
+- The native ARM64 llama-server is installed at `/usr/local/libexec/ashat-neural-host/llama-server`; the model is stored under `/var/lib/ashat-neural-host`.
+- Metrics are sanitized and persisted to the configured JSONL path; no prompt or response content is persisted.

@@ -1,9 +1,7 @@
 """Domain types for the AshatOS Neural Host — single-lane BrainStem.
 
-This module owns the canonical lane name and configuration, plus request
-validation that enforces lane constraints. It deliberately has zero heavy
-runtime dependencies so it can be imported from any other module, including
-unit tests.
+This module owns the canonical lane name and configuration plus request
+validation. It deliberately has no heavy runtime dependencies.
 """
 
 from __future__ import annotations
@@ -13,7 +11,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-import os
+from config import CONFIG
+
 
 
 class Lane(str, Enum):
@@ -37,16 +36,13 @@ class Lane(str, Enum):
 class LaneConfig:
     """Typed per-lane configuration.
 
-    All fields have defaults matching the BrainStem model. Env var overrides
-    are applied at import time via :func:`_build_lane_config`.
+    All fields have defaults matching the BrainStem model. Values are loaded
+    from the centralized JSON server configuration.
     """
     label: str = "BrainStem"
-    # Storage bucket path: ``buckets/{owner}/{bucket}``
-    repo: str = "buckets/stressthismess/ashatos-storage"
     file: str = "LFM2.5-1.2B-Instruct-Q8_0.gguf"
-    ctx: int = 8192
-    max_tokens: int = 8192
-    gpu_duration: int = 120
+    ctx: int = 4096
+    max_tokens: int = 1024
     max_messages: int = 64
     max_body_bytes: int = 1_048_576
     model_path: str = ""
@@ -58,43 +54,32 @@ class LaneConfig:
 #   - an AshatOS-style prefixed name (e.g. "ashat-brainstem")
 #   - the configured GGUF filename for the lane (``LANE_CONFIG[Lane.BRAINSTEM].file``)
 #
-# Populated AFTER ``LANE_CONFIG`` is built so the GGUF filename aliases
-# always match what ``lane_cfg(lane).file`` returns, regardless of
-# whether env overrides are present at import time.
+# Populated after ``LANE_CONFIG`` is built so the configured GGUF filename
+# is available as a request alias.
 BRAINSTEM_ALIASES: set[str] = set()
 
 
 # Per-lane configuration. Kept here (not on the Lane enum) because the enum
-# must remain stdlib-pure. Read on each boot from env vars; defaults match
-# the new BrainStem model.
+# must remain stdlib-pure. Values come from the local JSON configuration.
 def _build_lane_config() -> dict[Lane, LaneConfig]:
     return {
         Lane.BRAINSTEM: LaneConfig(
             label="BrainStem",
-            repo=os.getenv(
-                "BRAINSTEM_MODEL_REPO",
-                "buckets/stressthismess/ashatos-storage",
-            ),
-            file=os.getenv(
-                "BRAINSTEM_MODEL_FILE",
-                "LFM2.5-1.2B-Instruct-Q8_0.gguf",
-            ),
-            ctx=int(os.getenv("BRAINSTEM_CTX", "8192")),
-            max_tokens=int(os.getenv("BRAINSTEM_MAX_TOKENS", "8192")),
-            gpu_duration=int(os.getenv("BRAINSTEM_GPU_DURATION", "120")),
+            file=CONFIG.model_file,
+            ctx=CONFIG.context,
+            max_tokens=CONFIG.max_tokens,
             max_messages=64,
             max_body_bytes=1_048_576,
-            model_path="",
+            model_path=CONFIG.model_path,
         ),
     }
 
 
-# Built once on import. env-var overrides must be set BEFORE app import
-# (i.e. from the Hugging Face Space's Settings → Secrets).
+# Built once on import from the JSON configuration.
 LANE_CONFIG: dict[Lane, LaneConfig] = _build_lane_config()
 
-# Populate alias set now that LANE_CONFIG exists, so env-overridden
-# filenames are picked up.
+# Populate alias set now that LANE_CONFIG exists, so configured filenames
+# are picked up.
 BRAINSTEM_ALIASES.update({
     "brainstem",
     "ashat-brainstem",
@@ -106,7 +91,7 @@ BRAINSTEM_ALIASES.discard("")
 
 
 def lane_cfg(lane: Lane) -> LaneConfig:
-    """Per-lane config (label, repo, file, ctx, ...)."""
+    """Per-lane BrainStem config (file, context, and limits)."""
     return LANE_CONFIG[lane]
 
 

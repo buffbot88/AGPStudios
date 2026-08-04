@@ -1,25 +1,24 @@
-# API Contract — AshatOS BrainStem Inference Host
+# API Contract — Ashat Neural Network BrainStem
 
 ## Overview
 
-This document defines the API contract for the Hugging Face Space that hosts
-a single private GGUF inference lane (BrainStem).
-
----
+This document defines the API contract for the Oracle Linux ARM64 service that
+hosts a single private GGUF inference lane (BrainStem).
 
 ## Endpoints
 
-### 1. BrainStem Inference
+### BrainStem inference
 
-**Gradio API:** `POST /gradio_api/call/brainstem`  
-**HTTP API:** `POST /v1/chat/completions` (with `model` field containing "brainstem" or "1.2b")
-
-**Authentication:** Required (X-Ashat-Key header matching `ASHAT_BRAINSTEM_KEY`)
+**HTTP API:** `POST /v1/chat/completions`  
+**Authentication:** Required via `X-Ashat-Key`, matching the BrainStem key in the
+protected production `server-config.json`.
 
 **Request:**
+
 ```json
 {
   "request_id": "uuid-optional",
+  "model": "brainstem",
   "messages": [
     {"role": "system", "content": "You are a helpful assistant."},
     {"role": "user", "content": "What is the Moon?"}
@@ -30,139 +29,52 @@ a single private GGUF inference lane (BrainStem).
 }
 ```
 
-**Response (success):**
-```json
-{
-  "id": "ashat-uuid",
-  "object": "chat.completion",
-  "created": 1783650000,
-  "model": "LFM2.5-1.2B-Instruct-Q8_0.gguf",
-  "lane": "brainstem",
-  "choices": [
-    {
-      "index": 0,
-      "message": {"role": "assistant", "content": "The Moon is Earth's only natural satellite..."},
-      "finish_reason": "stop"
-    }
-  ],
-  "usage": {
-    "prompt_tokens": 18,
-    "completion_tokens": 96,
-    "total_tokens": 114
-  },
-  "performance": {
-    "cold_start": true,
-    "server_start_ms": 1600,
-    "model_load_ms": 1200,
-    "total_latency_ms": 3100,
-    "time_to_first_token_ms": null,
-    "prompt_tokens_per_second": 420.5,
-    "generation_tokens_per_second": 52.1,
-    "backend": "cuda",
-    "gpu_offload_verified": true
-  },
-  "request_id": "original-request-id",
-  "ok": true
-}
-```
+The response is OpenAI-compatible and includes sanitized usage and performance
+aggregates. Prompts, responses, keys, and filesystem paths are not stored in
+public metrics.
 
----
+### List models
 
-### 2. List Models
-
-**HTTP API:** `GET /v1/models`
-
+**HTTP API:** `GET /v1/models`  
 **Authentication:** None
 
-**Response:**
-```json
-{
-  "object": "list",
-  "data": [
-    {
-      "id": "LFM2.5-1.2B-Instruct-Q8_0.gguf",
-      "object": "model",
-      "created": 1783650000,
-      "owned_by": "ashatos"
-    }
-  ]
-}
-```
+### Health check
 
----
-
-### 3. Health Check
-
-**HTTP API:** `GET /health`
-
+**HTTP API:** `GET /health`  
 **Authentication:** None
 
-**Response:**
-```json
-{
-  "status": "ok",
-  "uptime_seconds": 300.5,
-  "brainstem_ready": true,
-  "llama_server_available": true
-}
-```
+The response reports service status, BrainStem readiness, and local
+llama-server availability without exposing secrets.
 
----
+### Public telemetry
 
-### 4. Public Status
+- `GET /api/public_status`
+- `GET /api/public_metrics`
+- `GET /api/dashboard_html`
+- `GET /api/dashboard_timeseries`
 
-**Gradio API:** `POST /gradio_api/call/public_status`  
-**HTTP API:** `GET /api/public_status`
-
-**Authentication:** None
-
-Returns lane status, request counts, performance summaries.
-
----
-
-### 5. Public Metrics
-
-**Gradio API:** `POST /gradio_api/call/public_metrics`  
-**HTTP API:** `GET /api/public_metrics`
-
-**Authentication:** None
-
-Returns sanitized aggregate metrics.
-
----
-
-### 6. Admin Benchmark
-
-**Gradio API:** `POST /gradio_api/call/admin_benchmark`
-
-**Authentication:** Required (X-Ashat-Key header matching `ASHAT_ADMIN_KEY`)
-
-Runs a predefined benchmark on the BrainStem lane.
-
-**Input:** `{ "lane": "brainstem" }`
-
----
+All are unauthenticated and sanitized for public display.
 
 ## Authentication
 
-Use the `X-Ashat-Key` HTTP header:
+Use the custom header:
 
+```text
+X-Ashat-Key: <production-key>
 ```
-X-Ashat-Key: <lane-specific-key>
+
+The key is generated/stored in the protected production file:
+
+```text
+/home/opc/Projects/AshatNueralHost/server-config.json
 ```
 
-Keys are stored as Hugging Face Space Secrets:
+That file is ignored by Git and protected as `root:opc` mode `640`. The
+repository template `server-config.example.json` contains only a placeholder
+for local testing. Never commit a real key or place it in a public dashboard.
+Key comparison uses `hmac.compare_digest()`.
 
-| Secret | Lane |
-|---|---|
-| `ASHAT_BRAINSTEM_KEY` | BrainStem |
-| `ASHAT_ADMIN_KEY` | Admin/benchmark |
-
-Key comparison uses `hmac.compare_digest()` (constant-time).
-
----
-
-## Error Codes
+## Error codes
 
 | HTTP Code | Error Code | Description |
 |---|---|---|
@@ -173,6 +85,7 @@ Key comparison uses `hmac.compare_digest()` (constant-time).
 | 503 | `inference_timeout` | Inference timed out |
 
 All errors return:
+
 ```json
 {
   "error": {

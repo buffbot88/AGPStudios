@@ -1,6 +1,6 @@
 """CompletionClient — byte-for-byte interaction with the llama-server HTTP API.
 
-Knows nothing about subprocesses, Hugging Face, or metrics; talks HTTP only.
+Knows nothing about subprocesses or metrics; talks HTTP to the local backend only.
 Translates server non-200 / malformed bodies into typed :mod:`run_errors`
 exceptions; never bubbles a raw ``requests.RequestException``.
 """

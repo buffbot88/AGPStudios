@@ -1,7 +1,7 @@
 """Strict lane resolver — replaces substring-sniff routing.
 
 Single source of truth for "given a request, which lane does this go to?"
-Both adapters (Gradio route + HTTP ``model`` field) call into this function.
+The HTTP adapter calls into this function.
 With only one lane (BrainStem), every valid request resolves to it.
 Unknown names raise :class:`InvalidRequestError`.
 """
