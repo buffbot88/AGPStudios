@@ -28,7 +28,6 @@ class TestDashboardRender(unittest.TestCase):
 
         for marker in (
             "Ashat Neural Network · BrainStem Telemetry",
-            "BrainStem <span>Inference</span>",
             'id="status"',
             'id="brainstem"',
             'id="chart"',
@@ -36,6 +35,11 @@ class TestDashboardRender(unittest.TestCase):
             "/api/dashboard_timeseries",
             "setInterval(tick, REFRESH_MS)",
             "ASHAT",
+            "Hub",
+            "v5.8",
+            "agpstudios.org",
+            "Community",
+            "Documentation",
         ):
             with self.subTest(marker=marker):
                 self.assertIn(marker, html)
