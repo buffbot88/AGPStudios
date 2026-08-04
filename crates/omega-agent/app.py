@@ -656,8 +656,9 @@ _chat_completions_handler = _make_http_chat_completions()
 
 app = FastAPI(title="AshatOS Neural Host")
 
-# Serve images directory for dashboard logos
-app.mount("/images", StaticFiles(directory="images"), name="images")
+# Serve images directory for dashboard logos (use absolute path)
+_IMAGES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "images")
+app.mount("/images", StaticFiles(directory=_IMAGES_DIR), name="images")
 
 
 @app.get("/api/public_status")

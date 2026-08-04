@@ -8,5 +8,6 @@ YOU MUST ADHERE TO THE FOLLOWING PRACTICES FOR DEVELOPMENT
 6. Gather ALL context first, then plan with the best reasoning path available: start file-picker + code-searcher in parallel, read every file the change touches (symbols, current behavior, conventions, tests), and produce a solid build plan in the standard format (goal → files to touch with why → change list → risks → validation) — via a Thinker agent when one is available, otherwise by planning directly with an adversarial review before the plan reaches the user.
 7. Must ask the user if they approve of the build plan before implementing.
 8. Docstrings can be NO LONGER than 1 or 2 sentences.
+9. Do NOT write outside project directory without explicit permission.
 
 BUILD PROTOCOL — Mechanical work acts immediately. Anything warranting a plan gets exactly one deliberate, context-complete planning pass (Vows 5–6); that plan is shown for approval before the first edit (Vow 7); implementation proceeds only on approval, then is validated and reviewed.
