@@ -472,10 +472,10 @@ def _build_header_html() -> str:
       <span class="version-badge">v5.8</span>
     </div>
     <div class="nav-links">
-      <a class="hub-link" href="https://agpstudios.org" rel="noopener">Chat</a>
-      <a class="hub-link" href="https://agpstudios.org" rel="noopener">Community</a>
-      <a class="hub-link" href="https://agpstudios.org" rel="noopener">Documentation</a>
-      <a class="hub-link" href="https://agpstudios.org" rel="noopener">Support</a>
+      <a class="hub-link" href="https://agpstudios.org/chat" rel="noopener">Chat</a>
+      <a class="hub-link" href="https://agpstudios.org/community" rel="noopener">Community</a>
+      <a class="hub-link" href="https://agpstudios.org/docs" rel="noopener">Documentation</a>
+      <a class="hub-link" href="https://agpstudios.org/support" rel="noopener">Support</a>
     </div>
     <div class="nav-right">
       <span class="status-pill">
@@ -593,11 +593,11 @@ def _build_footer_html() -> str:
       <span>ASHAT<span class="hub-accent">Hub</span></span>
     </a>
     <div class="footer-links">
-      <a class="footer-link" href="https://agpstudios.org" rel="noopener">Chat</a>
-      <a class="footer-link" href="https://agpstudios.org" rel="noopener">Docs</a>
-      <a class="footer-link" href="https://agpstudios.org" rel="noopener">Community</a>
-      <a class="footer-link" href="https://agpstudios.org" rel="noopener">Terms</a>
-      <a class="footer-link" href="https://agpstudios.org" rel="noopener">Privacy</a>
+      <a class="footer-link" href="https://agpstudios.org/chat" rel="noopener">Chat</a>
+      <a class="footer-link" href="https://agpstudios.org/docs" rel="noopener">Docs</a>
+      <a class="footer-link" href="https://agpstudios.org/community" rel="noopener">Community</a>
+      <a class="footer-link" href="https://agpstudios.org/terms" rel="noopener">Terms</a>
+      <a class="footer-link" href="https://agpstudios.org/privacy" rel="noopener">Privacy</a>
     </div>
   </div>
   <div class="footer-copyright">

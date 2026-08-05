@@ -27,7 +27,6 @@ Key code locations:
 | Install | `pip install -r requirements.txt` |
 | Test | `python -m unittest discover tests -v` |
 | Run locally | `python -m uvicorn app:app --host 127.0.0.1 --port 8000` |
-| Docker build | `docker build -t ashatos-host .` |
 
 ## Architecture & Data Flow
 

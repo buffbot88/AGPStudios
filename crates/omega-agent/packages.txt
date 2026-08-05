@@ -1,5 +1,0 @@
-build-essential
-cmake
-git
-curl
-ca-certificates
