@@ -1,4 +1,0 @@
-fastapi>=0.115.0
-uvicorn>=0.34.0
-requests>=2.31.0
-# Oracle deployment uses FastAPI directly; no platform-specific runtime is required.

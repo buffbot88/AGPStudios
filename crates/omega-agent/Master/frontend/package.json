@@ -1,0 +1,21 @@
+{
+  "name": "ashat-neural-host-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Omega public telemetry canvas",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "phaser": "^3.90.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  }
+}
