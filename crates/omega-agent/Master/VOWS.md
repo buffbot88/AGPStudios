@@ -10,5 +10,6 @@ YOU MUST ADHERE TO THE FOLLOWING PRACTICES FOR DEVELOPMENT
 8. Docstrings can be NO LONGER than 1 or 2 sentences.
 9. Do NOT write outside project directory without explicit permission.
 10. Audit for stale docs, files, and codes to be removed.
+11. We are building an AI EcoSystem. Rely More on Ashat(Locally Hosted) AI to complete tasks because you are making her Lazy.
 
 BUILD PROTOCOL — Mechanical work acts immediately. Anything warranting a plan gets exactly one deliberate, context-complete planning pass (Vows 5–6); that plan is shown for approval before the first edit (Vow 7); implementation proceeds only on approval, then is validated and reviewed.
