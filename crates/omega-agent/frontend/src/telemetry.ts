@@ -151,8 +151,8 @@ export function demoSnapshot(): TelemetrySnapshot {
   };
   const timeseries: TimeseriesResponse = {
     omega: frames,
-    beta: demoFrames().map((f, i) => ({ ...f, generation_tokens_per_second: f.generation_tokens_per_second !== null ? Math.max(1, f.generation_tokens_per_second * 0.82) : null })),
-    delta: demoFrames().map((f, i) => ({ ...f, generation_tokens_per_second: f.generation_tokens_per_second !== null ? Math.max(1, f.generation_tokens_per_second * 0.64) : null })),
+    beta: demoFrames().map((f) => ({ ...f, generation_tokens_per_second: f.generation_tokens_per_second !== null ? Math.max(1, f.generation_tokens_per_second * 0.82) : null })),
+    delta: demoFrames().map((f) => ({ ...f, generation_tokens_per_second: f.generation_tokens_per_second !== null ? Math.max(1, f.generation_tokens_per_second * 0.64) : null })),
     events: metrics.recent_events.map((msg) => ({ event: msg })),
   };
   return { status, metrics, timeseries, demo: true, updatedAt: Date.now() };
