@@ -99,3 +99,40 @@ Admin auth: the master now runs with a **dedicated admin key** — set via
 regenerate with `openssl rand -hex 32`). The shared `ASHAT_KEY` no longer
 triggers deploys (returns 401). Until a dedicated key is configured, the
 endpoint falls back to the shared `ASHAT_KEY`.
+
+## GitHub sync (buffbot88/ashatnueralhost)
+
+The master is a git repo (branch `main`) with a **verified bidirectional sync**
+that never blindly pulls: every operation fetches, computes the exact
+divergence (direction + commit list + changed-file manifests), checks that no
+secrets are tracked and the `.gitignore` rules are effective, and only then
+applies.
+
+```bash
+./scripts/github_sync.sh status          # direction: local_ahead | remote_ahead | diverged | in_sync
+./scripts/github_sync.sh pull            # ff-only merge + fmt/test/build (auto-rollback) + propagate to peers
+./scripts/github_sync.sh push            # push local commits (needs the deploy key)
+./scripts/github_sync.sh pull --restart-service   # also restart the master's own unit
+```
+
+Same via API (admin key):
+
+```bash
+curl -X POST http://<master>:8080/api/admin/github_sync -H "X-Ashat-Key: <admin-key>" \
+  -d '{"mode":"status"}'    # or "pull" / "push"
+```
+
+**Secrets are never pushed**: `server-config.json`, `oraclehost_id_rsa`,
+`models/`, `target/`, `logs/`, `workspaces/` are gitignored + guard-checked
+before every stage; `server-config.example.json` is the tracked template.
+
+⚠ **The legacy `ASHAT_KEY` is still in the public repo's history** (committed
+before this tooling). Per your choice it was kept live; anyone who cloned the
+repo can authenticate with it. Rotate when convenient: change `ASHAT_KEY` in
+`server-config.json` + the slaves' configs + the `row_chain` `api_key`s, then
+restart all three hosts.
+
+**Deploy key (push):** the master generated `~/.ssh/ashat_github` — add
+`~/.ssh/ashat_github.pub` as a repo deploy key with **write access** (Settings
+→ Deploy keys). Until then, pushes from Omega fail with a clear error and
+`status` shows `local_ahead`.

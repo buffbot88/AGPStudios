@@ -318,7 +318,8 @@ test -d dist
 | Feature | Where |
 | ------- | ----- |
 | Rate limiting | Tower middleware layer in `crates/omega-server/src/main.rs` **before** `src/auth.rs`. |
-| Update propagation | `POST /api/admin/update` handler in `crates/omega-server/src/handlers.rs::admin_update` (registered in `main.rs` behind `auth`); runs `scripts/seed_slave.sh` against every enabled `update.peers` entry — sequential, mutex-serialized, per-peer budget, JSON report with output tail. Deploy rollback lives in the script (`.previous`). GitHub pull/build still deferred. |
+| Update propagation | `POST /api/admin/update` handler in `crates/omega-server/src/handlers.rs::admin_update` (registered in `main.rs` behind `auth`); runs `scripts/seed_slave.sh` against every enabled `update.peers` entry — sequential, mutex-serialized, per-peer budget, JSON report with output tail. Deploy rollback lives in the script (`.previous`). |
+| GitHub self-updater | `scripts/github_sync.sh` (init/status/pull/push; direction-aware divergence; `--json`/`--yes`; secret guard + `assert_ignore_effective`) driven by `POST /api/admin/github_sync` (admin-key gated, mode-validated). Pull = ff-only merge → fmt/test/build with `@{1}` rollback → propagate to `update.peers`; push = deploy key `~/.ssh/ashat_github` (HTTPS fetch / SSH pushurl). |
 | Ashat Hub / Chat Studio status channel | `alpha_status.rs` in `crates/omega-server`, gated by `hub.enabled` (default `false`). Becomes the single point of incoming/outgoing traffic for the coding-agent ecosystem; also seeds Beta / Delta peers with updates. `countdown` payload already attached. |
 | MySQL skills DB → workspace seeding | `workspace.rs` in `crates/omega-common`; the Phase 6 `skill` tool is implemented but gated — set `skills_db.enabled: true` with real connection details and build with `--features omega-core/skills-db` once the schema/info is provided. Deeper workspace seeding lands with it. |
 

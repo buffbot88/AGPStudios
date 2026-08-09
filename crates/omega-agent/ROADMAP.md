@@ -39,7 +39,7 @@ A universal-source Rust + Axum server with an always-on **LFM2.5-VL-450M intent 
 | **6** | Advanced Coding Agent with tools — `Intent::Code` branch + `tool_loop.rs`: workspace-scoped tools (list/read/write/run/validate/skill), Script Validation Engine, `--mlock` tuning, hub completion countdown. | **done** |
 | **7** | Ashat Hub / Chat Studio integration — `alpha_status.rs` reports the master status snapshot to the Hub (single point of incoming/outgoing traffic for the ecosystem); seeds Beta / Delta peers with updates. | deferred (seam reserved; `hub.enabled` default `false`) |
 | **8** | MySQL skills DB — the router orchestrator seeds coding-agent workspaces from the Ashat skills base (`workspace.rs`, `workspaces/agent-{port}/`). The `skill` tool exists (Phase 6): enable `skills_db.enabled: true` and build with `--features omega-core/skills-db` once connection details land. | deferred (seam reserved) |
-| **9** | GitHub self-updater — Ashat optimizes and updates her server from GitHub. | deferred (hook reserved) |
+| **9** | GitHub self-updater — Ashat optimizes and updates her server from GitHub. | **done** — `scripts/github_sync.sh` (init/status/pull/push) + `POST /api/admin/github_sync`; direction-aware (local_ahead → push, remote_ahead → verified ff-only pull + rebuild + auto-propagate to peers); baseline committed on `buffbot88/ashatnueralhost`; push pending deploy key |
 
 ## Modular workspace (v2)
 
@@ -58,7 +58,7 @@ migration (v2)" for the locked decisions.
 | Feature | Where it plugs in |
 | ------- | ----------------- |
 | Rate limiting | Tower middleware layer in `src/main.rs` **before** `src/auth.rs`. |
-| Update propagation | `POST /api/admin/update` in `crates/omega-server/src/handlers.rs::admin_update`, gated by `auth`; runs `scripts/seed_slave.sh` per enabled `update.peers` (serialized; per-peer timeout + rollback handled by the script). GitHub pull/build still deferred. |
+| GitHub self-updater | `scripts/github_sync.sh` (init/status/pull/push, `--json`/`--yes`; secret guard + `.gitignore`-effectiveness assertion) driven by `POST /api/admin/github_sync` in `handlers.rs` (admin-key gated; mode-validated; pull takes the update lock). Pull = fetch → direction check → ff-only merge → fmt+test+build with `@{1}` rollback → propagate to enabled `update.peers` via `seed_slave.sh`; `service_restart_required` returned (self-restart via `--restart-service`). Push uses the `~/.ssh/ashat_github` deploy key. |
 | Advanced Coding Agent with tools | New branch in `src/orchestrator.rs` returning `Intent::Code`; `src/proxy.rs` routes to a separate `src/tool_loop.rs` module (file created later, not in Phase 1). |
 
 ## Constraints / known trade-offs
@@ -69,7 +69,7 @@ migration (v2)" for the locked decisions.
 - **Hard cap.** Spec ceiling is 3 concurrent 1.2B instances. The 4th concurrent caller queues, not rejects.
 - **Baseline-resilience.** Baseline router respawn is critical-path: Omega's `8080` does not bind until the baseline reports `/health` ok. Spec-intent: never serve traffic if orchestrator is down.
 - **Universal source.** `server-config.json` holds no host paths. Models auto-discover from `models/*.gguf`. `llama-server` is configurable (config → env → PATH).
-- **No git.** This dev tree is not a git repo. `ROADMAP.md` and `BUILDPLAN.md` are intended to travel to GitHub later.
+- **Git.** The master is a git repo (branch `main`, origin `buffbot88/ashatnueralhost`) since 2026-08-09. `server-config.json`, `oraclehost_id_rsa`, `models/`, `target/`, `logs/`, `workspaces/` are ignored/untracked; `server-config.example.json` is the tracked template. The legacy `ASHAT_KEY` copy in the public repo history remains live until rotated (see Beta_Delta.md).
 - **`ASHAT_KEY` continuity.** Carried over verbatim from the archived project so existing clients remain keyed without re-issuance.
 - **`VOWS.md` integrity.** Protected by Vow 9 of `VOWS.md` itself. This build does not modify, rename, or delete `VOWS.md` at any point.
 
