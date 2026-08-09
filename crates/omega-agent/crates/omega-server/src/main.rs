@@ -181,6 +181,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 auth::require_admin_key,
             )),
         )
+        .route(
+            "/api/admin/github_sync",
+            post(handlers::github_sync).layer(middleware::from_fn_with_state(
+                Arc::clone(&state),
+                auth::require_admin_key,
+            )),
+        )
         .with_state(state.clone());
 
     let listener = tokio::net::TcpListener::bind(&cfg.bind).await?;

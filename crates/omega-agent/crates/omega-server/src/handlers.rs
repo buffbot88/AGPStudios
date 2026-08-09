@@ -297,6 +297,148 @@ async fn run_seed_script(
     }
 }
 
+/// `POST /api/admin/github_sync` — verified bidirectional GitHub sync.
+/// Body: `{"mode": "status"|"pull"|"push"}` (default `status`). Runs
+/// `scripts/github_sync.sh <mode> --json --yes` and returns its JSON report
+/// (direction, ahead/behind, commit + file manifests, tracked-secret check).
+/// Admin-key gated. `pull` takes the update lock: its propagate step seeds
+/// peers via `seed_slave.sh`, same as `/api/admin/update`.
+pub async fn github_sync(State(state): State<Arc<AppState>>, request: Request<Body>) -> Response {
+    let raw = match axum::body::to_bytes(request.into_body(), 16 * 1024).await {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": {"message": "Invalid JSON body", "type": "invalid_request"}})),
+            )
+                .into_response();
+        }
+    };
+    let mode = serde_json::from_slice::<Value>(&raw)
+        .ok()
+        .and_then(|v| v.get("mode").and_then(|m| m.as_str()).map(str::to_owned))
+        .unwrap_or_else(|| "status".to_owned());
+    let mode = match mode.as_str() {
+        "status" => "status",
+        "pull" => "pull",
+        "push" => "push",
+        other => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": {"message": format!("unknown mode: {other}"), "type": "invalid_request"}})),
+            )
+                .into_response();
+        }
+    };
+
+    let script = state
+        .config
+        .project_root
+        .join("scripts")
+        .join("github_sync.sh");
+    let budget = Duration::from_secs(match mode {
+        "status" => 90,
+        "pull" => 1500,
+        _ => 180,
+    });
+
+    // pull propagates to peers via seed_slave.sh — serialize with the admin
+    // update endpoint so a peer never gets two seeds at once.
+    let _guard = if mode == "pull" {
+        Some(state.update_lock.lock().await)
+    } else {
+        None
+    };
+
+    let started = Instant::now();
+    let outcome = run_script_capture(
+        &script,
+        &[mode, "--json", "--yes"],
+        &state.config.project_root,
+        budget,
+    )
+    .await;
+    let elapsed = started.elapsed().as_secs_f64();
+
+    let report: Value = serde_json::from_str(&outcome.stdout).unwrap_or_else(|_| json!({
+        "ok": outcome.success,
+        "message": format!("script produced no JSON report: {}", truncate_tail(&outcome.stderr, 300)),
+    }));
+
+    let mut combined = outcome.stdout.clone();
+    if !outcome.stderr.trim().is_empty() {
+        combined.push_str(&format!("\n[stderr]\n{}", &outcome.stderr));
+    }
+
+    Json(json!({
+        "mode": mode,
+        "status": if outcome.success { "ok" } else { "failed" },
+        "elapsed_seconds": elapsed,
+        "report": report,
+        "output_tail": truncate_tail(&combined, 4096),
+    }))
+    .into_response()
+}
+
+/// Run an arbitrary script with args, capturing stdout/stderr separately with
+/// a kill-on-timeout budget.
+struct ScriptOutcome {
+    success: bool,
+    stdout: String,
+    stderr: String,
+}
+
+async fn run_script_capture(
+    script: &Path,
+    args: &[&str],
+    cwd: &Path,
+    budget: Duration,
+) -> ScriptOutcome {
+    let child = tokio::process::Command::new(script)
+        .args(args)
+        .current_dir(cwd)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn();
+    let child = match child {
+        Ok(c) => c,
+        Err(err) => {
+            return ScriptOutcome {
+                success: false,
+                stdout: String::new(),
+                stderr: format!("failed to spawn {script:?}: {err}"),
+            }
+        }
+    };
+    let output = match tokio::time::timeout(budget, child.wait_with_output()).await {
+        Ok(Ok(o)) => o,
+        Ok(Err(err)) => {
+            return ScriptOutcome {
+                success: false,
+                stdout: String::new(),
+                stderr: format!("script error: {err}"),
+            }
+        }
+        Err(_) => {
+            return ScriptOutcome {
+                success: false,
+                stdout: String::new(),
+                stderr: format!(
+                    "script exceeded the {}s budget; child killed",
+                    budget.as_secs()
+                ),
+            }
+        }
+    };
+    ScriptOutcome {
+        success: output.status.success(),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
+}
+
 /// Keep the last `max` characters of a script run for the report.
 fn truncate_tail(s: &str, max: usize) -> String {
     if s.chars().count() <= max {

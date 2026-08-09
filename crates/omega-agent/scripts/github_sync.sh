@@ -82,6 +82,22 @@ guard_secrets() {
     fi
 }
 
+# Belt-and-braces: verify .gitignore rules are actually effective for the
+# protected paths before anything is staged. This catches a corrupted or
+# clobbered .gitignore (e.g. inline comments, which git treats literally).
+assert_ignore_effective() {
+    local probe fail=0
+    for probe in server-config.json oraclehost_id_rsa \
+        models/models.sentinel target/sentinel \
+        logs/sentinel workspaces/sentinel; do
+        if ! git check-ignore -q "$probe" 2>/dev/null; then
+            printf 'REFUSING: ignore rule NOT effective for %s — .gitignore is broken or missing.\n' "$probe" >&2
+            fail=1
+        fi
+    done
+    return "$fail"
+}
+
 tracked_dirty() {
     # Non-empty if tracked files have uncommitted changes (ignores untracked/
     # ignored files like server-config.json, models/, target/).
@@ -100,7 +116,7 @@ def lines(k):
 num = lambda k: int(get(k)) if str(get(k)).lstrip("-").isdigit() else 0
 report = {
     "command": get("COMMAND"),
-    "ok": get("OK") == "1",
+    "ok": get("OK") in ("1", "ok", "true"),
     "repo": get("REPO"),
     "branch": get("BRANCH"),
     "direction": get("DIRECTION"),
@@ -144,12 +160,37 @@ set_common_report() {
     export GS_TRACKED_SECRETS="$(git ls-files | grep -E "$PROTECTED_RE" || true)"
 }
 
+finish_overlay_commit() {
+    # add first, *then* un-track: `git add -A` re-stages HEAD-tracked files
+    # even when ignored, so the rm must come after the add to win.
+    assert_ignore_effective || die "aborted: .gitignore is not effective"
+    git add -A
+    git rm -r --cached --ignore-unmatch server-config.json logs workspaces \
+        oraclehost_id_rsa models target 2>/dev/null || true
+    guard_secrets || die "aborted: protected file would be staged"
+
+    if git diff --cached --quiet; then
+        log "no changes vs origin/$BRANCH — nothing to commit"
+    else
+        git commit -q -m "Omega master v6.2 — weighted row-chain routing, admin-key split, GitHub sync tooling"
+        log "baseline committed: $(git rev-parse --short HEAD)"
+    fi
+}
+
 cmd_init() {
     if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         git remote get-url origin >/dev/null 2>&1 || git remote add origin "$HTTPS_URL"
         git remote set-url --push origin "$SSH_URL"
         git fetch origin "$BRANCH" --quiet 2>/dev/null || true
-        log "already a git repo — origin ensured (fetch=$HTTPS_URL, push=$SSH_URL)"
+        # Resume an interrupted baseline: HEAD still parked on origin/$BRANCH
+        # with an uncommitted local overlay → apply the overlay commit now.
+        if [ "$(git rev-parse HEAD 2>/dev/null || true)" = "$(git rev-parse "origin/$BRANCH" 2>/dev/null || echo none)" ] \
+           && [ -n "$(tracked_dirty)" ]; then
+            log "resuming interrupted baseline (HEAD == origin/$BRANCH with uncommitted changes)"
+            finish_overlay_commit
+        else
+            log "already a git repo — origin ensured (fetch=$HTTPS_URL, push=$SSH_URL)"
+        fi
         return 0
     fi
 
@@ -175,7 +216,7 @@ cmd_init() {
     if git rev-parse --verify "origin/$BRANCH" >/dev/null 2>&1; then
         local tmp
         tmp="$(mktemp -d "$(dirname "$REPO_ROOT")/.gs_tmp.XXXXXX")"
-        trap 'if [ -d "$tmp" ]; then rsync -a --exclude .git "$tmp/" "$REPO_ROOT/"; fi; rm -rf "$tmp"' EXIT
+        trap 'if [ -d "$tmp" ]; then rsync -a --exclude .git --exclude origin-paths.txt "$tmp/" "$REPO_ROOT/"; fi; rm -rf "$tmp"' EXIT
 
         log "moving only origin-tracked files aside (models/, target/, keys stay put)"
         git ls-tree -r --name-only "origin/$BRANCH" > "$tmp/origin-paths.txt"
@@ -198,23 +239,7 @@ cmd_init() {
         log "no remote base found — starting fresh branch $BRANCH"
     fi
 
-    # Un-track runtime/secrets that the remote happened to have committed.
-    git rm -r --cached --ignore-unmatch server-config.json logs workspaces \
-        oraclehost_id_rsa 2>/dev/null || true
-
-    # add first, *then* un-track: `git add -A` re-stages HEAD-tracked files
-    # even when ignored, so the rm must come after the add to win.
-    git add -A
-    git rm -r --cached --ignore-unmatch server-config.json logs workspaces \
-        oraclehost_id_rsa 2>/dev/null || true
-    guard_secrets || die "init aborted: protected file would be staged"
-
-    if git diff --cached --quiet; then
-        log "no changes vs origin/$BRANCH — nothing to commit"
-    else
-        git commit -q -m "Omega master v6.2 — weighted row-chain routing, admin-key split, GitHub sync tooling"
-        log "baseline committed: $(git rev-parse --short HEAD)"
-    fi
+    finish_overlay_commit
 
     log "init complete. Next:"
     log "  1) add ~/.ssh/ashat_github.pub as a deploy key (write access) on $HTTPS_URL"
@@ -252,8 +277,8 @@ cmd_status() {
         printf '%s\n' "$in_files" >&2
     fi
     if [ "$JSON" = 1 ]; then
-        export GS_MESSAGE="ok" GS_OK=1
-        emit_json ok
+        export GS_MESSAGE="ok"
+        emit_json 1
     fi
 }
 
@@ -265,7 +290,7 @@ cmd_pull() {
 
     if [ "$BEHIND" -eq 0 ]; then
         log "already up to date with origin/$BRANCH"
-        [ "$JSON" = 1 ] && { export GS_MESSAGE="already up to date" GS_OK=1 GS_PEERS=""; emit_json ok; }
+        [ "$JSON" = 1 ] && { export GS_MESSAGE="already up to date" GS_PEERS=""; emit_json 1; }
         return 0
     fi
     if [ "$AHEAD" -gt 0 ]; then
@@ -286,6 +311,7 @@ cmd_pull() {
     dirty="$(tracked_dirty)"
     [ -n "$dirty" ] && die "working tree has uncommitted tracked changes: $(printf '%s' "$dirty" | head -1) — commit or stash first"
     guard_secrets || die "pull aborted: protected file is tracked"
+    assert_ignore_effective || die "pull aborted: .gitignore is not effective"
 
     confirm
 
@@ -337,17 +363,20 @@ for p in d.get("update", {}).get("peers", []):
         done <<< "$peers"
         log "propagation: $peer_results"
     fi
-    export GS_PEERS="$peer_results" GS_RESTART_REQUIRED=1
-    export GS_MESSAGE="merged+verified+rebuilt (peers: ${peer_results:-none})"
-
+    local restart_required=1
     if [ "$RESTART" = 1 ]; then
         log "restarting ashat-neural-host.service"
-        sudo systemctl restart ashat-neural-host.service || log "restart failed — run manually"
+        if sudo systemctl restart ashat-neural-host.service; then
+            restart_required=0
+        else
+            log "restart failed — run manually"
+        fi
     fi
+    export GS_PEERS="$peer_results" GS_RESTART_REQUIRED=$restart_required
+    export GS_MESSAGE="merged+verified+rebuilt (peers: ${peer_results:-none})"
 
     if [ "$JSON" = 1 ]; then
-        export GS_OK=1
-        emit_json ok
+        emit_json 1
     fi
 }
 
@@ -360,7 +389,7 @@ cmd_push() {
 
     if [ "$AHEAD" -eq 0 ]; then
         log "nothing to push — in sync with origin/$BRANCH"
-        [ "$JSON" = 1 ] && { export GS_MESSAGE="in sync" GS_OK=1; emit_json ok; }
+        [ "$JSON" = 1 ] && { export GS_MESSAGE="in sync"; emit_json 1; }
         return 0
     fi
     if [ "$BEHIND" -gt 0 ]; then
@@ -381,6 +410,7 @@ cmd_push() {
     dirty="$(tracked_dirty)"
     [ -n "$dirty" ] && die "working tree has uncommitted tracked changes: $(printf '%s' "$dirty" | head -1) — commit or stash first"
     guard_secrets || die "push aborted: protected file is tracked"
+    assert_ignore_effective || die "push aborted: .gitignore is not effective"
 
     confirm
 
@@ -388,7 +418,7 @@ cmd_push() {
     git push origin "$BRANCH"
 
     log "pushed. GitHub is now in sync with Omega."
-    [ "$JSON" = 1 ] && { export GS_MESSAGE="pushed $AHEAD commit(s)" GS_OK=1; emit_json ok; }
+    [ "$JSON" = 1 ] && { export GS_MESSAGE="pushed $AHEAD commit(s)"; emit_json 1; }
 }
 
 for arg in "$@"; do
