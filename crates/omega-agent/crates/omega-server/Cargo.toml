@@ -14,7 +14,9 @@ omega-common = { path = "../omega-common" }
 omega-core = { path = "../omega-core" }
 axum = "0.7"
 chrono = { workspace = true }
+futures = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

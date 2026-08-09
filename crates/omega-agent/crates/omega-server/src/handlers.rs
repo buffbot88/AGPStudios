@@ -10,10 +10,13 @@ use axum::{
 use chrono::Utc;
 use serde_json::{json, Value};
 use std::{
+    collections::HashMap,
     path::Path,
     sync::Arc,
     time::{Duration, Instant},
 };
+
+use crate::peer_telemetry::{PeerSnapshot, PeerTelemetry};
 
 use omega_common::config::{AppConfig, UpdatePeer};
 use omega_common::metrics::MetricsStore;
@@ -31,6 +34,11 @@ pub struct AppState {
     pub config: AppConfig,
     pub started: Instant,
     pub metrics: Arc<MetricsStore>,
+    /// Cached telemetry from enabled row-chain backends (Beta, Delta).
+    /// Background-polled by `PeerTelemetry`; handlers merge it into
+    /// `public_status` / `public_metrics` / `dashboard_timeseries` so the
+    /// frontend shows real slave lanes instead of offline placeholders.
+    pub peer_telemetry: Arc<PeerTelemetry>,
     pub router: RowRouter,
     pub orchestrator: Orchestrator,
     pub coding_agent: CodingAgentProxy,
@@ -97,22 +105,30 @@ pub(crate) async fn status_snapshot(state: &Arc<AppState>) -> PublicStatus {
     let orchestrator_snap = state.orchestrator_pool.snapshot().await;
     let coding_snap = state.coding_agent_pool.snapshot().await;
     let metrics = state.metrics.summary(state.started.elapsed().as_secs_f64());
+    let peer_snap = state.peer_telemetry.snapshot().await;
     let lane_omega = if state.orchestrator_pool.baseline_alive().await {
-        let summary = &metrics.summaries.omega;
+        let mut summary = metrics.summaries.omega.clone();
         // The Omega lane in 3-lane shape reflects the Coding Agent's 1.2B
         // model (which actually serves requests routed through the row
         // chain), not the intent router's GGUF.
-        LaneStatus {
-            label: "Omega".into(),
-            model: state.coding_agent_pool.spec.model.display().to_string(),
-            ctx: state.coding_agent_pool.spec.ctx,
-            ..summary.clone()
+        summary.model = state.coding_agent_pool.spec.model.display().to_string();
+        summary.ctx = state.coding_agent_pool.spec.ctx;
+        // Live baseline but no requests yet: the metrics placeholder reads
+        // `offline` — surface reachability instead.
+        if summary.total_requests == 0 {
+            summary.lane_state = "online".to_owned();
+            summary.ready = true;
+            summary.available = true;
         }
+        summary
     } else {
         LaneStatus::placeholder("Omega")
     };
-    let lane_beta = LaneStatus::placeholder("Beta");
-    let lane_delta = LaneStatus::placeholder("Delta");
+    // Beta / Delta come from the peers' own local lanes (each slave's
+    // `lanes.omega`), relabeled — real data once the collector has polled
+    // them, offline placeholders otherwise.
+    let lane_beta = peer_lane(&peer_snap, "beta", "Beta");
+    let lane_delta = peer_lane(&peer_snap, "delta", "Delta");
     let all_ready = orchestrator_snap.baseline_alive && coding_snap.ports_total > 0;
     let coding_agent_pool_snapshot = PoolSnapshot {
         ports_total: coding_snap.ports_total,
@@ -155,21 +171,99 @@ pub(crate) async fn status_snapshot(state: &Arc<AppState>) -> PublicStatus {
 }
 
 pub async fn public_metrics(State(state): State<Arc<AppState>>) -> Json<Value> {
-    Json(
+    let peers = state.peer_telemetry.snapshot().await;
+    let mut value =
         serde_json::to_value(&state.metrics.summary(state.started.elapsed().as_secs_f64()))
-            .unwrap_or_else(|_| json!({})),
-    )
+            .unwrap_or_else(|_| json!({}));
+    merge_peer_metrics(&mut value, &peers);
+    Json(value)
 }
 
 pub async fn dashboard_timeseries(State(state): State<Arc<AppState>>) -> Json<Value> {
-    Json(
-        serde_json::to_value(
-            &state
-                .metrics
-                .dashboard_timeseries(state.started.elapsed().as_secs_f64()),
-        )
-        .unwrap_or_else(|_| json!({})),
+    let peers = state.peer_telemetry.snapshot().await;
+    let mut value = serde_json::to_value(
+        &state
+            .metrics
+            .dashboard_timeseries(state.started.elapsed().as_secs_f64()),
     )
+    .unwrap_or_else(|_| json!({}));
+    // Overlay each peer's local-lane frames under its lane key.
+    for (id, key) in [("beta", "beta"), ("delta", "delta")] {
+        if let Some(peer) = peers.get(id).and_then(|snap| snap.timeseries.as_ref()) {
+            if let Ok(frames) = serde_json::to_value(&peer.omega) {
+                value[key] = frames;
+            }
+        }
+    }
+    // Peer events (tagged with the lane id) first, then the master's own.
+    let mut merged: Vec<Value> = Vec::new();
+    for (id, peer) in &peers {
+        if let Some(ts) = peer.timeseries.as_ref() {
+            for event in &ts.events {
+                merged.push(json!({ "event": format!("[{id}] {}", event.event) }));
+            }
+        }
+    }
+    if let Some(events) = value.get_mut("events").and_then(|e| e.as_array_mut()) {
+        merged.extend(events.iter().cloned());
+        *events = merged;
+    }
+    Json(value)
+}
+
+/// Merge each peer's local-lane summary + recent events into the master's
+/// `/api/public_metrics` payload under the matching lane key, relabeled.
+fn merge_peer_metrics(value: &mut Value, peers: &HashMap<String, PeerSnapshot>) {
+    for (id, label) in [("beta", "Beta"), ("delta", "Delta")] {
+        let Some(peer) = peers.get(id).and_then(|snap| snap.metrics.as_ref()) else {
+            continue;
+        };
+        let mut lane = serde_json::to_value(&peer.summaries.omega).unwrap_or_else(|_| json!({}));
+        if let Some(obj) = lane.as_object_mut() {
+            obj.insert("label".into(), json!(label));
+        }
+        if let Some(obj) = value.get_mut("summaries").and_then(|s| s.as_object_mut()) {
+            obj.insert(id.into(), lane);
+        }
+    }
+    let mut merged: Vec<Value> = Vec::new();
+    for (id, peer) in peers {
+        if let Some(metrics) = peer.metrics.as_ref() {
+            for event in metrics.recent_events.iter().rev() {
+                merged.push(json!(format!("[{id}] {event}")));
+            }
+        }
+    }
+    if let Some(events) = value
+        .get_mut("recent_events")
+        .and_then(|e| e.as_array_mut())
+    {
+        merged.extend(events.iter().cloned());
+        *events = merged;
+    }
+}
+
+/// A peer's own `omega` lane (the slave's local serving lane) mapped into the
+/// master's `beta`/`delta` lane slot, relabeled. Offline placeholder when the
+/// peer is absent or unreachable.
+fn peer_lane(peers: &HashMap<String, PeerSnapshot>, id: &str, label: &str) -> LaneStatus {
+    peers
+        .get(id)
+        .and_then(|snap| snap.status.as_ref())
+        .map(|status| {
+            let mut lane = status.lanes.omega.clone();
+            lane.label = label.to_owned();
+            // The slave's own lane reads `offline` until its first request
+            // (metrics placeholder), but a reachable peer with a live
+            // baseline is genuinely online — surface that instead.
+            if lane.total_requests == 0 && status.orchestrator_pool.baseline_alive {
+                lane.lane_state = "online".to_owned();
+                lane.ready = true;
+                lane.available = true;
+            }
+            lane
+        })
+        .unwrap_or_else(|| LaneStatus::placeholder(label))
 }
 
 /// `POST /api/admin/update` — propagate the current master build to every

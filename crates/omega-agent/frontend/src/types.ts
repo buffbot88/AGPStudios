@@ -72,6 +72,9 @@ export interface TelemetryFrame {
 
 export interface TimeseriesResponse {
   omega: TelemetryFrame[];
+  /** Peer-lane frames (master only; absent on slaves / older responses). */
+  beta?: TelemetryFrame[];
+  delta?: TelemetryFrame[];
   events: Array<{ event: string }>;
 }
 

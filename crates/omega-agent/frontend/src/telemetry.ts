@@ -151,6 +151,8 @@ export function demoSnapshot(): TelemetrySnapshot {
   };
   const timeseries: TimeseriesResponse = {
     omega: frames,
+    beta: demoFrames().map((f, i) => ({ ...f, generation_tokens_per_second: f.generation_tokens_per_second !== null ? Math.max(1, f.generation_tokens_per_second * 0.82) : null })),
+    delta: demoFrames().map((f, i) => ({ ...f, generation_tokens_per_second: f.generation_tokens_per_second !== null ? Math.max(1, f.generation_tokens_per_second * 0.64) : null })),
     events: metrics.recent_events.map((msg) => ({ event: msg })),
   };
   return { status, metrics, timeseries, demo: true, updatedAt: Date.now() };
@@ -163,15 +165,15 @@ async function fetchJson<T>(path: string): Promise<T> {
 }
 
 export async function fetchSnapshot(): Promise<TelemetrySnapshot> {
-  const [status, metrics, rawTimeseries] = await Promise.all([
+  const [status, metrics, timeseries] = await Promise.all([
     fetchJson<PublicStatus>('/api/public_status'),
     fetchJson<PublicMetrics>('/api/public_metrics'),
-    fetchJson<{ omega: TelemetryFrame[]; events: Array<{ event: string }> }>('/api/dashboard_timeseries'),
+    fetchJson<TimeseriesResponse>('/api/dashboard_timeseries'),
   ]);
   return {
     status,
     metrics,
-    timeseries: rawTimeseries,
+    timeseries,
     demo: false,
     updatedAt: Date.now(),
   };
