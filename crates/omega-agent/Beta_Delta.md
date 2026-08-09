@@ -132,7 +132,8 @@ repo can authenticate with it. Rotate when convenient: change `ASHAT_KEY` in
 `server-config.json` + the slaves' configs + the `row_chain` `api_key`s, then
 restart all three hosts.
 
-**Deploy key (push):** the master generated `~/.ssh/ashat_github` — add
-`~/.ssh/ashat_github.pub` as a repo deploy key with **write access** (Settings
-→ Deploy keys). Until then, pushes from Omega fail with a clear error and
-`status` shows `local_ahead`.
+**Deploy key (push):** active since 2026-08-09 — `~/.ssh/ashat_github` is
+registered as a write-access deploy key on the repo (`ashat-omega-gh-sync`),
+and the 3-commit baseline (`d0eb527`/`b7385c6`/`00f12d1`) was pushed; master
+and GitHub are `in_sync`. Rotate the key by deleting it in repo Settings and
+re-adding a fresh `ssh-keygen` pubkey, then updating `~/.ssh/ashat_github`.
