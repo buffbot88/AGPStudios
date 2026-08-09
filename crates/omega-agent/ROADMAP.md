@@ -33,7 +33,7 @@ A universal-source Rust + Axum server with an always-on **LFM2.5-VL-450M intent 
 | ----- | ----- | ------ |
 | **1** | Omega server baseline — Orchestrator pool, Coding Agent pool, telemetry frontend, row-chain wiring (beta/delta disabled). | **done** |
 | **2** | `Beta` server (separate instance, port `8082`). Same code as Omega with role binding changed. Enables `row_chain[1]` from Omega. | **done** — seeded at `150.136.208.93:8082` via `scripts/seed_slave.sh`; cross-server routing live-tested (`lane: beta`) |
-| **3** | `Delta` server (separate instance, port `8088`). Enables full `omega → beta → delta` row chain in Omega's config. | in progress (seed pending; OCI security list open) |
+| **3** | `Delta` server (separate instance, port `8088`). Enables full `omega → beta → delta` row chain in Omega's config. | **done** — legacy delta.service retired; new slave seeded at `129.213.147.225:8088`; row_chain + update.peers enabled; dual-peer propagation + `lane: delta` routing verified |
 | **4** | Rate-limiting middleware (Tower layer before `auth`). | deferred (hook reserved) |
 | **5** | Update propagation (`POST /api/admin/update`) — runs `scripts/seed_slave.sh` against every enabled `update.peers` entry so master builds propagate to Beta/Delta automatically. | **done** — auth-gated; live-tested against Beta |
 | **6** | Advanced Coding Agent with tools — `Intent::Code` branch + `tool_loop.rs`: workspace-scoped tools (list/read/write/run/validate/skill), Script Validation Engine, `--mlock` tuning, hub completion countdown. | **done** |

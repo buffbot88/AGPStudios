@@ -6,7 +6,7 @@
 //! 3. Plain `PATH` lookup
 
 use crate::models::ResolvedModels;
-use crate::types::{BackendServer, RowChainEntry};
+use crate::types::BackendServer;
 use serde::Deserialize;
 use std::{env, path::PathBuf};
 
@@ -287,7 +287,6 @@ pub struct AppConfig {
     pub inference: InferenceSection,
     pub orchestrator_pool: OrchestratorPoolSection,
     pub coding_agent_pool: CodingAgentPoolSection,
-    pub row_chain_entries: Vec<RowChainEntry>,
     pub backends: Vec<BackendServer>,
     pub metrics_path: PathBuf,
     /// Ashat Hub integration (alpha_status.rs). `enabled: false` by default.
@@ -328,16 +327,6 @@ impl AppConfig {
             .map(PathBuf::from)
             .unwrap_or_else(|_| project_root.join(&file.metrics.persist_path));
 
-        let row_chain_entries = file
-            .row_chain
-            .iter()
-            .enumerate()
-            .map(|(i, b)| RowChainEntry {
-                position: (i + 1) as u8,
-                server_id: b.id.clone(),
-            })
-            .collect();
-
         let admin_key = env::var("ASHAT_ADMIN_KEY")
             .ok()
             .filter(|k| !k.is_empty())
@@ -354,7 +343,6 @@ impl AppConfig {
             inference: file.inference,
             orchestrator_pool: file.orchestrator_pool,
             coding_agent_pool: file.coding_agent_pool,
-            row_chain_entries,
             backends: file.row_chain,
             metrics_path,
             hub: file.hub,
@@ -475,6 +463,35 @@ mod tests {
         let json = base_json(",\n              \"admin_key\": \"admin-secret\"");
         let cfg: FileConfig = serde_json::from_str(&json).expect("parse");
         assert_eq!(cfg.admin_key.as_deref(), Some("admin-secret"));
+    }
+
+    #[test]
+    fn backend_weight_defaults_to_one() {
+        let cfg: FileConfig = serde_json::from_str(&base_json("")).expect("parse");
+        assert_eq!(cfg.row_chain.len(), 1);
+        assert_eq!(cfg.row_chain[0].weight, 1);
+    }
+
+    #[test]
+    fn backend_weight_parses_when_present() {
+        let json = r#"{
+          "ASHAT_KEY": "k",
+          "server": {"bind": "0.0.0.0:8080"},
+          "models": {"dir": "models"},
+          "inference": {"context": 4096, "timeout_seconds": 120},
+          "orchestrator_pool": {"ports_baseline": [18079]},
+          "coding_agent_pool": {"ports": [18080]},
+          "row_chain": [
+            {"id": "omega", "host": "127.0.0.1", "port": 8080, "enabled": true, "weight": 2},
+            {"id": "beta", "host": "10.0.0.2", "port": 8082, "enabled": true}
+          ],
+          "metrics": {"persist_path": "logs/metrics.jsonl"}
+        }"#;
+        let cfg: FileConfig = serde_json::from_str(json).expect("parse");
+        assert_eq!(cfg.row_chain.len(), 2);
+        assert_eq!(cfg.row_chain[0].weight, 2);
+        // Backend without a weight field keeps the serde default of 1.
+        assert_eq!(cfg.row_chain[1].weight, 1);
     }
 
     #[test]

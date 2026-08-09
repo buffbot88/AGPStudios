@@ -450,9 +450,33 @@ pub async fn chat(State(state): State<Arc<AppState>>, request: Request<Body>) ->
     // Coding Agent pool (lane = serving port); anything else (beta, delta)
     // goes through the cross-server HTTP forwarder (lane = backend.id).
     if backend.id == "omega" {
-        forward_local(&state, &parsed, stream_mode, intent_label).await
-    } else {
-        forward_cross_server(&state, &parsed, stream_mode, intent_label, &backend).await
+        return forward_local(&state, &parsed, stream_mode, intent_label).await;
+    }
+
+    // Cross-server path with one retry: a slave can die between its health
+    // probe and this forward (the TTL cache may still call it healthy). On a
+    // connection failure we mark it unhealthy so it drops out of the
+    // rotation, then re-pick once and retry — restoring the old per-request
+    // failover guarantee that a down backend never causes a long run of 503s.
+    match forward_cross_server(&state, &parsed, stream_mode, intent_label, &backend).await {
+        Ok(resp) => resp,
+        Err(err) if !matches!(&err, omega_common::types::ProxyError::Connection(_)) => {
+            error_response(err)
+        }
+        Err(err) => {
+            state.router.mark_unhealthy(&backend.id).await;
+            match state.router.pick().await {
+                Ok(next) if next.id != backend.id => {
+                    match forward_cross_server(&state, &parsed, stream_mode, intent_label, &next)
+                        .await
+                    {
+                        Ok(resp) => resp,
+                        Err(err) => error_response(err),
+                    }
+                }
+                _ => error_response(err),
+            }
+        }
     }
 }
 
@@ -539,43 +563,40 @@ async fn forward_local(
 /// upstream llama-servers on a remote host. The lane on each response
 /// is the backend id (e.g. "beta") so Ashat Hub can distinguish
 /// local (port-suffixed) from external (id-only) lanes.
+///
+/// Returns `Err` on proxy failure instead of materializing an error response
+/// so the caller can retry with a different backend; a `Connection` error
+/// means nothing was written to the client yet, so retrying is safe even for
+/// streaming requests.
 async fn forward_cross_server(
     state: &Arc<AppState>,
     parsed: &ChatRequest,
     stream_mode: bool,
     intent_label: &'static str,
     backend: &omega_common::types::BackendServer,
-) -> Response {
+) -> Result<Response, omega_common::types::ProxyError> {
     if stream_mode {
-        match state
+        let stream = state
             .cross_server
             .forward_streaming(parsed, intent_label, backend, &state.metrics)
-            .await
-        {
-            Ok(stream) => {
-                let body = Response::new(axum::body::Body::from_stream(stream));
-                let mut resp = body;
-                resp.headers_mut().insert(
-                    axum::http::header::CONTENT_TYPE,
-                    axum::http::HeaderValue::from_static("text/event-stream"),
-                );
-                resp.headers_mut().insert(
-                    "cache-control",
-                    axum::http::HeaderValue::from_static("no-cache"),
-                );
-                resp
-            }
-            Err(err) => error_response(err),
-        }
+            .await?;
+        let body = Response::new(axum::body::Body::from_stream(stream));
+        let mut resp = body;
+        resp.headers_mut().insert(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("text/event-stream"),
+        );
+        resp.headers_mut().insert(
+            "cache-control",
+            axum::http::HeaderValue::from_static("no-cache"),
+        );
+        Ok(resp)
     } else {
-        match state
+        let response = state
             .cross_server
             .forward(parsed, intent_label, backend, &state.metrics)
-            .await
-        {
-            Ok(response) => Json(response).into_response(),
-            Err(err) => error_response(err),
-        }
+            .await?;
+        Ok(Json(response).into_response())
     }
 }
 

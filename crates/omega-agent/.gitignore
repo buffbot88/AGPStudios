@@ -1,7 +1,24 @@
-/.freebuff
-.freebuff/desktop-v2.db
-.freebuff/desktop-v2.db-shm
-.freebuff/desktop-v2.db-wal
-Master/models/LFM2.5-1.2B-Instruct-Q4_K_M.gguf
-Master/models/LFM2.5-230M-Q4_K_M.gguf
-/models
+# Secrets — NEVER track these.
+# server-config.json embeds ASHAT_KEY + the slave api_keys; use
+# server-config.example.json as the tracked template instead.
+/server-config.json
+/oraclehost_id_rsa
+/oraclehost_id_rsa.pub
+*.pem
+*.key
+
+# Local runtime data / artifacts — never synced.
+/models/
+/target/
+/logs/
+/workspaces/
+*.previous
+
+# Frontend deps / build output.
+/frontend/node_modules/
+/frontend/dist/
+
+# Editor / OS.
+.DS_Store
+*.swp
+*~

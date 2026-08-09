@@ -1,5 +1,5 @@
 {
-  "ASHAT_KEY": "WOGAJLhHgRUA1Jz8mGkaKLOpj4tK0yFM9vUDhsBeEr6jEBhZkeJHhayQVtfel9yh",
+  "ASHAT_KEY": "REPLACE_WITH_LIVE_KEY",
   "server": {
     "bind": "0.0.0.0:8080",
     "orchestrator_port": 18079,
@@ -29,11 +29,11 @@
     "spawn_attempts_before_503": 3
   },
   "row_chain": [
-    {"id": "omega", "host": "127.0.0.1", "port": 8080, "enabled": true},
-    {"id": "beta",  "host": "150.136.208.93", "port": 8082, "enabled": true,
-     "api_key": "WOGAJLhHgRUA1Jz8mGkaKLOpj4tK0yFM9vUDhsBeEr6jEBhZkeJHhayQVtfel9yh"},
-    {"id": "delta", "host": "129.213.147.225", "port": 8088, "enabled": true,
-     "api_key": "WOGAJLhHgRUA1Jz8mGkaKLOpj4tK0yFM9vUDhsBeEr6jEBhZkeJHhayQVtfel9yh"}
+    {"id": "omega", "host": "127.0.0.1", "port": 8080, "enabled": true, "weight": 2},
+    {"id": "beta",  "host": "BETA_IP",   "port": 8082, "enabled": true, "weight": 1,
+     "api_key": "REPLACE_WITH_LIVE_KEY"},
+    {"id": "delta", "host": "DELTA_IP",  "port": 8088, "enabled": true, "weight": 1,
+     "api_key": "REPLACE_WITH_LIVE_KEY"}
   ],
   "metrics": {
     "persist_path": "logs/metrics.jsonl"
@@ -61,11 +61,11 @@
   "update": {
     "timeout_seconds": 600,
     "peers": [
-      {"host": "opc@150.136.208.93",
+      {"host": "opc@BETA_IP",
        "install": "/home/opc/Projects/ashatneuralhost-slave",
        "port": 8082,
        "enabled": true},
-      {"host": "opc@129.213.147.225",
+      {"host": "opc@DELTA_IP",
        "install": "/home/opc/Projects/ashatneuralhost-slave",
        "port": 8088,
        "enabled": true}

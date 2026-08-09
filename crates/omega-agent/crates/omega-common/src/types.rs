@@ -121,13 +121,6 @@ pub struct CodingCapacitySnapshot {
     pub queue_limit: usize,
 }
 
-/// One row in the row_chain configuration. Built from `server-config.json`.
-#[derive(Debug, Clone, Serialize)]
-pub struct RowChainEntry {
-    pub position: u8,
-    pub server_id: String,
-}
-
 /// A backend row in `server-config.json:row_chain`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackendServer {
@@ -137,6 +130,14 @@ pub struct BackendServer {
     #[serde(default)]
     pub api_key: Option<String>,
     pub enabled: bool,
+    /// Relative traffic share when multiple healthy backends are enabled
+    /// (weighted round-robin). Defaults to 1 = equal shares.
+    #[serde(default = "default_backend_weight")]
+    pub weight: u32,
+}
+
+fn default_backend_weight() -> u32 {
+    1
 }
 
 /// Identifier for which request-handling pool a record pertains to.

@@ -1,5 +1,0 @@
-{"intent":"chat","max_tokens":8,"messages":1,"model":"LFM2.5-1.2B-Instruct-Q8_0.gguf","port":18080,"ts":"2026-08-09T21:25:02.583717862+00:00"}
-{"intent":"chat","max_tokens":null,"messages":1,"model":null,"port":18080,"ts":"2026-08-09T21:30:07.480583151+00:00"}
-{"intent":"chat","max_tokens":null,"messages":1,"model":null,"port":18080,"ts":"2026-08-09T21:33:26.723014170+00:00"}
-{"intent":"chat","max_tokens":null,"messages":1,"model":null,"port":18080,"ts":"2026-08-09T21:55:39.949428432+00:00"}
-{"intent":"chat","max_tokens":8,"messages":1,"model":"LFM2.5-1.2B-Instruct-Q8_0.gguf","port":18080,"ts":"2026-08-09T22:14:35.904514443+00:00"}
