@@ -1,0 +1,74 @@
+{
+  "ASHAT_KEY": "WOGAJLhHgRUA1Jz8mGkaKLOpj4tK0yFM9vUDhsBeEr6jEBhZkeJHhayQVtfel9yh",
+  "server": {
+    "bind": "0.0.0.0:8080",
+    "orchestrator_port": 18079,
+    "orchestrator_binary_default": "llama-server"
+  },
+  "models": {
+    "dir": "models",
+    "orchestrator_hint": "LFM2.5-VL-450M-Q4_K_M.gguf",
+    "inference_hint": "LFM2.5-1.2B-Instruct-Q4_K_M.gguf"
+  },
+  "inference": {
+    "context": 4096,
+    "max_tokens": 1024,
+    "timeout_seconds": 120,
+    "llama_threads": 2,
+    "llama_gpu_layers": 0
+  },
+  "orchestrator_pool": {
+    "ports_baseline": [18079],
+    "ports_extra":    [18078, 18077],
+    "queue_max": 32,
+    "spawn_attempts_before_503": 3
+  },
+  "coding_agent_pool": {
+    "ports": [18080, 18081, 18082],
+    "queue_max": 32,
+    "spawn_attempts_before_503": 3
+  },
+  "row_chain": [
+    {"id": "omega", "host": "127.0.0.1", "port": 8080, "enabled": true},
+    {"id": "beta",  "host": "150.136.208.93", "port": 8082, "enabled": true,
+     "api_key": "WOGAJLhHgRUA1Jz8mGkaKLOpj4tK0yFM9vUDhsBeEr6jEBhZkeJHhayQVtfel9yh"},
+    {"id": "delta", "host": "129.213.147.225", "port": 8088, "enabled": true,
+     "api_key": "WOGAJLhHgRUA1Jz8mGkaKLOpj4tK0yFM9vUDhsBeEr6jEBhZkeJHhayQVtfel9yh"}
+  ],
+  "metrics": {
+    "persist_path": "logs/metrics.jsonl"
+  },
+  "hub": {
+    "enabled": false,
+    "url": ""
+  },
+  "workspace": {
+    "dir": "workspaces"
+  },
+  "tool_loop": {
+    "max_iterations": 5,
+    "command_timeout_seconds": 10,
+    "output_max_chars": 4000
+  },
+  "skills_db": {
+    "enabled": false,
+    "host": "127.0.0.1",
+    "port": 3306,
+    "database": "",
+    "user": "",
+    "password": ""
+  },
+  "update": {
+    "timeout_seconds": 600,
+    "peers": [
+      {"host": "opc@150.136.208.93",
+       "install": "/home/opc/Projects/ashatneuralhost-slave",
+       "port": 8082,
+       "enabled": true},
+      {"host": "opc@129.213.147.225",
+       "install": "/home/opc/Projects/ashatneuralhost-slave",
+       "port": 8088,
+       "enabled": true}
+    ]
+  }
+}

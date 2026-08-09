@@ -1,0 +1,20 @@
+[package]
+name = "omega-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Omega HTTP server binary for the Ashat Neural Host Master Edition."
+
+[[bin]]
+name = "ashat-neural-host-master"
+path = "src/main.rs"
+
+[dependencies]
+omega-common = { path = "../omega-common" }
+omega-core = { path = "../omega-core" }
+axum = "0.7"
+chrono = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }

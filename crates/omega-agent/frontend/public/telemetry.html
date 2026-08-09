@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Omega Telemetry - Ashat Neural Host</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #0d0d0f 0%, #1a1a2e 100%);
+            color: #e9e9ee;
+            min-height: 100vh;
+            padding: 2rem;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 3rem;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            background: linear-gradient(90deg, #ff7a45, #ff9468);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 0.5rem;
+        }
+
+        .subtitle {
+            color: #8f8f9a;
+            font-size: 1rem;
+        }
+
+        .status-bar {
+            display: flex;
+            justify-content: center;
+            gap: 2rem;
+            margin-top: 1rem;
+        }
+
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.875rem;
+            color: #b3b3bd;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #47d48f;
+            animation: pulse 2s infinite;
+        }
+
+        .status-dot.offline {
+            background: #5c5c66;
+            animation: none;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .servers-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 3rem;
+        }
+
+        .server-card {
+            background: rgba(23, 23, 27, 0.8);
+            border: 1px solid rgba(42, 42, 49, 0.8);
+            border-radius: 12px;
+            padding: 1.5rem;
+            transition: all 0.3s ease;
+        }
+
+        .server-card:hover {
+            border-color: rgba(255, 122, 69, 0.5);
+            transform: translateY(-2px);
+        }
+
+        .server-card.offline {
+            opacity: 0.6;
+        }
+
+        .server-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+
+        .server-name {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #e9e9ee;
+        }
+
+        .server-badge {
+            padding: 0.25rem 0.75rem;
+            border-radius: 999px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            text-transform: uppercase;
+        }
+
+        .badge-online {
+            background: rgba(71, 212, 143, 0.2);
+            color: #47d48f;
+            border: 1px solid rgba(71, 212, 143, 0.3);
+        }
+
+        .badge-offline {
+            background: rgba(92, 92, 102, 0.2);
+            color: #8f8f9a;
+            border: 1px solid rgba(92, 92, 102, 0.3);
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 1rem;
+        }
+
+        .metric {
+            background: rgba(13, 13, 15, 0.5);
+            padding: 1rem;
+            border-radius: 8px;
+        }
+
+        .metric-label {
+            font-size: 0.75rem;
+            color: #8f8f9a;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 0.5rem;
+        }
+
+        .metric-value {
+            font-size: 1.75rem;
+            font-weight: 700;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .metric-value.tokens-in {
+            color: #47d48f;
+        }
+
+        .metric-value.tokens-out {
+            color: #ff7a45;
+        }
+
+        .metric-value.requests {
+            color: #f2b23e;
+        }
+
+        .metric-value.latency {
+            color: #b3b3bd;
+        }
+
+        .metric-unit {
+            font-size: 0.875rem;
+            color: #8f8f9a;
+            margin-left: 0.25rem;
+        }
+
+        .summary-section {
+            background: rgba(23, 23, 27, 0.8);
+            border: 1px solid rgba(42, 42, 49, 0.8);
+            border-radius: 12px;
+            padding: 1.5rem;
+        }
+
+        .summary-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            color: #e9e9ee;
+        }
+
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+        }
+
+        .summary-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.75rem;
+            background: rgba(13, 13, 15, 0.5);
+            border-radius: 8px;
+        }
+
+        .summary-label {
+            color: #8f8f9a;
+        }
+
+        .summary-value {
+            font-weight: 600;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        footer {
+            text-align: center;
+            margin-top: 3rem;
+            padding-top: 1.5rem;
+            border-top: 1px solid rgba(42, 42, 49, 0.8);
+            color: #5c5c66;
+            font-size: 0.875rem;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 4rem;
+            color: #8f8f9a;
+        }
+
+        .error {
+            text-align: center;
+            padding: 2rem;
+            background: rgba(255, 107, 107, 0.1);
+            border: 1px solid rgba(255, 107, 107, 0.3);
+            border-radius: 8px;
+            color: #ff6b6b;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Omega Telemetry</h1>
+            <p class="subtitle">Ashat Neural Host · Real-time Server Monitoring</p>
+            <div class="status-bar">
+                <div class="status-item">
+                    <div class="status-dot" id="statusDot"></div>
+                    <span id="statusText">Connecting...</span>
+                </div>
+                <div class="status-item">
+                    <span>Last updated: <span id="lastUpdate">--:--:--</span></span>
+                </div>
+            </div>
+        </header>
+
+        <div id="content">
+            <div class="loading">Loading telemetry data...</div>
+        </div>
+
+        <footer>
+            <p>Omega · Ashat Neural Host Master Edition</p>
+            <p>Auto-refreshes every 5 seconds</p>
+        </footer>
+    </div>
+
+    <script>
+        const API_BASE = '';
+        const REFRESH_INTERVAL = 5000;
+
+        let previousData = null;
+
+        function formatNumber(num) {
+            if (num >= 1000000) {
+                return (num / 1000000).toFixed(2) + 'M';
+            }
+            if (num >= 1000) {
+                return (num / 1000).toFixed(1) + 'K';
+            }
+            return num.toString();
+        }
+
+        function formatUptime(seconds) {
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            return `${hours}h ${minutes}m`;
+        }
+
+        function getTime() {
+            return new Date().toLocaleTimeString('en-US', { hour12: false });
+        }
+
+        function createServerCard(name, data, isOffline = false) {
+            const state = data?.lane_state || 'offline';
+            const badgeClass = state === 'online' ? 'badge-online' : 'badge-offline';
+            const cardClass = isOffline || state !== 'online' ? 'offline' : '';
+
+            return `
+                <div class="server-card ${cardClass}">
+                    <div class="server-header">
+                        <h2 class="server-name">${name}</h2>
+                        <span class="server-badge ${badgeClass}">${isOffline ? 'Offline' : state}</span>
+                    </div>
+                    <div class="metrics-grid">
+                        <div class="metric">
+                            <div class="metric-label">Tokens In</div>
+                            <div class="metric-value tokens-in">${formatNumber(data?.total_prompt_tokens || 0)}</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Tokens Out</div>
+                            <div class="metric-value tokens-out">${formatNumber(data?.total_completion_tokens || 0)}</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Requests</div>
+                            <div class="metric-value requests">${formatNumber(data?.total_requests || 0)}</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Avg Latency</div>
+                            <div class="metric-value latency">${(data?.avg_total_latency_ms || 0).toFixed(0)}<span class="metric-unit">ms</span></div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function createSummarySection(data) {
+            const totalTokensIn = (data?.omega?.total_prompt_tokens || 0);
+            const totalTokensOut = (data?.omega?.total_completion_tokens || 0);
+            const totalRequests = (data?.omega?.total_requests || 0);
+
+            return `
+                <div class="summary-section">
+                    <h3 class="summary-title">Total Across All Servers</h3>
+                    <div class="summary-grid">
+                        <div class="summary-item">
+                            <span class="summary-label">Total Tokens In</span>
+                            <span class="summary-value tokens-in">${formatNumber(totalTokensIn)}</span>
+                        </div>
+                        <div class="summary-item">
+                            <span class="summary-label">Total Tokens Out</span>
+                            <span class="summary-value tokens-out">${formatNumber(totalTokensOut)}</span>
+                        </div>
+                        <div class="summary-item">
+                            <span class="summary-label">Total Requests</span>
+                            <span class="summary-value requests">${formatNumber(totalRequests)}</span>
+                        </div>
+                        <div class="summary-item">
+                            <span class="summary-label">Uptime</span>
+                            <span class="summary-value">${formatUptime(data?.uptime_seconds || 0)}</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function fetchData() {
+            try {
+                const response = await fetch(`${API_BASE}/api/public_status`);
+                if (!response.ok) throw new Error('Failed to fetch');
+                return await response.json();
+            } catch (error) {
+                console.error('Error fetching data:', error);
+                return null;
+            }
+        }
+
+        async function updateDashboard() {
+            const data = await fetchData();
+            const contentEl = document.getElementById('content');
+            const statusDot = document.getElementById('statusDot');
+            const statusText = document.getElementById('statusText');
+            const lastUpdate = document.getElementById('lastUpdate');
+
+            if (!data) {
+                statusDot.classList.add('offline');
+                statusText.textContent = 'Connection Error';
+                contentEl.innerHTML = `
+                    <div class="error">
+                        <p>Unable to fetch telemetry data</p>
+                        <p>Make sure the server is running on port 8080</p>
+                    </div>
+                `;
+                return;
+            }
+
+            statusDot.classList.remove('offline');
+            statusText.textContent = 'Live';
+            lastUpdate.textContent = getTime();
+
+            const omegaData = data.lanes?.omega || {};
+            const betaData = data.lanes?.beta || {};
+            const deltaData = data.lanes?.delta || {};
+
+            contentEl.innerHTML = `
+                <div class="servers-grid">
+                    ${createServerCard('Omega', omegaData, false)}
+                    ${createServerCard('Beta', betaData, true)}
+                    ${createServerCard('Delta', deltaData, true)}
+                </div>
+                ${createSummarySection(data.lanes || {})}
+            `;
+        }
+
+        // Initial load
+        updateDashboard();
+
+        // Auto-refresh
+        setInterval(updateDashboard, REFRESH_INTERVAL);
+    </script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+[2m2026-08-06T22:33:48.429086Z[0m [32m INFO[0m Omega starting up [3mbind[0m[2m=[0m0.0.0.0:8080 [3morchestrator_path[0m[2m=[0m./models/LFM2.5-230M-Q4_K_M.gguf [3minference_path[0m[2m=[0m./models/LFM2.5-1.2B-Instruct-Q4_K_M.gguf
+[2m2026-08-06T22:33:49.102881Z[0m [32m INFO[0m 230M baseline healthy; orchestrator ready
+[2m2026-08-06T22:33:49.104037Z[0m [32m INFO[0m Omega listening (public + internal surfaces) [3mbind[0m[2m=[0m0.0.0.0:8080
+[2m2026-08-06T22:34:02.322647Z[0m [32m INFO[0m classified intent [3mintent[0m[2m=[0m"chat" [3mport[0m[2m=[0m18079 [3mbaseline[0m[2m=[0mtrue
+[2m2026-08-06T22:34:07.698492Z[0m [32m INFO[0m 1.2B inference accepted [3mport[0m[2m=[0m18080
+[2m2026-08-06T22:34:07.894839Z[0m [32m INFO[0m classified intent [3mintent[0m[2m=[0m"chat" [3mport[0m[2m=[0m18079 [3mbaseline[0m[2m=[0mtrue
+[2m2026-08-07T17:39:23.122378Z[0m [32m INFO[0m SIGTERM received
+[2m2026-08-07T17:39:23.125377Z[0m [32m INFO[0m killing active children; bringing Omega down
