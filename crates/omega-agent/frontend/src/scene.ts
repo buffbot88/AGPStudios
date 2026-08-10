@@ -177,11 +177,14 @@ export class TelemetryScene extends Phaser.Scene {
    * use right now.
    */
   private drawModelCard(left: number, y: number, right: number): void {
-    const active = LANE_ORDER.filter((key) => {
+    // One predicate for both the cycling list and the count: any lane that is
+    // not `offline` is in use (online/busy/waking/degraded).
+    const inUse = LANE_ORDER.filter((key) => this.snapshot.status.lanes[key].lane_state !== 'offline');
+    const active = inUse.filter((key) => {
       const lane = this.snapshot.status.lanes[key];
-      return lane.lane_state !== 'offline' && lane.model && lane.model !== '—';
+      return lane.model && lane.model !== '—';
     });
-    const lanesInUse = LANE_ORDER.filter((key) => this.snapshot.status.lanes[key].lane_state === 'online').length;
+    const lanesInUse = inUse.length;
 
     this.text('ACTIVE MODELS', left, y, 9, COLORS.muted, true, MONO, 1);
     this.modelTickerText = this.text('', left, y + 18, 12, COLORS.text, false, MONO);

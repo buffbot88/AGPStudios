@@ -45,10 +45,6 @@ export interface PublicStatus {
   all_ready: boolean;
   orchestrator_pool: PoolSnapshot;
   coding_agent_pool: PoolSnapshot;
-  /** How many 1.2B Coding Agent lanes are alive right now (master). */
-  lanes_in_use?: number;
-  /** Maximum concurrent 1.2B Coding Agent lanes (master). */
-  lanes_capacity?: number;
 }
 
 export interface MetricsSummary extends LaneStatus {
