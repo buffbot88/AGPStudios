@@ -174,7 +174,7 @@ pub struct MetricRecord {
 /// Generation / prompt token rates are `None` for the omega lane until the
 /// upstream `llama-server` response is parsed end-to-end; today's pipeline
 /// only has latency + success, so we surface that honestly instead of zero.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TelemetryFrame {
     pub timestamp: String,
     pub generation_tokens_per_second: Option<f64>,
@@ -185,7 +185,7 @@ pub struct TelemetryFrame {
 }
 
 /// Per-lane status block embedded in `PublicStatus.lanes`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LaneStatus {
     pub label: String,
     pub model: String,
@@ -240,7 +240,7 @@ impl LaneStatus {
 }
 
 /// Top-level /api/public_status body. Shape matches the Vite/Phaser frontend contract.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublicStatus {
     pub uptime_seconds: f64,
     pub llama_server_available: bool,
@@ -251,32 +251,36 @@ pub struct PublicStatus {
     pub orchestrator_pool: PoolSnapshot,
     pub coding_agent_pool: PoolSnapshot,
     /// How many 1.2B Coding Agent lanes are currently alive right now.
+    #[serde(default)]
     pub lanes_in_use: u32,
     /// Maximum concurrent 1.2B Coding Agent lanes (capacity).
+    #[serde(default)]
     pub lanes_capacity: u32,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueueStatus {
     pub depth: usize,
     pub limit: usize,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PoolSnapshot {
     pub ports_total: usize,
     pub ports_active: usize,
     pub baseline_alive: bool,
     pub extras_active: Vec<u16>,
     /// Allocated ports with no live instance right now.
+    #[serde(default)]
     pub free_ports: Vec<u16>,
     pub queue_depth: usize,
     pub queue_limit: usize,
+    #[serde(default)]
     pub last_failure_reason: Option<String>,
 }
 
 /// 3-lane object keyed by omega/beta/delta for the frontend.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Lanes {
     pub omega: LaneStatus,
     pub beta: LaneStatus,
@@ -284,7 +288,7 @@ pub struct Lanes {
 }
 
 /// Body emitted by /api/public_metrics and /api/dashboard_timeseries.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublicMetrics {
     pub uptime_seconds: f64,
     pub summaries: Lanes,
@@ -292,13 +296,19 @@ pub struct PublicMetrics {
     pub recent_events: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimeseriesResponse {
     pub omega: Vec<TelemetryFrame>,
+    /// Peer-lane frames (populated on the master by `peer_telemetry.rs`;
+    /// empty on slaves and in older responses).
+    #[serde(default)]
+    pub beta: Vec<TelemetryFrame>,
+    #[serde(default)]
+    pub delta: Vec<TelemetryFrame>,
     pub events: Vec<TimeseriesEvent>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimeseriesEvent {
     pub event: String,
 }

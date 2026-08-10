@@ -41,6 +41,7 @@ export class TelemetryScene extends Phaser.Scene {
   private statusDot!: Phaser.GameObjects.Arc;
   private resizeHandler?: () => void;
   private pulseTween?: Phaser.Tweens.Tween;
+  private selectedChartLane: LaneKey = 'omega';
 
   public constructor(initialSnapshot: TelemetrySnapshot) {
     super({ key: 'TelemetryScene' });
@@ -102,7 +103,8 @@ export class TelemetryScene extends Phaser.Scene {
     });
     y += compact ? 200 : 220;
 
-    this.drawPerformanceChart(margin, y, contentWidth, this.snapshot.timeseries.omega);
+    const chartFrames = this.snapshot.timeseries[this.selectedChartLane] ?? [];
+    this.drawPerformanceChart(margin, y, contentWidth, this.selectedChartLane, chartFrames);
 
     this.drawFooter(width, height);
   }
@@ -221,19 +223,59 @@ export class TelemetryScene extends Phaser.Scene {
     }
   }
 
-  private drawPerformanceChart(x: number, y: number, width: number, frames: TelemetryFrame[]): void {
+  private laneColor(key: LaneKey): number {
+    if (key === 'beta') return COLORS.green;
+    if (key === 'delta') return COLORS.amber;
+    return COLORS.accent;
+  }
+
+  private drawPerformanceChart(x: number, y: number, width: number, laneKey: LaneKey, frames: TelemetryFrame[]): void {
     const height = 206;
+    const laneColor = this.laneColor(laneKey);
     this.panel(x, y, width, height, COLORS.panel);
-    this.text('GENERATION VELOCITY', x + 20, y + 20, 10, COLORS.accent, true, MONO, 1.5);
+    this.text(`GENERATION VELOCITY  ·  ${laneKey.toUpperCase()}`, x + 20, y + 20, 10, laneColor, true, MONO, 1.5);
+
+    // Lane selector chips (right-aligned: OMEGA | BETA | DELTA).
+    const chipY = y + 14;
+    const chipH = 22;
+    let chipX = x + width - 20;
+    [...LANE_ORDER].reverse().forEach((key) => {
+      const label = key.toUpperCase();
+      const chipW = label.length * 7.4 + 22;
+      const cx = chipX - chipW;
+      const selected = key === laneKey;
+      const shape = this.add.graphics();
+      shape.fillStyle(selected ? laneColor : COLORS.bgSoft, 1);
+      shape.fillRoundedRect(cx, chipY, chipW, chipH, 11);
+      shape.lineStyle(1, selected ? laneColor : COLORS.line, 1);
+      shape.strokeRoundedRect(cx, chipY, chipW, chipH, 11);
+      this.root.add(shape);
+      const chipLabel = this.text(label, cx + chipW / 2, chipY + chipH / 2, 8, selected ? COLORS.ink : COLORS.muted, true, MONO, 1).setOrigin(0.5);
+      chipLabel.setInteractive({ cursor: 'pointer' });
+      chipLabel.on('pointerdown', () => {
+        if (this.selectedChartLane !== key) {
+          this.selectedChartLane = key;
+          this.draw();
+        }
+      });
+      chipLabel.on('pointerover', () => {
+        if (!selected) chipLabel.setColor(`#${this.laneColor(key).toString(16).padStart(6, '0')}`);
+      });
+      chipLabel.on('pointerout', () => {
+        if (!selected) chipLabel.setColor(`#${COLORS.muted.toString(16).padStart(6, '0')}`);
+      });
+      chipX = cx - 8;
+    });
+
     const values = frames.map((frame) => frame.generation_tokens_per_second).filter((value): value is number => value !== null && value > 0);
     const current = values.at(-1) ?? 0;
-    this.text(`${current.toFixed(1)}`, x + width - 20, y + 14, 27, COLORS.text, true, MONO).setOrigin(1, 0);
-    this.text('TOKENS / SEC', x + width - 20, y + 48, 9, COLORS.muted, false, MONO, 1).setOrigin(1, 0);
+    this.text(`${current.toFixed(1)}`, x + width - 20, y + 58, 27, COLORS.text, true, MONO).setOrigin(1, 0);
+    this.text('TOKENS / SEC', x + width - 20, y + 92, 9, COLORS.muted, false, MONO, 1).setOrigin(1, 0);
 
     const chartX = x + 20;
-    const chartY = y + 84;
+    const chartY = y + 116;
     const chartWidth = width - 40;
-    const chartHeight = 88;
+    const chartHeight = 60;
     const graph = this.add.graphics();
     graph.lineStyle(1, COLORS.line, 0.8);
     for (let row = 0; row < 4; row += 1) graph.lineBetween(chartX, chartY + row * (chartHeight / 3), chartX + chartWidth, chartY + row * (chartHeight / 3));
@@ -244,17 +286,19 @@ export class TelemetryScene extends Phaser.Scene {
         x: chartX + (index / Math.max(values.length - 1, 1)) * chartWidth,
         y: chartY + chartHeight - ((value - min) / Math.max(max - min, 1)) * chartHeight,
       }));
-      graph.lineStyle(2, COLORS.accent, 1);
+      graph.lineStyle(2, laneColor, 1);
       points.forEach((point, index) => {
         if (index > 0) graph.lineBetween(points[index - 1].x, points[index - 1].y, point.x, point.y);
       });
       const last = points.at(-1);
       if (last) {
-        graph.fillStyle(COLORS.accent, 0.18);
+        graph.fillStyle(laneColor, 0.18);
         graph.fillCircle(last.x, last.y, 9);
-        graph.fillStyle(COLORS.accent, 1);
+        graph.fillStyle(laneColor, 1);
         graph.fillCircle(last.x, last.y, 3.5);
       }
+    } else {
+      this.text('NO DATA YET', chartX + chartWidth / 2, chartY + chartHeight / 2, 10, COLORS.dim, true, MONO, 1).setOrigin(0.5);
     }
     this.root.add(graph);
     this.text('− 30 MIN', chartX, chartY + chartHeight + 13, 9, COLORS.dim, false, MONO, 1);

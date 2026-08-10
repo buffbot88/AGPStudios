@@ -1170,9 +1170,11 @@ version = "6.0.0"
 dependencies = [
  "axum",
  "chrono",
+ "futures",
  "omega-common",
  "omega-core",
  "reqwest",
+ "serde",
  "serde_json",
  "tokio",
  "tracing",

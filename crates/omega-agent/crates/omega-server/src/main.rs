@@ -6,6 +6,7 @@
 mod alpha_status;
 mod auth;
 mod handlers;
+mod peer_telemetry;
 
 use axum::{
     middleware,
@@ -18,7 +19,7 @@ use tracing::{error, info};
 
 use omega_common::config::AppConfig;
 use omega_common::metrics::MetricsStore;
-use omega_common::types::Pool;
+use omega_common::types::{BackendServer, Pool};
 use omega_common::workspace::AgentWorkspace;
 use omega_core::demand::{DemandPool, DemandSpec};
 use omega_core::orchestrator::Orchestrator;
@@ -27,6 +28,7 @@ use omega_core::router::RowRouter;
 use omega_core::skill_db::SkillDb;
 use omega_core::supervision::Supervisor;
 use omega_core::tool_loop::{ToolLoop, ToolLoopConfig};
+use peer_telemetry::PeerTelemetry;
 
 use crate::handlers::AppState;
 
@@ -115,6 +117,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let cross_server = CrossServerProxy::new(Duration::from_secs(cfg.inference.timeout_seconds));
     let router = RowRouter::new(&cfg);
+
+    // Peer telemetry: background-poll the enabled row-chain backends so the
+    // telemetry page can show real Beta/Delta lanes. Poll interval 5 s — the
+    // slaves' public endpoints are cheap and the responses are cached.
+    let peers: Vec<BackendServer> = cfg
+        .backends
+        .iter()
+        .filter(|b| b.enabled && b.id != "omega")
+        .cloned()
+        .collect();
+    let peer_telemetry = Arc::new(PeerTelemetry::new(peers));
+    Arc::clone(&peer_telemetry).spawn(Duration::from_secs(5));
+    info!(
+        peers = ?peer_telemetry.peer_ids(),
+        "peer telemetry collector started"
+    );
     let tool_loop = ToolLoop::new(
         Arc::clone(&coding_agent_pool),
         AgentWorkspace::new(cfg.workspace_dir.clone()),
@@ -130,6 +148,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config: cfg.clone(),
         started: std::time::Instant::now(),
         metrics: Arc::clone(&metrics),
+        peer_telemetry: Arc::clone(&peer_telemetry),
         router,
         orchestrator,
         coding_agent,

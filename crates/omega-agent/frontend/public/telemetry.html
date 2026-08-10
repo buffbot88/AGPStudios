@@ -296,10 +296,12 @@
             return new Date().toLocaleTimeString('en-US', { hour12: false });
         }
 
-        function createServerCard(name, data, isOffline = false) {
+        function createServerCard(name, data) {
             const state = data?.lane_state || 'offline';
-            const badgeClass = state === 'online' ? 'badge-online' : 'badge-offline';
-            const cardClass = isOffline || state !== 'online' ? 'offline' : '';
+            const isOffline = state !== 'online';
+            const badgeClass = isOffline ? 'badge-offline' : 'badge-online';
+            const cardClass = isOffline ? 'offline' : '';
+            const model = (data?.model || '').split('/').pop() || '—';
 
             return `
                 <div class="server-card ${cardClass}">
@@ -307,6 +309,7 @@
                         <h2 class="server-name">${name}</h2>
                         <span class="server-badge ${badgeClass}">${isOffline ? 'Offline' : state}</span>
                     </div>
+                    <div class="model-line" style="font-size:0.75rem;color:#8f8f9a;font-family:'JetBrains Mono',monospace;margin-bottom:1rem;">${model}</div>
                     <div class="metrics-grid">
                         <div class="metric">
                             <div class="metric-label">Tokens In</div>
@@ -329,10 +332,12 @@
             `;
         }
 
-        function createSummarySection(data) {
-            const totalTokensIn = (data?.omega?.total_prompt_tokens || 0);
-            const totalTokensOut = (data?.omega?.total_completion_tokens || 0);
-            const totalRequests = (data?.omega?.total_requests || 0);
+        function createSummarySection(lanes, uptimeSeconds) {
+            const lanesObj = lanes || {};
+            const totalTokensIn = ['omega', 'beta', 'delta'].reduce((sum, key) => sum + (lanesObj[key]?.total_prompt_tokens || 0), 0);
+            const totalTokensOut = ['omega', 'beta', 'delta'].reduce((sum, key) => sum + (lanesObj[key]?.total_completion_tokens || 0), 0);
+            const totalRequests = ['omega', 'beta', 'delta'].reduce((sum, key) => sum + (lanesObj[key]?.total_requests || 0), 0);
+            const onlineLanes = ['omega', 'beta', 'delta'].filter((key) => lanesObj[key]?.lane_state === 'online').length;
 
             return `
                 <div class="summary-section">
@@ -351,8 +356,12 @@
                             <span class="summary-value requests">${formatNumber(totalRequests)}</span>
                         </div>
                         <div class="summary-item">
+                            <span class="summary-label">Lanes Online</span>
+                            <span class="summary-value">${onlineLanes}/3</span>
+                        </div>
+                        <div class="summary-item">
                             <span class="summary-label">Uptime</span>
-                            <span class="summary-value">${formatUptime(data?.uptime_seconds || 0)}</span>
+                            <span class="summary-value">${formatUptime(uptimeSeconds || 0)}</span>
                         </div>
                     </div>
                 </div>
@@ -399,11 +408,11 @@
 
             contentEl.innerHTML = `
                 <div class="servers-grid">
-                    ${createServerCard('Omega', omegaData, false)}
-                    ${createServerCard('Beta', betaData, true)}
-                    ${createServerCard('Delta', deltaData, true)}
+                    ${createServerCard('Omega', omegaData)}
+                    ${createServerCard('Beta', betaData)}
+                    ${createServerCard('Delta', deltaData)}
                 </div>
-                ${createSummarySection(data.lanes || {})}
+                ${createSummarySection(data.lanes || {}, data.uptime_seconds)}
             `;
         }
 

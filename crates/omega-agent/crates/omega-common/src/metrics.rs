@@ -203,6 +203,8 @@ impl MetricsStore {
 
         TimeseriesResponse {
             omega: frames,
+            beta: Vec::new(),
+            delta: Vec::new(),
             events,
         }
     }
