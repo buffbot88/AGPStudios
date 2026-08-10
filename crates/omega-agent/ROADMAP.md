@@ -5,12 +5,13 @@
 **Repo path:** `/home/opc/Projects/ashatneuralhost-master`
 **Build details:** see `BUILDPLAN.md`
 **Rules of engagement:** `VOWS.md` (protected)
+**Contributing:** `CONTRIBUTING.md`
 
 ---
 
 ## Goal
 
-A universal-source Rust + Axum server with an always-on **LFM2.5-VL-450M intent router** (replaced the original 230M — see BUILDPLAN), a spawn-on-demand pool of up to three 1.2B **Coding Agent** instances, and a Vite + Phaser public telemetry canvas. The source must run identically on the public dev server and on the developer's local machine. No `.git`, `.gitignore`, or git artifacts live in this dev tree.
+A universal-source Rust + Axum server with an always-on **LFM2.5-VL-450M intent router** (replaced the original 230M — see BUILDPLAN), a spawn-on-demand pool of up to three 1.2B **Coding Agent** instances, and a Vite + Phaser public telemetry canvas. The source must run identically on the public dev server and on the developer's local machine. The master is a git repo on GitHub (see the Git constraint below); `server-config.json`, `models/`, `target/`, `logs/`, and `workspaces/` stay untracked.
 
 ## Components (Phase 1 — this build)
 
@@ -20,8 +21,8 @@ A universal-source Rust + Axum server with an always-on **LFM2.5-VL-450M intent 
 | **1.2B Coding Agent (a.k.a. BrainStem instance)** | Per-request inference. | Spawn-on-demand; killed after response lands with caller. | `18080` → `18081` → `18082` (cap = 3 by spec). |
 | **BrainStem proxy** | Omega itself, listens on `:8080`. Routes through the orchestrator pool, then the coding-agent pool. | Always-on. | `0.0.0.0:8080`. |
 | **Frontend (telemetry)** | Public canvas: 3 lane cards (Omega / Beta / Delta) + Generation Velocity chart. Polls `/api/{public_status, public_metrics, dashboard_timeseries}` every 8 s. | Dev: Vite on `:5173`. Prod: static `frontend/dist/` served by reverse proxy. | — |
-| **Row chain — beta target** | Implemented in code, marked `enabled: false` in `server-config.json`. Enables in Phase 2. | Always-off (per config). | `127.0.0.1:8082`. |
-| **Row chain — delta target** | Implemented in code, marked `enabled: false`. Enables in Phase 3. | Always-off (per config). | `127.0.0.1:8083`. |
+| **Row chain — beta target** | Weighted round-robin backend (Phase 2). Enabled in config with its own `api_key`. | Always-on (per config). | `150.136.208.93:8082`. |
+| **Row chain — delta target** | Weighted round-robin backend (Phase 3). Enabled in config with its own `api_key`. | Always-on (per config). | `129.213.147.225:8088`. |
 
 ## Failure policy
 
@@ -53,13 +54,13 @@ workspace of three crates under `crates/`:
 Binary name and public surface are unchanged. See `BUILDPLAN.md` → "Workspace
 migration (v2)" for the locked decisions.
 
-## Deferred hooks (seams reserved in Phase 1 code)
+## Deferred hooks (remaining — Phase 6 / Phase 9 seams now implemented)
 
 | Feature | Where it plugs in |
 | ------- | ----------------- |
-| Rate limiting | Tower middleware layer in `src/main.rs` **before** `src/auth.rs`. |
-| GitHub self-updater | `scripts/github_sync.sh` (init/status/pull/push, `--json`/`--yes`; secret guard + `.gitignore`-effectiveness assertion) driven by `POST /api/admin/github_sync` in `handlers.rs` (admin-key gated; mode-validated; pull takes the update lock). Pull = fetch → direction check → ff-only merge → fmt+test+build with `@{1}` rollback → propagate to enabled `update.peers` via `seed_slave.sh`; `service_restart_required` returned (self-restart via `--restart-service`). Push uses the `~/.ssh/ashat_github` deploy key. |
-| Advanced Coding Agent with tools | New branch in `src/orchestrator.rs` returning `Intent::Code`; `src/proxy.rs` routes to a separate `src/tool_loop.rs` module (file created later, not in Phase 1). |
+| Rate limiting | Tower middleware layer in `crates/omega-server/src/main.rs` **before** `auth.rs`. |
+| Ashat Hub / Chat Studio status channel | `alpha_status.rs` in `crates/omega-server`, gated by `hub.enabled` (default `false`); becomes the single point of incoming/outgoing traffic for the ecosystem and seeds Beta / Delta peers with updates. |
+| MySQL skills DB → workspace seeding | `workspace.rs` in `crates/omega-common`; the Phase 6 `skill` tool is implemented but gated — set `skills_db.enabled: true` with real connection details and build with `--features omega-core/skills-db`. |
 
 ## Constraints / known trade-offs
 
@@ -68,7 +69,7 @@ migration (v2)" for the locked decisions.
 - **Cold-start latency.** Every 1.2B spawn pays multi-second `llama-server` boot + 730 MB GGUF load; on a loaded 1-core host the health check window is 30 s and a failed spawn re-notifies waiters so the pump retries instead of stalling. Surfaced through `/api/public_metrics`.
 - **Hard cap.** Spec ceiling is 3 concurrent 1.2B instances. The 4th concurrent caller queues, not rejects.
 - **Baseline-resilience.** Baseline router respawn is critical-path: Omega's `8080` does not bind until the baseline reports `/health` ok. Spec-intent: never serve traffic if orchestrator is down.
-- **Universal source.** `server-config.json` holds no host paths. Models auto-discover from `models/*.gguf`. `llama-server` is configurable (config → env → PATH).
+- **Universal source.** `server-config.example.json` (the tracked template) holds no host paths or secrets; your local `server-config.json` is gitignored. Models auto-discover from `models/*.gguf`. `llama-server` is configurable (config → env → PATH).
 - **Git.** The master is a git repo (branch `main`, origin `buffbot88/ashatnueralhost`) since 2026-08-09. `server-config.json`, `oraclehost_id_rsa`, `models/`, `target/`, `logs/`, `workspaces/` are ignored/untracked; `server-config.example.json` is the tracked template. The legacy `ASHAT_KEY` copy in the public repo history remains live until rotated (see Beta_Delta.md).
 - **`ASHAT_KEY` continuity.** Carried over verbatim from the archived project so existing clients remain keyed without re-issuance.
 - **`VOWS.md` integrity.** Protected by Vow 9 of `VOWS.md` itself. This build does not modify, rename, or delete `VOWS.md` at any point.
