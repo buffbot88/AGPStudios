@@ -2,25 +2,23 @@ import Phaser from 'phaser';
 import type { LaneKey, LaneStatus, TelemetryFrame, TelemetrySnapshot } from './types';
 
 const COLORS = {
-  ink: 0x0d0d0f,
-  bgSoft: 0x121215,
-  panel: 0x17171b,
-  panelRaised: 0x1f1f25,
-  line: 0x2a2a31,
-  lineSoft: 0x222228,
-  text: 0xe9e9ee,
-  textSoft: 0xb3b3bd,
-  muted: 0x8f8f9a,
-  dim: 0x5c5c66,
+  ink: 0x05070a,
+  bgSoft: 0x0a0d12,
+  panel: 0x0b0f15,
+  line: 0x1c2431,
+  lineSoft: 0x141a24,
+  text: 0xe8edf4,
+  textSoft: 0xa3aebd,
+  muted: 0x6b7684,
+  dim: 0x3d4754,
   accent: 0xff7a45,
-  accentHover: 0xff9468,
-  green: 0x47d48f,
+  cyan: 0x39c2d6,
+  green: 0x3ddc97,
   amber: 0xf2b23e,
-  red: 0xff6b6b,
+  red: 0xff5d5d,
 };
 
 const FONT = 'Inter, ui-sans-serif, system-ui, sans-serif';
-const HEADING = 'Newsreader, Georgia, serif';
 const MONO = 'JetBrains Mono, ui-monospace, monospace';
 
 const LANE_ORDER: LaneKey[] = ['omega', 'beta', 'delta'];
@@ -97,8 +95,7 @@ export class TelemetryScene extends Phaser.Scene {
 
     this.drawHeader(margin, y, contentWidth);
     y += compact ? 82 : 96;
-    this.drawHero(margin, y, contentWidth);
-    y += compact ? 124 : 144;
+    y += this.drawHero(margin, y, contentWidth) + 14;
 
     const laneGap = 12;
     const cardWidth = (contentWidth - laneGap * 2) / 3;
@@ -107,7 +104,7 @@ export class TelemetryScene extends Phaser.Scene {
       const cardX = margin + index * (cardWidth + laneGap);
       this.drawCompactLaneCard(cardX, y, cardWidth, lane, key);
     });
-    y += compact ? 200 : 220;
+    y += compact ? 204 : 224;
 
     const chartFrames = this.snapshot.timeseries[this.selectedChartLane] ?? [];
     this.drawPerformanceChart(margin, y, contentWidth, this.selectedChartLane, chartFrames);
@@ -119,6 +116,14 @@ export class TelemetryScene extends Phaser.Scene {
     const background = this.add.graphics();
     background.fillStyle(COLORS.ink, 1);
     background.fillRect(0, 0, width, height);
+    // Faint engineering grid.
+    background.lineStyle(1, COLORS.lineSoft, 0.5);
+    const step = 56;
+    for (let gx = step; gx < width; gx += step) background.lineBetween(gx, 0, gx, height);
+    for (let gy = step; gy < height; gy += step) background.lineBetween(0, gy, width, gy);
+    // Top glow strip for the HUD feel.
+    background.fillStyle(COLORS.accent, 0.05);
+    background.fillRect(0, 0, width, 2);
     this.root.add(background);
   }
 
@@ -137,14 +142,14 @@ export class TelemetryScene extends Phaser.Scene {
     const logo = this.add.image(x + 13, y + 14, 'ashat-logo-small').setDisplaySize(26, 26);
     this.root.add(logo);
     this.text('OMEGA', x + 38, y, 20, COLORS.text, true);
-    this.text(' / NEURAL HOST', x + 118, y + 1, 16, COLORS.accent, false, HEADING);
-    this.text('V 0.1  ·  ASHAT NEURAL HOST · MASTER EDITION', x, y + 29, 9, COLORS.muted, false, MONO, 1.5);
+    this.text(' / NEURAL HOST', x + 118, y + 1, 16, COLORS.accent, false, FONT);
+    this.text('V 6.2  ·  ASHAT NEURAL HOST · MASTER EDITION', x, y + 29, 9, COLORS.muted, false, MONO, 1.5);
 
     const rightX = x + width;
     this.statusDot = this.add.circle(rightX - 148, y + 13, 5, this.snapshot.status.all_ready ? COLORS.green : COLORS.amber);
     this.root.add(this.statusDot);
     this.connectionLabel = this.text(
-      this.snapshot.demo ? 'DEMO TELEMETRY' : 'LIVE TELEMETRY',
+      this.snapshot.demo ? 'DEMO FEED' : 'LIVE FEED',
       rightX - 136,
       y + 5,
       11,
@@ -160,15 +165,77 @@ export class TelemetryScene extends Phaser.Scene {
     this.pulseTween = this.tweens.add({ targets: this.statusDot, alpha: 0.42, duration: 1300, yoyo: true, repeat: -1 });
   }
 
-  private drawHero(x: number, y: number, width: number): void {
-    const logo = this.add.image(x + 42, y + 42, 'ashat-logo-large').setDisplaySize(68, 68).setAlpha(0.92);
+  private systemStatusWord(): { word: string; color: number } {
+    const HEALTHY = ['online', 'busy', 'waking'];
+    const lanes = LANE_ORDER.map((key) => this.snapshot.status.lanes[key].lane_state);
+    if (this.snapshot.status.degraded || lanes.includes('degraded')) {
+      return { word: 'DEGRADED', color: COLORS.amber };
+    }
+    if (lanes.every((state) => HEALTHY.includes(state))) {
+      return { word: 'NOMINAL', color: COLORS.green };
+    }
+    if (lanes.some((state) => state === 'online' || state === 'busy')) {
+      return { word: 'PARTIAL', color: COLORS.amber };
+    }
+    return { word: 'OFFLINE', color: COLORS.red };
+  }
+
+  /** Hero status panel + the model ticker strip below it. Returns the total
+   *  vertical advance so the caller can continue the layout. */
+  private drawHero(x: number, y: number, width: number): number {
+    const short = this.canvasHeight < 600;
+    const heroHeight = short ? 112 : 132;
+    this.panel(x, y, width, heroHeight, COLORS.panel);
+    this.hudCorners(x, y, width, heroHeight, COLORS.accent);
+
+    const logo = this.add.image(x + 42, y + 34, 'ashat-logo-large').setDisplaySize(58, 58).setAlpha(0.95);
     this.root.add(logo);
-    this.text('PUBLIC TELEMETRY', x + 86, y, 11, COLORS.accent, true, MONO, 2);
-    this.text('Omega', x + 86, y + 22, Math.min(36, width * 0.055), COLORS.text, true, HEADING);
+    this.text('PUBLIC TELEMETRY', x + 88, y + 12, 10, COLORS.cyan, true, MONO, 2.2);
+
+    const status = this.systemStatusWord();
+    this.lamp(x + 88, y + 54, status.color, 5);
+    this.text(status.word, x + 102, y + 42, Math.min(24, width * 0.04), status.color, true, MONO, 2.4);
+    this.text('SYSTEMS', x + 88, y + 74, 8, COLORS.dim, true, MONO, 2);
+
     const uptime = this.formatUptime(this.snapshot.status.uptime_seconds);
-    this.text(`UPTIME  ${uptime}   ·   ORCHESTRATOR  ${this.snapshot.status.orchestrator_pool.baseline_alive ? 'OK' : 'DOWN'}`,
-      x + width, y + 11, 10, COLORS.dim, false, MONO, 1.1).setOrigin(1, 0);
-    this.drawModelCard(x + 86, y + 64, x + width);
+    const colX = x + width - 190;
+    const lanesUp = LANE_ORDER.filter((key) => this.snapshot.status.lanes[key].lane_state !== 'offline').length;
+    this.readout('UPTIME', uptime, colX, y + 8, COLORS.text);
+    this.readout('ORCHESTRATOR', this.snapshot.status.orchestrator_pool.baseline_alive ? 'OK' : 'DOWN', colX, y + 44, this.snapshot.status.orchestrator_pool.baseline_alive ? COLORS.green : COLORS.red);
+    if (!short) {
+      this.readout('CAPACITY', `${lanesUp}/${LANE_ORDER.length} LANES`, colX, y + 80, COLORS.cyan);
+    }
+
+    // Active-model ticker: its own strip panel under the hero — never inside
+    // it, so short viewports can't collide the readouts and ticker text.
+    const stripY = y + heroHeight + 10;
+    const stripH = 48;
+    this.panel(x, stripY, width, stripH, COLORS.panel);
+    this.hudCorners(x, stripY, width, stripH, COLORS.line);
+    this.drawModelCard(x + 20, stripY + 5, x + width - 20);
+    return heroHeight + 10 + stripH;
+  }
+
+  /** Right-aligned label/value readout pair (mission-console style). */
+  private readout(label: string, value: string, rightX: number, y: number, color: number): void {
+    this.text(label, rightX, y, 8, COLORS.dim, true, MONO, 1.6).setOrigin(1, 0);
+    this.text(value, rightX, y + 14, 14, color, true, MONO, 0.6).setOrigin(1, 0);
+  }
+
+  /** HUD corner brackets. */
+  private hudCorners(x: number, y: number, w: number, h: number, color: number): void {
+    const len = 10;
+    const g = this.add.graphics();
+    g.lineStyle(1.5, color, 0.85);
+    g.lineBetween(x, y + len, x, y);
+    g.lineBetween(x, y, x + len, y);
+    g.lineBetween(x + w - len, y, x + w, y);
+    g.lineBetween(x + w, y, x + w, y + len);
+    g.lineBetween(x, y + h - len, x, y + h);
+    g.lineBetween(x, y + h, x + len, y + h);
+    g.lineBetween(x + w - len, y + h, x + w, y + h);
+    g.lineBetween(x + w, y + h - len, x + w, y + h);
+    this.root.add(g);
   }
 
   /**
@@ -212,74 +279,90 @@ export class TelemetryScene extends Phaser.Scene {
   }
 
   private drawCompactLaneCard(x: number, y: number, width: number, lane: LaneStatus, key: LaneKey): void {
-    const cardHeight = this.canvasHeight < 600 ? 180 : 200;
+    const cardHeight = this.canvasHeight < 600 ? 184 : 204;
     this.panel(x, y, width, cardHeight, COLORS.panel);
 
     const isOffline = lane.lane_state === 'offline';
     const stateColor = lane.lane_state === 'online' ? COLORS.green : lane.lane_state === 'degraded' ? COLORS.red : isOffline ? COLORS.dim : COLORS.amber;
 
+    // Lane number + label with lamp.
+    this.lamp(x + 16, y + 20, stateColor, 3.5);
     const number = (LANE_ORDER.indexOf(key) + 1).toString().padStart(2, '0');
-    this.text(`${number}  /  ${lane.label.toUpperCase()}`, x + 16, y + 16, 9, COLORS.accent, true, MONO, 1.2);
+    this.text(`${number}  ${lane.label.toUpperCase()}`, x + 28, y + 12, 10, COLORS.text, true, MONO, 1.4);
 
-    const pillW = 72;
-    const pill = this.add.graphics();
-    pill.fillStyle(stateColor, 0.12);
-    pill.fillRoundedRect(x + width - pillW - 16, y + 12, pillW, 22, 11);
-    pill.lineStyle(1, stateColor, 0.42);
-    pill.strokeRoundedRect(x + width - pillW - 16, y + 12, pillW, 22, 11);
-    this.root.add(pill);
-    this.root.add(this.add.circle(x + width - pillW - 16 + 12, y + 23, 3, stateColor));
-    this.text(lane.lane_state.toUpperCase(), x + width - pillW - 16 + 20, y + 17, 8, stateColor, true, MONO, 0.6);
+    const stateText = isOffline ? 'OFFLINE' : lane.lane_state.toUpperCase();
+    this.text(stateText, x + width - 16, y + 16, 9, stateColor, true, MONO, 1.2).setOrigin(1, 0);
 
     if (isOffline) {
-      this.text('NO CONNECTION', x + 16, y + 48, 11, COLORS.dim, false, MONO, 0.8);
+      this.text('NO CONNECTION', x + 16, y + 52, 11, COLORS.dim, false, MONO, 0.8);
       const url = LANE_URLS[key];
       if (url) {
-        this.text(url.replace('https://', ''), x + 16, y + 68, 8, COLORS.dim, false, MONO, 0.3);
+        this.text(url.replace('https://', ''), x + 16, y + 72, 8, COLORS.dim, false, MONO, 0.3);
       }
     } else {
-      this.text(this.friendlyModel(lane.model), x + 16, y + 48, 10, COLORS.text, false, MONO, 0.1, width - 32);
+      this.text(this.friendlyModel(lane.model), x + 16, y + 48, 10, COLORS.textSoft, false, MONO, 0.1, width - 32);
     }
 
-    this.rule(x + 16, y + 90, x + width - 16, COLORS.line);
+    this.rule(x + 16, y + 88, x + width - 16, COLORS.line);
 
     if (!isOffline) {
       const metricsCol1 = [
-        ['SPEED', `${lane.avg_generation_tokens_per_second.toFixed(1)} t/s`],
+        ['REQUESTS', `${lane.total_requests.toLocaleString()}`],
         ['TOKENS', `${this.formatNumber(lane.total_prompt_tokens + lane.total_completion_tokens)}`],
       ];
       const metricsCol2 = [
         ['LATENCY', `${lane.avg_time_to_first_token_ms?.toFixed(0) ?? '—'}ms`],
-        ['REQS', `${lane.total_requests.toLocaleString()}`],
+        ['SPEED', `${lane.avg_generation_tokens_per_second.toFixed(1)} t/s`],
       ];
 
       const colW = (width - 32) / 2;
       metricsCol1.forEach(([label, value], i) => {
-        this.text(label, x + 16, y + 102 + i * 36, 8, COLORS.dim, true, MONO, 0.8);
-        this.text(value, x + 16, y + 114 + i * 36, 13, i === 0 ? COLORS.accent : COLORS.text, true, MONO);
+        this.text(label, x + 16, y + 100 + i * 40, 8, COLORS.dim, true, MONO, 0.8);
+        this.text(value, x + 16, y + 112 + i * 40, 14, i === 0 ? COLORS.text : COLORS.cyan, true, MONO);
       });
       metricsCol2.forEach(([label, value], i) => {
-        this.text(label, x + 16 + colW, y + 102 + i * 36, 8, COLORS.dim, true, MONO, 0.8);
-        this.text(value, x + 16 + colW, y + 114 + i * 36, 13, COLORS.text, true, MONO);
+        this.text(label, x + 16 + colW, y + 100 + i * 40, 8, COLORS.dim, true, MONO, 0.8);
+        this.text(value, x + 16 + colW, y + 112 + i * 40, 14, COLORS.text, true, MONO);
       });
 
-      this.text(`${lane.success_rate.toFixed(1)}% SUCCESS`, x + 16, y + cardHeight - 24, 8, COLORS.muted, false, MONO, 0.6);
+      // Success rate bar.
+      const barW = width - 32;
+      const barY = y + cardHeight - 20;
+      const bar = this.add.graphics();
+      bar.fillStyle(COLORS.line, 1);
+      bar.fillRect(x + 16, barY, barW, 3);
+      bar.fillStyle(lane.success_rate >= 98 ? COLORS.green : lane.success_rate >= 90 ? COLORS.amber : COLORS.red, 1);
+      bar.fillRect(x + 16, barY, Math.max(2, (barW * lane.success_rate) / 100), 3);
+      this.root.add(bar);
+      this.text(`${lane.success_rate.toFixed(1)}% OK`, x + 16, barY - 16, 8, COLORS.muted, false, MONO, 0.6);
     } else {
-      this.text('STANDBY', x + 16, y + 110, 16, COLORS.dim, true, MONO, 1);
+      this.text('STANDBY', x + 16, y + 116, 14, COLORS.dim, true, MONO, 1);
     }
   }
 
+  /** Status lamp: filled dot with a soft halo. */
+  private lamp(x: number, y: number, color: number, radius: number): void {
+    const g = this.add.graphics();
+    g.fillStyle(color, 0.22);
+    g.fillCircle(x, y, radius * 2.4);
+    g.fillStyle(color, 1);
+    g.fillCircle(x, y, radius);
+    this.root.add(g);
+  }
+
   private laneColor(key: LaneKey): number {
-    if (key === 'beta') return COLORS.green;
+    if (key === 'beta') return COLORS.cyan;
     if (key === 'delta') return COLORS.amber;
     return COLORS.accent;
   }
 
   private drawPerformanceChart(x: number, y: number, width: number, laneKey: LaneKey, frames: TelemetryFrame[]): void {
-    const height = 206;
+    const height = 212;
     const laneColor = this.laneColor(laneKey);
     this.panel(x, y, width, height, COLORS.panel);
-    this.text(`GENERATION VELOCITY  ·  ${laneKey.toUpperCase()}`, x + 20, y + 20, 10, laneColor, true, MONO, 1.5);
+    this.hudCorners(x, y, width, height, COLORS.line);
+    this.lamp(x + 20, y + 20, laneColor, 3);
+    this.text(`GENERATION VELOCITY  ·  ${laneKey.toUpperCase()}`, x + 34, y + 12, 10, laneColor, true, MONO, 1.5);
 
     // Lane selector chips (right-aligned: OMEGA | BETA | DELTA).
     const chipY = y + 14;
@@ -353,16 +436,16 @@ export class TelemetryScene extends Phaser.Scene {
 
   private drawFooter(width: number, height: number): void {
     if (height < 640) return;
-    this.text('OMEGA · OMEGA-1', 24, height - 28, 10, COLORS.dim, true, MONO, 1.4);
+    this.text('OMEGA V6.2 · MASTER EDITION', 24, height - 28, 10, COLORS.dim, true, MONO, 1.4);
     this.text('LOCAL FIRST  ·  PRIVATE BY DEFAULT  ·  NO PROMPTS STORED', width - 24, height - 28, 9, COLORS.dim, false, MONO, 0.7).setOrigin(1, 0);
   }
 
   private panel(x: number, y: number, width: number, height: number, color: number): void {
     const shape = this.add.graphics();
-    shape.fillStyle(color, 0.94);
-    shape.fillRoundedRect(x, y, width, height, 10);
+    shape.fillStyle(color, 0.96);
+    shape.fillRoundedRect(x, y, width, height, 8);
     shape.lineStyle(1, COLORS.line, 1);
-    shape.strokeRoundedRect(x, y, width, height, 10);
+    shape.strokeRoundedRect(x, y, width, height, 8);
     this.root.add(shape);
   }
 
