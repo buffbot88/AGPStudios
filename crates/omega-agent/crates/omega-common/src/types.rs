@@ -5,6 +5,33 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::path::Path;
+
+/// Public-facing model name for telemetry: the basename with the model-file
+/// extension stripped. The public surface must never leak the on-disk
+/// location of a GGUF, so handlers render this instead of the raw path.
+pub fn public_model_name(path: &Path) -> String {
+    path.file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "model".to_owned())
+}
+
+/// Same sanitization for a free-form model string (e.g. one already received
+/// from a peer): take the final path segment and strip a known model-file
+/// extension so an upstream leak is never forwarded to the public surface.
+pub fn sanitize_model_name(raw: &str) -> String {
+    let stem = Path::new(raw)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| raw.to_owned());
+    if stem.is_empty() {
+        "model".to_owned()
+    } else {
+        stem
+    }
+}
 
 /// Outcome of the intent router's classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

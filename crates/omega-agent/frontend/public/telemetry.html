@@ -296,12 +296,22 @@
             return new Date().toLocaleTimeString('en-US', { hour12: false });
         }
 
+        function friendlyModel(raw) {
+            // Never expose a filesystem path: keep only the basename and strip
+            // the model-file extension.
+            return (raw || '').split('/').pop().replace(/\.(gguf|bin)$/i, '') || '—';
+        }
+
+        function activeLanes(lanes) {
+            return ['omega', 'beta', 'delta'].filter((key) => lanes?.[key]?.lane_state === 'online');
+        }
+
         function createServerCard(name, data) {
             const state = data?.lane_state || 'offline';
             const isOffline = state !== 'online';
             const badgeClass = isOffline ? 'badge-offline' : 'badge-online';
             const cardClass = isOffline ? 'offline' : '';
-            const model = (data?.model || '').split('/').pop() || '—';
+            const model = friendlyModel(data?.model);
 
             return `
                 <div class="server-card ${cardClass}">
@@ -337,7 +347,7 @@
             const totalTokensIn = ['omega', 'beta', 'delta'].reduce((sum, key) => sum + (lanesObj[key]?.total_prompt_tokens || 0), 0);
             const totalTokensOut = ['omega', 'beta', 'delta'].reduce((sum, key) => sum + (lanesObj[key]?.total_completion_tokens || 0), 0);
             const totalRequests = ['omega', 'beta', 'delta'].reduce((sum, key) => sum + (lanesObj[key]?.total_requests || 0), 0);
-            const onlineLanes = ['omega', 'beta', 'delta'].filter((key) => lanesObj[key]?.lane_state === 'online').length;
+            const onlineLanes = activeLanes(lanesObj).length;
 
             return `
                 <div class="summary-section">
@@ -356,8 +366,12 @@
                             <span class="summary-value requests">${formatNumber(totalRequests)}</span>
                         </div>
                         <div class="summary-item">
-                            <span class="summary-label">Lanes Online</span>
+                            <span class="summary-label">Lanes In Use</span>
                             <span class="summary-value">${onlineLanes}/3</span>
+                        </div>
+                        <div class="summary-item">
+                            <span class="summary-label">Active Model</span>
+                            <span class="summary-value" id="activeModelTicker">—</span>
                         </div>
                         <div class="summary-item">
                             <span class="summary-label">Uptime</span>
@@ -367,6 +381,27 @@
                 </div>
             `;
         }
+
+        // Cycle the "Active Model" ticker through the online lanes' models.
+        let modelTick = 0;
+        let lastLanes = null;
+        function startModelTicker(lanes) {
+            lastLanes = lanes;
+        }
+        setInterval(() => {
+            const el = document.getElementById('activeModelTicker');
+            const lanes = lastLanes || {};
+            const active = activeLanes(lanes);
+            if (!el) return;
+            if (active.length === 0) {
+                el.textContent = '—';
+                return;
+            }
+            const key = active[modelTick % active.length];
+            modelTick += 1;
+            const lane = lanes[key];
+            el.textContent = `${friendlyModel(lane.model)} · ${key}`;
+        }, 2500);
 
         async function fetchData() {
             try {
@@ -414,6 +449,14 @@
                 </div>
                 ${createSummarySection(data.lanes || {}, data.uptime_seconds)}
             `;
+            startModelTicker(data.lanes || {});
+            const ticker = document.getElementById('activeModelTicker');
+            const lanes = data.lanes || {};
+            const active = activeLanes(lanes);
+            if (ticker && active.length > 0) {
+                const key = active[0];
+                ticker.textContent = `${friendlyModel(lanes[key].model)} · ${key}`;
+            }
         }
 
         // Initial load

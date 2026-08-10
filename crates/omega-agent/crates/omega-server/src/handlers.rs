@@ -21,8 +21,9 @@ use crate::peer_telemetry::{PeerSnapshot, PeerTelemetry};
 use omega_common::config::{AppConfig, UpdatePeer};
 use omega_common::metrics::MetricsStore;
 use omega_common::types::{
-    ChatRequest, CodingCapacitySnapshot, HealthResponse, Intent, LaneStatus, MetricRecord,
-    OmegaModelConfig, Pool, PoolSnapshot, PublicStatus, QueueStatus,
+    public_model_name, sanitize_model_name, ChatRequest, CodingCapacitySnapshot, HealthResponse,
+    Intent, LaneStatus, MetricRecord, OmegaModelConfig, Pool, PoolSnapshot, PublicStatus,
+    QueueStatus,
 };
 use omega_core::demand::DemandPool;
 use omega_core::orchestrator::Orchestrator;
@@ -110,8 +111,9 @@ pub(crate) async fn status_snapshot(state: &Arc<AppState>) -> PublicStatus {
         let mut summary = metrics.summaries.omega.clone();
         // The Omega lane in 3-lane shape reflects the Coding Agent's 1.2B
         // model (which actually serves requests routed through the row
-        // chain), not the intent router's GGUF.
-        summary.model = state.coding_agent_pool.spec.model.display().to_string();
+        // chain), not the intent router's GGUF. Public surface only ever
+        // sees the basename — never the on-disk model path.
+        summary.model = public_model_name(&state.coding_agent_pool.spec.model);
         summary.ctx = state.coding_agent_pool.spec.ctx;
         // Live baseline but no requests yet: the metrics placeholder reads
         // `offline` — surface reachability instead.
@@ -221,6 +223,11 @@ fn merge_peer_metrics(value: &mut Value, peers: &HashMap<String, PeerSnapshot>) 
         let mut lane = serde_json::to_value(&peer.summaries.omega).unwrap_or_else(|_| json!({}));
         if let Some(obj) = lane.as_object_mut() {
             obj.insert("label".into(), json!(label));
+            // Defensive: an older slave build could still report a full model
+            // path; never forward filesystem locations to the public surface.
+            if let Some(model) = obj.get("model").and_then(|m| m.as_str()) {
+                obj.insert("model".into(), json!(sanitize_model_name(model)));
+            }
         }
         if let Some(obj) = value.get_mut("summaries").and_then(|s| s.as_object_mut()) {
             obj.insert(id.into(), lane);
@@ -253,6 +260,9 @@ fn peer_lane(peers: &HashMap<String, PeerSnapshot>, id: &str, label: &str) -> La
         .map(|status| {
             let mut lane = status.lanes.omega.clone();
             lane.label = label.to_owned();
+            // Public surface only sees the basename; never forward a path an
+            // older slave build might have reported.
+            lane.model = sanitize_model_name(&lane.model);
             // The slave's own lane reads `offline` until its first request
             // (metrics placeholder), but a reachable peer with a live
             // baseline is genuinely online — surface that instead.
@@ -574,7 +584,7 @@ pub async fn list_models(State(state): State<Arc<AppState>>) -> Json<Value> {
             "purpose": "intent-classification",
             "model": "Omega v6",
             "engine": "ollama.cpp",
-            "model_path": state.config.orchestrator_model.display().to_string(),
+            "model_path": public_model_name(&state.config.orchestrator_model),
         }),
         json!({
             "id": coding_label,
@@ -582,7 +592,7 @@ pub async fn list_models(State(state): State<Arc<AppState>>) -> Json<Value> {
             "purpose": "inference",
             "model": "Omega v6",
             "engine": "ollama.cpp",
-            "model_path": state.config.inference_model.display().to_string(),
+            "model_path": public_model_name(&state.config.inference_model),
         }),
     ];
 
@@ -591,7 +601,7 @@ pub async fn list_models(State(state): State<Arc<AppState>>) -> Json<Value> {
         name: "Omega-v6".to_string(),
         version: "6.0.0".to_string(),
         engine: "ollama.cpp".to_string(),
-        model_path: state.config.orchestrator_model.display().to_string(),
+        model_path: public_model_name(&state.config.orchestrator_model),
         description: "Omega v6 model optimized for ollama.cpp inference".to_string(),
     };
     models.push(json!(omega_v6));

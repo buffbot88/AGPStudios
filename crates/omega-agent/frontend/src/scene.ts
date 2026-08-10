@@ -42,6 +42,9 @@ export class TelemetryScene extends Phaser.Scene {
   private resizeHandler?: () => void;
   private pulseTween?: Phaser.Tweens.Tween;
   private selectedChartLane: LaneKey = 'omega';
+  private modelTickerText!: Phaser.GameObjects.Text;
+  private modelTickerTimer?: Phaser.Time.TimerEvent;
+  private modelIndex = 0;
 
   public constructor(initialSnapshot: TelemetrySnapshot) {
     super({ key: 'TelemetryScene' });
@@ -68,6 +71,7 @@ export class TelemetryScene extends Phaser.Scene {
   public shutdown(): void {
     if (this.resizeHandler) this.scale.off(Phaser.Scale.Events.RESIZE, this.resizeHandler);
     this.pulseTween?.stop();
+    this.modelTickerTimer?.remove(false);
   }
 
   public setSnapshot(snapshot: TelemetrySnapshot): void {
@@ -77,6 +81,8 @@ export class TelemetryScene extends Phaser.Scene {
 
   private draw(): void {
     this.pulseTween?.stop();
+    this.modelTickerTimer?.remove(false);
+    this.modelTickerTimer = undefined;
     this.root?.destroy(true);
     this.root = this.add.container(0, 0);
 
@@ -162,6 +168,44 @@ export class TelemetryScene extends Phaser.Scene {
     const uptime = this.formatUptime(this.snapshot.status.uptime_seconds);
     this.text(`UPTIME  ${uptime}   ·   ORCHESTRATOR  ${this.snapshot.status.orchestrator_pool.baseline_alive ? 'OK' : 'DOWN'}`,
       x + width, y + 11, 10, COLORS.dim, false, MONO, 1.1).setOrigin(1, 0);
+    this.drawModelCard(x + 86, y + 64, x + width);
+  }
+
+  /**
+   * Model card: cycles through the active lanes' models (basename only —
+   * never a filesystem path) and shows how many of the three lanes are in
+   * use right now.
+   */
+  private drawModelCard(left: number, y: number, right: number): void {
+    const active = LANE_ORDER.filter((key) => {
+      const lane = this.snapshot.status.lanes[key];
+      return lane.lane_state !== 'offline' && lane.model && lane.model !== '—';
+    });
+    const lanesInUse = LANE_ORDER.filter((key) => this.snapshot.status.lanes[key].lane_state === 'online').length;
+
+    this.text('ACTIVE MODELS', left, y, 9, COLORS.muted, true, MONO, 1);
+    this.modelTickerText = this.text('', left, y + 18, 12, COLORS.text, false, MONO);
+    this.text(`LANES IN USE  ${lanesInUse}/${LANE_ORDER.length}`, right, y + 14, 10, COLORS.green, true, MONO, 1.2).setOrigin(1, 0);
+
+    const cycle = () => {
+      if (active.length === 0) {
+        this.modelTickerText.setText('—');
+        return;
+      }
+      const key = active[this.modelIndex % active.length];
+      this.modelIndex += 1;
+      const lane = this.snapshot.status.lanes[key];
+      this.modelTickerText.setText(`${this.friendlyModel(lane.model)}  ·  ${key.toUpperCase()}`);
+    };
+    cycle();
+    this.modelTickerTimer = this.time.addEvent({ delay: 3000, loop: true, callback: cycle });
+  }
+
+  /** Model basename for display: strip any directory and model-file
+   *  extension so telemetry never shows the on-disk location. */
+  private friendlyModel(raw: string): string {
+    const base = raw.split('/').pop() ?? raw;
+    return base.replace(/\.(gguf|bin)$/i, '').replace('-Q8_0', ' · Q8');
   }
 
   private drawCompactLaneCard(x: number, y: number, width: number, lane: LaneStatus, key: LaneKey): void {
@@ -191,8 +235,7 @@ export class TelemetryScene extends Phaser.Scene {
         this.text(url.replace('https://', ''), x + 16, y + 68, 8, COLORS.dim, false, MONO, 0.3);
       }
     } else {
-      const model = lane.model.replace('.gguf', '').replace('-Q8_0', ' · Q8');
-      this.text(model, x + 16, y + 48, 10, COLORS.text, false, MONO, 0.1, width - 32);
+      this.text(this.friendlyModel(lane.model), x + 16, y + 48, 10, COLORS.text, false, MONO, 0.1, width - 32);
     }
 
     this.rule(x + 16, y + 90, x + width - 16, COLORS.line);
