@@ -7,12 +7,29 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
 
-/// Public-facing model name for telemetry: the basename with the model-file
-/// extension stripped. The public surface must never leak the on-disk
-/// location of a GGUF, so handlers render this instead of the raw path.
+/// Known model-file extensions that may never surface publicly. Only these
+/// are stripped — never an arbitrary dot-suffix, so versioned names like
+/// `LFM2.5-1.2B-Instruct-Q4_K_M` keep their internal dots intact.
+const MODEL_FILE_EXTS: [&str; 4] = [".gguf", ".bin", ".safetensors", ".onnx"];
+
+/// Strip a known model-file extension from a name, if present.
+fn strip_model_ext(name: &str) -> String {
+    let lower = name.to_ascii_lowercase();
+    for ext in MODEL_FILE_EXTS {
+        if let Some(stem) = lower.strip_suffix(ext) {
+            return name[..stem.len()].to_owned();
+        }
+    }
+    name.to_owned()
+}
+
+/// Public-facing model name for telemetry: the basename with a known
+/// model-file extension stripped. The public surface must never leak the
+/// on-disk location of a GGUF, so handlers render this instead of the raw
+/// path.
 pub fn public_model_name(path: &Path) -> String {
-    path.file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
+    path.file_name()
+        .map(|s| strip_model_ext(&s.to_string_lossy()))
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "model".to_owned())
 }
@@ -22,14 +39,14 @@ pub fn public_model_name(path: &Path) -> String {
 /// extension so an upstream leak is never forwarded to the public surface.
 pub fn sanitize_model_name(raw: &str) -> String {
     let stem = Path::new(raw)
-        .file_stem()
+        .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| raw.to_owned());
     if stem.is_empty() {
         "model".to_owned()
     } else {
-        stem
+        strip_model_ext(&stem)
     }
 }
 
@@ -430,3 +447,34 @@ impl std::fmt::Display for RouterError {
 }
 
 impl std::error::Error for RouterError {}
+
+#[cfg(test)]
+mod sanitizer_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn public_name_strips_directory_and_gguf_only() {
+        let path = PathBuf::from(
+            "/home/opc/Projects/ashatneuralhost-master/models/LFM2.5-1.2B-Instruct-Q4_K_M.gguf",
+        );
+        assert_eq!(public_model_name(&path), "LFM2.5-1.2B-Instruct-Q4_K_M");
+    }
+
+    #[test]
+    fn versioned_names_keep_internal_dots() {
+        // Regression: `file_stem()` would chop at the LAST dot, mangling
+        // `LFM2.5-1.2B-Instruct-Q4_K_M` down to `LFM2.5-1`. Only known
+        // model-file extensions may be stripped.
+        assert_eq!(
+            sanitize_model_name("LFM2.5-1.2B-Instruct-Q4_K_M"),
+            "LFM2.5-1.2B-Instruct-Q4_K_M"
+        );
+        assert_eq!(
+            sanitize_model_name("/models/LFM2.5-1.2B-Instruct-Q4_K_M.gguf"),
+            "LFM2.5-1.2B-Instruct-Q4_K_M"
+        );
+        assert_eq!(sanitize_model_name("model.bin"), "model");
+        assert_eq!(sanitize_model_name("—"), "—");
+    }
+}
