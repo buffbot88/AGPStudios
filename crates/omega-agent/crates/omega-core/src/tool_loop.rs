@@ -509,7 +509,7 @@ async fn execute_tool(
         },
         "skill" => {
             let skill = args.get("name").and_then(Value::as_str).unwrap_or("");
-            skill_lookup(skill_db, skill)
+            skill_lookup(skill_db, skill).await
         }
         other => Err(format!("unknown tool: {other}")),
     };
@@ -693,11 +693,11 @@ fn validate_json_abs(path: &Path, rel: &str) -> String {
     }
 }
 
-fn skill_lookup(db: &SkillDb, name: &str) -> Result<String, String> {
+async fn skill_lookup(db: &SkillDb, name: &str) -> Result<String, String> {
     if name.trim().is_empty() {
         return Err("skill name is empty".to_owned());
     }
-    match db.lookup(name) {
+    match db.lookup(name).await {
         Ok(Some(content)) => Ok(format!("skill '{name}':\n{content}")),
         Ok(None) => Err(format!("skill '{name}' not found in the skills database")),
         Err(reason) => Err(format!("skills database unavailable: {reason}")),
