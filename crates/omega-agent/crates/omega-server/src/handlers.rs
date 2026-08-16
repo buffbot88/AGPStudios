@@ -580,7 +580,7 @@ pub async fn list_models(State(state): State<Arc<AppState>>) -> Json<Value> {
     let mut models = vec![
         json!({
             "id": orchestrator_label,
-            "owned_by": "ashat-vl450m-router",
+            "owned_by": "ashat-350m-router",
             "purpose": "intent-classification",
             "model": "Omega v6",
             "engine": "ollama.cpp",

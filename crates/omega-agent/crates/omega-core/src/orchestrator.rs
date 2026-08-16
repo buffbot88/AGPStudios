@@ -95,6 +95,7 @@ impl Orchestrator {
                 Intent::Unknown
             }
         };
+        let intent = prefer_explicit_code(intent, &last_user);
 
         info!(
             intent = intent.as_str(),
@@ -122,6 +123,27 @@ fn build_prompt(last_user_message: &str) -> String {
          Now classify: \"{truncated}\"\n\
          Intent:"
     )
+}
+
+fn prefer_explicit_code(intent: Intent, message: &str) -> Intent {
+    if intent != Intent::Chat {
+        return intent;
+    }
+    let text = message.to_lowercase();
+    let explicit_code = [
+        "write code",
+        "complete code",
+        "generate the files",
+        "generate files",
+        "create the files",
+        "return the implementation",
+        "implement this",
+    ];
+    if explicit_code.iter().any(|cue| text.contains(cue)) {
+        Intent::Code
+    } else {
+        intent
+    }
 }
 
 fn parse_intent(json: &Value) -> Intent {
@@ -161,6 +183,25 @@ mod tests {
         let plong = build_prompt(&long);
         assert!(plong.contains(&"x".repeat(200)), "query truncated to 200");
         assert!(!plong.contains(&"x".repeat(201)), "no untruncated tail");
+    }
+
+    #[test]
+    fn explicit_code_request_overrides_weak_chat_classification() {
+        assert_eq!(
+            prefer_explicit_code(
+                Intent::Chat,
+                "write the complete code and return the implementation"
+            ),
+            Intent::Code
+        );
+        assert_eq!(
+            prefer_explicit_code(Intent::Chat, "hello there"),
+            Intent::Chat
+        );
+        assert_eq!(
+            prefer_explicit_code(Intent::Code, "hello there"),
+            Intent::Code
+        );
     }
 
     #[test]

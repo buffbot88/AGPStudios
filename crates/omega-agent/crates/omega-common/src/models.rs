@@ -2,9 +2,8 @@
 //!
 //! If `orchestrator_hint` / `inference_hint` resolve cleanly, use those exact
 //! filenames. If not, fall back to heuristics:
-//! - orchestrator = smallest *instruct-capable* GGUF (name contains `Instruct`
-//!   or `VL` — currently the LFM2.5-VL-450M intent router). The bare 230M is
-//!   deliberately avoided: its classifier is too weak to route code intents.
+//! - orchestrator = smallest *instruct-capable* GGUF (name contains `Instruct` or `350M`. The 350M text model is the
+//!   always-on intent router; vision models are not used for text routing.
 //! - inference = first GGUF whose name contains `1.2B` and `Instruct`
 
 use serde::Serialize;
@@ -54,15 +53,14 @@ impl ResolvedModels {
         };
 
         let orchestrator_path = pick(dir, &entries, orchestrator_hint, |e| {
-            let instruct_capable = e.file_name.contains("Instruct") || e.file_name.contains("VL");
-            // Instruct-capable models sort first (false < true); among them,
-            // the smallest wins so the 450M VL router beats the 1.2B agent.
+            let instruct_capable = e.file_name.contains("Instruct") || e.file_name.contains("350M");
+            // Text-router-capable models sort first; among them, the smallest wins.
             (
                 !instruct_capable,
                 parse_quant_size_bytes(&e.file_name).unwrap_or(u64::MAX),
             )
         })
-        .unwrap_or_else(|| dir.join("LFM2.5-VL-450M-Q4_K_M.gguf"));
+        .unwrap_or_else(|| dir.join("LFM2.5-350M-Q4_K_M.gguf"));
 
         let inference_path = pick(dir, &entries, inference_hint, |e| {
             if e.file_name.contains("1.2B") && e.file_name.contains("Instruct") {
@@ -162,17 +160,12 @@ mod tests {
     #[test]
     fn orchestrator_fallback_prefers_instruct_capable_small_model() {
         with_model_dir(|dir| {
-            // The bare 230M is the smallest file but its classifier can't
-            // route code intents; the fallback must pick the VL-450M router.
             touch(dir, "LFM2.5-230M-Q4_K_M.gguf");
-            touch(dir, "LFM2.5-VL-450M-Q4_K_M.gguf");
+            touch(dir, "LFM2.5-350M-Q4_K_M.gguf");
             touch(dir, "LFM2.5-1.2B-Instruct-Q4_K_M.gguf");
             let set = ResolvedModels::discover(dir, None, None);
             let orch = set.orchestrator_path.file_name().unwrap().to_str().unwrap();
-            assert!(
-                orch.contains("VL-450M"),
-                "expected VL-450M router, got {orch}"
-            );
+            assert!(orch.contains("350M"), "expected 350M router, got {orch}");
             assert!(set.inference_label.contains("1.2B-Instruct"));
         });
     }

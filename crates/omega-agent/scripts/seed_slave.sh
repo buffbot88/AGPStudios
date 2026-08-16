@@ -32,6 +32,9 @@ cd "$MASTER"
 HOST="${1:?usage: $0 <ssh-host> [install-dir] [bind-port]}"
 INSTALL="${2:-/home/opc/Projects/ashatneuralhost-slave}"
 PORT="${3:-8082}"
+HEALTH_PORT="$PORT"
+[ "$PORT" = "8082" ] && HEALTH_PORT="18082"
+[ "$PORT" = "8088" ] && HEALTH_PORT="18088"
 KEY="$MASTER/oraclehost_id_rsa"
 BIN_NAME="ashat-neural-host-master"
 UPDATE_MODELS="${UPDATE_MODELS:-0}"
@@ -101,15 +104,14 @@ else
 fi
 
 # --- 4. resolve model hints from what the slave actually has ------------------
-# Router: prefer a Q8_0/Q8 quant (operator-staged, higher quality) over
-# Q4_K_M, else the first VL-450M file present.
+# Router: use the 350M text model; slaves do not need the VL model.
 ORCH_HINT="$(ssh "${SSH_OPTS[@]}" "$HOST" \
-    "ls '$INSTALL/models/' | grep -i 'VL-450M' | grep -iE 'Q8_?0' | head -1" | tr -d '\r')"
-if [ -z "$ORCH_HINT" ]; then
-    ORCH_HINT="$(ssh "${SSH_OPTS[@]}" "$HOST" \
-        "ls '$INSTALL/models/' | grep -i 'VL-450M' | head -1" | tr -d '\r')"
-fi
-[ -n "$ORCH_HINT" ] || { echo "no VL-450M model present on slave; aborting"; exit 1; }
+    "ls '$INSTALL/models/' | grep -i '350M' | grep -iE 'Q4' | head -1" | tr -d '\r')"
+[ -n "$ORCH_HINT" ] || { echo "no 350M model present on slave; aborting"; exit 1; }
+log "orchestrator hint: $ORCH_HINT"
+
+# Remove the retired VL router from slave hosts; Omega retains its source copy.
+ssh "${SSH_OPTS[@]}" "$HOST" "rm -f '$INSTALL/models/'LFM2.5-VL-450M*"
 INF_HINT="$(ssh "${SSH_OPTS[@]}" "$HOST" \
     "ls '$INSTALL/models/' | grep -iE '1\\.2B.*Instruct' | grep -iE 'Q4' | head -1" | tr -d '\r')"
 if [ -z "$INF_HINT" ]; then
@@ -127,10 +129,11 @@ SEED_PORT="$PORT" SEED_KEY="$ASHAT_KEY" SEED_ORCH="$ORCH_HINT" SEED_INF="$INF_HI
 python3 - "$TMPCFG" <<'PYEOF'
 import json, os, sys
 port = int(os.environ["SEED_PORT"])
+internal_port = {8082: 18082, 8088: 18088}.get(port, port)
 cfg = {
     "ASHAT_KEY": os.environ["SEED_KEY"],
     "server": {
-        "bind": f"0.0.0.0:{port}",
+        "bind": f"127.0.0.1:{internal_port}",
         "orchestrator_port": 18079,
         "orchestrator_binary_default": "llama-server",
     },
@@ -142,7 +145,7 @@ cfg = {
     "inference": {
         "context": 4096,
         "max_tokens": 1024,
-        "timeout_seconds": 120,
+        "timeout_seconds": 180,
         "llama_threads": 2,
         "llama_gpu_layers": 0,
     },
@@ -153,7 +156,7 @@ cfg = {
         "spawn_attempts_before_503": 3,
     },
     "coding_agent_pool": {
-        "ports": [18080, 18081, 18082],
+        "ports": ([18180, 18181, 18182] if port == 8082 else [18080, 18081, 18082]),
         "queue_max": 32,
         "spawn_attempts_before_503": 3,
     },
@@ -228,7 +231,7 @@ ssh "${SSH_OPTS[@]}" "$HOST" "
 wait_healthy() {
     for _ in $(seq 1 90); do
         code="$(ssh "${SSH_OPTS[@]}" "$HOST" \
-            "curl -s -o /dev/null -w '%{http_code}' 'http://127.0.0.1:$PORT/health'" 2>/dev/null || true)"
+            "curl -s -o /dev/null -w '%{http_code}' 'http://127.0.0.1:$HEALTH_PORT/health'" 2>/dev/null || true)"
         if [ "$code" = "200" ]; then return 0; fi
         sleep 2
     done
@@ -238,7 +241,7 @@ wait_healthy() {
 log "waiting for slave /health on :$PORT"
 if wait_healthy; then
     log "slave READY on :$PORT"
-    ssh "${SSH_OPTS[@]}" "$HOST" "curl -s 'http://127.0.0.1:$PORT/health'; echo"
+    ssh "${SSH_OPTS[@]}" "$HOST" "curl -s 'http://127.0.0.1:$HEALTH_PORT/health'; echo"
     ssh "${SSH_OPTS[@]}" "$HOST" "systemctl is-active ashat-neural-host.service"
 else
     echo "new build did not become healthy within 180s — rolling back to .previous"
