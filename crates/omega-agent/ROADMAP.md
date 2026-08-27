@@ -11,16 +11,15 @@
 
 ## Goal
 
-A universal-source Rust + Axum server with an always-on **LFM2.5-VL-450M intent router** (replaced the original 230M — see BUILDPLAN), a spawn-on-demand pool of up to three 1.2B **Coding Agent** instances, and a Vite + Phaser public telemetry canvas. The source must run identically on the public dev server and on the developer's local machine. The master is a git repo on GitHub (see the Git constraint below); `server-config.json`, `models/`, `target/`, `logs/`, and `workspaces/` stay untracked.
+A universal-source Rust + Axum server with an always-on **LFM2.5-350M text intent router** (replaced the original 230M — see BUILDPLAN), a spawn-on-demand pool of up to three 1.2B **Coding Agent** instances, . The source must run identically on the public dev server and on the developer's local machine. The master is a git repo on GitHub (see the Git constraint below); `server-config.json`, `models/`, `target/`, `logs/`, and `workspaces/` stay untracked.
 
 ## Components (Phase 1 — this build)
 
 | ID | Role | Lifecycle | Ports |
 | --- | ----- | --------- | ----- |
-| **VL-450M Router (Orchestrator)** | Intent classification (`chat/code/status/unknown`); correlates request ↔ 1.2B; routes responses back to caller. May scale under load. | Baseline always-on. Extras spawn-on-demand, kill-after-task. | `18079` (baseline); grows into `18078` → `18077`. (Total peak: 3×450M.) |
+| **350M Text Router (Orchestrator)** | Intent classification (`chat/code/status/unknown`); correlates request ↔ 1.2B; routes responses back to caller. May scale under load. | Baseline always-on. Extras spawn-on-demand, kill-after-task. | `18079` (baseline); grows into `18078` → `18077`. (Total peak: 3×450M.) |
 | **1.2B Coding Agent (a.k.a. BrainStem instance)** | Per-request inference. | Spawn-on-demand; killed after response lands with caller. | `18080` → `18081` → `18082` (cap = 3 by spec). |
 | **BrainStem proxy** | Omega itself, listens on `:8080`. Routes through the orchestrator pool, then the coding-agent pool. | Always-on. | `0.0.0.0:8080`. |
-| **Frontend (telemetry)** | Public canvas: 3 lane cards (Omega / Beta / Delta) + Generation Velocity chart. Polls `/api/{public_status, public_metrics, dashboard_timeseries}` every 8 s. | Dev: Vite on `:5173`. Prod: static `frontend/dist/` served by reverse proxy. | — |
 | **Row chain — beta target** | Weighted round-robin backend (Phase 2). Enabled in config with its own `api_key`. | Always-on (per config). | `150.136.208.93:8082`. |
 | **Row chain — delta target** | Weighted round-robin backend (Phase 3). Enabled in config with its own `api_key`. | Always-on (per config). | `129.213.147.225:8088`. |
 
@@ -32,7 +31,7 @@ A universal-source Rust + Axum server with an always-on **LFM2.5-VL-450M intent 
 
 | Phase | Scope | Status |
 | ----- | ----- | ------ |
-| **1** | Omega server baseline — Orchestrator pool, Coding Agent pool, telemetry frontend, row-chain wiring (beta/delta disabled). | **done** |
+| **1** | Omega server baseline — Orchestrator pool, Coding Agent pool, row-chain wiring (beta/delta disabled). | **done** |
 | **2** | `Beta` server (separate instance, port `8082`). Same code as Omega with role binding changed. Enables `row_chain[1]` from Omega. | **done** — seeded at `150.136.208.93:8082` via `scripts/seed_slave.sh`; cross-server routing live-tested (`lane: beta`) |
 | **3** | `Delta` server (separate instance, port `8088`). Enables full `omega → beta → delta` row chain in Omega's config. | **done** — legacy delta.service retired; new slave seeded at `129.213.147.225:8088`; row_chain + update.peers enabled; dual-peer propagation + `lane: delta` routing verified |
 | **4** | Rate-limiting middleware (Tower layer before `auth`). | deferred (hook reserved) |
@@ -65,7 +64,7 @@ migration (v2)" for the locked decisions.
 ## Constraints / known trade-offs
 
 - **Quantization.** GGUF Q4_K_M for both models (faster, less precise than the archived Q8_K). One-word intent-classifier output is robust at Q4_K_M but the precision delta is observable.
-- **Intent router model.** The VL-450M router replaced the original 230M after live probing showed the 230M could not follow the single-word classification instruction (always said `chat`). See BUILDPLAN for the probe matrix.
+- **Intent router model.** The 350M text router replaced the original 230M after live probing showed the 230M could not follow the single-word classification instruction (always said `chat`). See BUILDPLAN for the probe matrix.
 - **Cold-start latency.** Every 1.2B spawn pays multi-second `llama-server` boot + 730 MB GGUF load; on a loaded 1-core host the health check window is 30 s and a failed spawn re-notifies waiters so the pump retries instead of stalling. Surfaced through `/api/public_metrics`.
 - **Hard cap.** Spec ceiling is 3 concurrent 1.2B instances. The 4th concurrent caller queues, not rejects.
 - **Baseline-resilience.** Baseline router respawn is critical-path: Omega's `8080` does not bind until the baseline reports `/health` ok. Spec-intent: never serve traffic if orchestrator is down.

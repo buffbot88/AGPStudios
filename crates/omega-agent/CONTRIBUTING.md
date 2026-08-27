@@ -1,8 +1,8 @@
 # Contributing — Ashat Neural Host Master Edition (Omega)
 
 Omega is the always-on master of the Ashat Neural Host ecosystem: a
-universal-source Rust + Axum LLM server (VL-450M intent router + spawn-on-demand
-1.2B Coding Agent pool) with a Vite + Phaser telemetry frontend, a weighted row
+universal-source Rust + Axum LLM server (350M text intent router + spawn-on-demand
+1.2B Coding Agent pool), a weighted row
 chain to the Beta / Delta slave hosts, and verified GitHub sync.
 
 ## Docs map
@@ -39,7 +39,6 @@ day-to-day:
    atomic.
 3. Validate — server: `cargo fmt --all --check`,
    `cargo clippy --all-targets -- -D warnings`, `cargo test`,
-   `cargo build --release`. Frontend: `cd frontend && npm run typecheck &&
    npm run build`.
 4. Update the affected docs in the same change: `README.md` for surface /
    config changes, `ROADMAP.md` for phase status, `BUILDPLAN.md` for locked
@@ -69,8 +68,7 @@ cargo build --release
 ./target/release/ashat-neural-host-master
 ```
 
-Models live in `models/` (auto-discovered), `bin/llama-server` is bundled, and
-the frontend runs with `cd frontend && npm install && npm run dev`.
+Models live in `models/` (auto-discovered) and `bin/llama-server` is bundled.
 
 ## Where things live
 
@@ -80,7 +78,6 @@ the frontend runs with `cd frontend && npm install && npm run dev`.
   row-chain router, tool loop, supervision
 - `crates/omega-server` — axum handlers, auth, alpha status reporter (binary
   `ashat-neural-host-master`)
-- `frontend/` — Vite + Phaser telemetry canvas (polls `/api/*` every 8 s)
 - `scripts/` — `seed_slave.sh` (peer deploy), `github_sync.sh` (GitHub sync)
 - `bin/` — bundled `llama-server`
 

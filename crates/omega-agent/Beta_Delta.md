@@ -25,7 +25,7 @@ the service; and verifies /health. Re-running it propagates master updates.
 ```
 
 The router model on a peer is resolved from what is staged in its models/ dir
-(preferring a Q8_0 VL-450M quant when present). Verify afterwards:
+(using the staged 350M text-router quant). Verify afterwards:
 
 ```bash
 curl -s http://<peer-ip>:8082/health
