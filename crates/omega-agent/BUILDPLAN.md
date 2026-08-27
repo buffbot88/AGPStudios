@@ -1,6 +1,6 @@
 # Build Plan — Ashat Neural Host Master Edition (Omega)
 
-> **Current-source note (v8):** This is the historical implementation plan. The live source now uses the 350M text model as the always-on intent router and ships as a server/API tree without the former telemetry frontend. For current behavior, use `README.md`, `CONTRIBUTING.md`, and `ROADMAP.md`.
+> **Current-source note (v8):** This document preserves the historical implementation plan. The current source uses the 350M text model as the always-on intent router and ships as a server/API tree. For current behavior, use `README.md`, `CONTRIBUTING.md`, and `ROADMAP.md`.
 
 
 **Server instance name:** Omega
@@ -40,7 +40,7 @@ ashatneuralhost-master/
 ├── VOWS.md                   ← protected; do NOT modify
 ├── README.md                 ← host-dependent setup only
 ├── models/                   ← do NOT modify contents (LFM2.5-1.2B-Instruct-Q4_K_M.gguf,
-│                              LFM2.5-VL-450M-Q4_K_M.gguf — intent router; LFM2.5-230M retained)
+│                              LFM2.5-350M-Q4_K_M.gguf — intent router; LFM2.5-230M retained)
 ├── bin/llama-server          ← bundled llama-server binary
 ├── logs/                     ← runtime metrics.jsonl + omega-server.log (created at runtime)
 ├── workspaces/               ← per-agent coding workspaces (created at runtime)
@@ -87,7 +87,7 @@ ashatneuralhost-master/
   },
   "models": {
     "dir": "models",
-    "orchestrator_hint": "LFM2.5-VL-450M-Q4_K_M.gguf",
+    "orchestrator_hint": "LFM2.5-350M-Q4_K_M.gguf",
     "inference_hint": "LFM2.5-1.2B-Instruct-Q4_K_M.gguf"
   },
   "inference": {
@@ -164,8 +164,7 @@ Since v6.2 the `row_chain` entries carry a `weight` (smooth WRRS — see
 
 ### Intent router model (locked after live probing)
 
-The orchestrator router runs **`LFM2.5-VL-450M-Q4_K_M.gguf`** (LiquidAI VL
-instruct, 229 MB). The original `LFM2.5-230M` could not follow the
+The orchestrator router runs **`LFM2.5-350M-Q4_K_M.gguf`** (LiquidAI instruct, 229 MB). The original `LFM2.5-230M` could not follow the
 one-word-classification instruction at all (it always emitted `"chat"`),
 which silently dead-ended the Phase 6 `Intent::Code` path. Candidate models
 were probed live against a fixed battery (4 code / 4 chat / 2 status / 1
@@ -177,11 +176,11 @@ unknown):
 | LFM2.5-350M | 2/3 | 0 | 229 MB | ~2.6 s |
 | LFM2-700M | 4/4 | 0 | 469 MB | ~6.9 s |
 | SmolLM2-1.7B | 4/4 | 0 | 1056 MB | ~6.6 s |
-| **LFM2.5-VL-450M** | **4/4** | **0** | **229 MB** | **~3.2 s** |
+| **LFM2.5-350M text router** | **4/4** | **0** | **229 MB** | **~3.2 s** |
 
-LFM2.5-VL-450M ties the bigger models on the one decision that changes
+LFM2.5-350M text router ties the bigger models on the one decision that changes
 routing (code vs not) at half the RAM of LFM2-700M, and it loads in the
-custom `llama-server` build without the vision `mmproj`. The classifier
+custom `llama-server` build without any vision-specific `mmproj`. The classifier
 prompt is a compact few-shot + `Intent:` completion prefix (`max_tokens: 16`)
 — a bare "respond with one word" instruction makes small models echo the
 user text instead.
@@ -189,7 +188,7 @@ user text instead.
 ## Request flow under concurrent users
 
 1. **Client** → `POST /v1/chat/completions` with header `X-Ashat-Key: ASHAT_KEY`.
-2. **Orchestrator classify.** The router asks the VL-450M Orchestrator pool:
+2. **Orchestrator classify.** The router asks the 350M text router Orchestrator pool:
    1. Always-on baseline on `18079`.
    2. If saturated, acquire an instance from `ports_extra` (`18078` → `18077`).
    3. If every extra port is busy, queue with `inference.timeout_seconds` cap.
@@ -198,10 +197,10 @@ user text instead.
    2. If the chosen port has no running `llama-server`, spawn one carrying the 1.2B GGUF, poll `/health` until ready.
    3. If all three ports are busy, queue with `inference.timeout_seconds` cap.
 4. **Proxy.** Forward the prompt to `http://127.0.0.1:{port}/v1/chat/completions`. Stream the response back to the caller. The 1.2B `tokio::process::Child` is wrapped in an RAII `InstanceGuard` keyed to the port.
-5. **Hand off.** When the streaming response completes (or the client disconnects), `InstanceGuard::Drop` issues `start_kill()` and reclaims the port into the free set. Same shape for VL-450M extras on `ports_extra`. The baseline on `18079` never dies; `supervision.rs` respawns only on death.
+5. **Hand off.** When the streaming response completes (or the client disconnects), `InstanceGuard::Drop` issues `start_kill()` and reclaims the port into the free set. Same shape for 350M text router extras on `ports_extra`. The baseline on `18079` never dies; `supervision.rs` respawns only on death.
 6. **Record.** `MetricRecord { ts, intent, target_pool, target_port, success, latency_ms, error? }` appended to `logs/metrics.jsonl`.
 
-`503` triggers (and only these): spawn fails `spawn_attempts_before_503` times in a row, OR queue head waits longer than `inference.timeout_seconds`, OR baseline VL-450M `/health` failing after `spawn_attempts_before_503` retries. Each trigger reason is reported via `/api/public_status`.
+`503` triggers (and only these): spawn fails `spawn_attempts_before_503` times in a row, OR queue head waits longer than `inference.timeout_seconds`, OR baseline 350M text router `/health` failing after `spawn_attempts_before_503` retries. Each trigger reason is reported via `/api/public_status`.
 
 **Row-chain routing (v6.2).** The chat handler routes requests through
 `RowRouter::pick()` — a smooth weighted round-robin over the enabled backends
@@ -253,7 +252,7 @@ Build/run: `cargo build --release` (workspace) →
 
 ## Phase 6 — Advanced Coding Agent with tools (done)
 
-When the VL-450M router classifies a request as `code` on the omega lane,
+When the 350M text router classifies a request as `code` on the omega lane,
 `handlers.rs`
 routes it to `ToolLoop` (`crates/omega-core/src/tool_loop.rs`) instead of the
 plain proxy. The loop holds one 1.2B slot and iterates model → tool →
@@ -333,7 +332,7 @@ cargo fmt --all --check
 cargo clippy --all-targets -- -D warnings   # clippy not installed on the current dev host; run where available
 cargo test
 cargo build --release
-./target/release/ashat-neural-host-master &    # starts baseline VL-450M on 18079, binds 8080
+./target/release/ashat-neural-host-master &    # starts baseline 350M text router on 18079, binds 8080
 
 # Smoke
 curl -fsS http://127.0.0.1:8080/health
@@ -347,9 +346,9 @@ code=$(curl -ksS -o /tmp/a.json -w '%{http_code}' \
 test "$code" = 200
 
 # Spawn-on-demand — 1.2B exits after each response
-ps -o pid,cmd -C llama-server | wc -l              # before request: 1 (VL-450M baseline)
+ps -o pid,cmd -C llama-server | wc -l              # before request: 1 (350M text router baseline)
 sleep 6
-ps -o pid,cmd -C llama-server | wc -l              # after idle: 1 (VL-450M only)
+ps -o pid,cmd -C llama-server | wc -l              # after idle: 1 (350M text router only)
 
 # Concurrent (4 simultaneous; cap is 3 → 4th queues, never 503)
 for i in 1 2 3 4; do
@@ -372,10 +371,10 @@ test -d dist
 | Severity | Title | Detail |
 | -------- | ----- | ------ |
 | High | Cold-start latency on every 1.2B | `llama-server` + 730 MB GGUF load is multi-second per agent. Accepted by spec; tracked in `/api/public_metrics`. |
-| High | Q4_K_M precision loss | One-word intent classification by the VL-450M router may misclassify. Mitigation: deterministic prompt (`temperature: 0`, `max_tokens: 8`); monitor unknown-rate. |
+| High | Q4_K_M precision loss | One-word intent classification by the 350M text router may misclassify. Mitigation: deterministic prompt (`temperature: 0`, `max_tokens: 8`); monitor unknown-rate. |
 | Medium | Concurrent cap of 3 × 1.2B | 4th caller queues. No `503` unless queue head ages out. |
 | Medium | Orphan children on Rust crash | Spawned `llama-server` may leak if Omega aborts. Mitigation: `kill_on_drop` where supported + walk active guards on shutdown signal. |
-| Medium | Baseline VL-450M blocks public bind | Axum `:8080` does not open until baseline VL-450M `/health` returns ok. Spec-intent: never serve unauthenticated traffic during orchestrator outage. |
+| Medium | Baseline 350M text router blocks public bind | Axum `:8080` does not open until baseline 350M text router `/health` returns ok. Spec-intent: never serve unauthenticated traffic during orchestrator outage. |
 | Low | GGUF discovery hits filename change | Hints/fallback may match nothing. Mitigation: hints overridable in config. |
 
 ## Deferred hooks (remaining — Update propagation and GitHub self-updater are now live: Phases 5 and 9)

@@ -17,7 +17,7 @@ A universal-source Rust + Axum server with an always-on **LFM2.5-350M text inten
 
 | ID | Role | Lifecycle | Ports |
 | --- | ----- | --------- | ----- |
-| **350M Text Router (Orchestrator)** | Intent classification (`chat/code/status/unknown`); correlates request ↔ 1.2B; routes responses back to caller. May scale under load. | Baseline always-on. Extras spawn-on-demand, kill-after-task. | `18079` (baseline); grows into `18078` → `18077`. (Total peak: 3×450M.) |
+| **350M Text Router (Orchestrator)** | Intent classification (`chat/code/status/unknown`); correlates request ↔ 1.2B; routes responses back to caller. May scale under load. | Baseline always-on. Extras spawn-on-demand, kill-after-task. | `18079` (baseline); grows into `18078` → `18077`. (Total peak: 3×350M.) |
 | **1.2B Coding Agent (a.k.a. BrainStem instance)** | Per-request inference. | Spawn-on-demand; killed after response lands with caller. | `18080` → `18081` → `18082` (cap = 3 by spec). |
 | **BrainStem proxy** | Omega itself, listens on `:8080`. Routes through the orchestrator pool, then the coding-agent pool. | Always-on. | `0.0.0.0:8080`. |
 | **Row chain — beta target** | Weighted round-robin backend (Phase 2). Enabled in config with its own `api_key`. | Always-on (per config). | `150.136.208.93:8082`. |
