@@ -11,7 +11,7 @@
 
 ## Goal
 
-A universal-source Rust + Axum server with an always-on **LFM2.5-350M text intent router** (replaced the original 230M — see BUILDPLAN), a spawn-on-demand pool of up to three 1.2B **Coding Agent** instances, . The source must run identically on the public dev server and on the developer's local machine. The master is a git repo on GitHub (see the Git constraint below); `server-config.json`, `models/`, `target/`, `logs/`, and `workspaces/` stay untracked.
+A universal-source Rust + Axum server with an always-on **LFM2.5-350M text intent router** (replaced the original 230M — see BUILDPLAN), a spawn-on-demand pool of up to three 1.2B **Coding Agent** instances. The source must run identically on the public dev server and on the developer's local machine. The master is a git repo on GitHub (see the Git constraint below); `server-config.json`, `models/`, `target/`, `logs/`, and `workspaces/` stay untracked.
 
 ## Components (Phase 1 — this build)
 

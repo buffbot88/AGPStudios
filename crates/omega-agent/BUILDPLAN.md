@@ -1,5 +1,8 @@
 # Build Plan — Ashat Neural Host Master Edition (Omega)
 
+> **Current-source note (v8):** This is the historical implementation plan. The live source now uses the 350M text model as the always-on intent router and ships as a server/API tree without the former telemetry frontend. For current behavior, use `README.md`, `CONTRIBUTING.md`, and `ROADMAP.md`.
+
+
 **Server instance name:** Omega
 **Project name:** Ashat Neural Host Master Edition
 **Plan version:** v1 (Phase 1 build) + v2 (workspace migration) + v3 (root migration + v6.x tooling)
