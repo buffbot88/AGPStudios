@@ -211,6 +211,9 @@ pub struct MetricRecord {
     pub success: bool,
     pub latency_ms: f64,
     pub queue_wait_ms: f64,
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub time_to_first_token_ms: Option<f64>,
     pub error_category: Option<String>,
 }
 
@@ -336,6 +339,8 @@ pub struct Lanes {
 pub struct PublicMetrics {
     pub uptime_seconds: f64,
     pub summaries: Lanes,
+    pub active_requests: usize,
+    pub requests_last_5m: usize,
     pub total_events: usize,
     pub recent_events: Vec<String>,
 }

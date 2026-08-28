@@ -249,6 +249,9 @@ impl ToolLoop {
                     success: true,
                     latency_ms: latency,
                     queue_wait_ms: 0.0,
+                    prompt_tokens: 0,
+                    completion_tokens: 0,
+                    time_to_first_token_ms: None,
                     error_category: None,
                 });
             }
@@ -262,6 +265,9 @@ impl ToolLoop {
                     success: false,
                     latency_ms: latency,
                     queue_wait_ms: 0.0,
+                    prompt_tokens: 0,
+                    completion_tokens: 0,
+                    time_to_first_token_ms: None,
                     error_category: Some(err.to_string()),
                 });
             }

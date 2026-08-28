@@ -13,7 +13,10 @@ use std::{
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Mutex,
+    },
     time::Instant,
 };
 
@@ -34,6 +37,7 @@ pub struct MetricsStore {
     persist_path: PathBuf,
     recent_events: Mutex<VecDeque<String>>,
     active_runs: Mutex<HashMap<u16, Instant>>,
+    active_requests: AtomicUsize,
 }
 
 impl MetricsStore {
@@ -46,6 +50,7 @@ impl MetricsStore {
             persist_path: persist_path.to_path_buf(),
             recent_events: Mutex::new(VecDeque::with_capacity(64)),
             active_runs: Mutex::new(HashMap::new()),
+            active_requests: AtomicUsize::new(0),
         }
     }
 
@@ -86,6 +91,16 @@ impl MetricsStore {
     pub fn summary(&self, uptime_seconds: f64) -> PublicMetrics {
         let guard = self.records.lock().expect("metrics lock poisoned");
         let total = guard.len();
+        let requests_last_5m = guard
+            .iter()
+            .filter(|rec| {
+                chrono::DateTime::parse_from_rfc3339(&rec.timestamp)
+                    .map(|at| {
+                        (chrono::Utc::now() - at.with_timezone(&chrono::Utc)).num_seconds() < 300
+                    })
+                    .unwrap_or(false)
+            })
+            .count();
 
         let mut omega = LaneAccumulator::default();
         let beta = LaneAccumulator::default();
@@ -109,9 +124,23 @@ impl MetricsStore {
                 beta: beta_status,
                 delta: delta_status,
             },
+            active_requests: self.active_requests(),
+            requests_last_5m,
             total_events: total,
             recent_events: events,
         }
+    }
+
+    pub fn request_started(&self) {
+        self.active_requests.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn request_finished(&self) {
+        self.active_requests.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    pub fn active_requests(&self) -> usize {
+        self.active_requests.load(Ordering::Relaxed)
     }
 
     /// Record the start of a coding-agent run (tool-loop / project sessions).
@@ -183,11 +212,12 @@ impl MetricsStore {
             .filter(|r| matches!(r.pool, Pool::CodingAgent))
             .map(|r| TelemetryFrame {
                 timestamp: r.timestamp.clone(),
-                // Token counts aren't harvested from upstream yet.
-                generation_tokens_per_second: None,
-                prompt_tokens_per_second: None,
+                generation_tokens_per_second: (r.completion_tokens > 0 && r.latency_ms > 0.0)
+                    .then(|| r.completion_tokens as f64 / (r.latency_ms / 1000.0)),
+                prompt_tokens_per_second: (r.prompt_tokens > 0 && r.latency_ms > 0.0)
+                    .then(|| r.prompt_tokens as f64 / (r.latency_ms / 1000.0)),
                 total_latency_ms: r.latency_ms,
-                time_to_first_token_ms: None,
+                time_to_first_token_ms: r.time_to_first_token_ms,
                 success: r.success,
             })
             .collect();
@@ -216,6 +246,12 @@ struct LaneAccumulator {
     success_count: u64,
     failure_count: u64,
     total_latency_ms: f64,
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    generation_rate_sum: f64,
+    prompt_rate_sum: f64,
+    quickest_generation_rate: f64,
+    slowest_generation_rate: f64,
     quickest_latency_ms: f64,
     slowest_latency_ms: f64,
     latest_latency_ms: f64,
@@ -233,6 +269,19 @@ impl LaneAccumulator {
             self.last_failure_code = rec.error_category.clone();
         }
         self.total_latency_ms += rec.latency_ms;
+        self.prompt_tokens += rec.prompt_tokens as u64;
+        self.completion_tokens += rec.completion_tokens as u64;
+        if rec.latency_ms > 0.0 {
+            let generation_rate = rec.completion_tokens as f64 / (rec.latency_ms / 1000.0);
+            self.generation_rate_sum += generation_rate;
+            self.prompt_rate_sum += rec.prompt_tokens as f64 / (rec.latency_ms / 1000.0);
+            if self.total_requests == 1 || generation_rate < self.slowest_generation_rate {
+                self.slowest_generation_rate = generation_rate;
+            }
+            if generation_rate > self.quickest_generation_rate {
+                self.quickest_generation_rate = generation_rate;
+            }
+        }
         if self.total_requests == 1 || rec.latency_ms < self.quickest_latency_ms {
             self.quickest_latency_ms = rec.latency_ms;
         }
@@ -262,16 +311,20 @@ impl LaneAccumulator {
             },
             total_requests: self.total_requests,
             success_rate,
-            total_prompt_tokens: 0,
-            total_completion_tokens: 0,
-            quickest_generation_tokens_per_second: 0.0,
-            slowest_generation_tokens_per_second: 0.0,
-            latest_generation_tokens_per_second: 0.0,
-            avg_generation_tokens_per_second: 0.0,
-            avg_prompt_tokens_per_second: 0.0,
+            total_prompt_tokens: self.prompt_tokens,
+            total_completion_tokens: self.completion_tokens,
+            quickest_generation_tokens_per_second: self.quickest_generation_rate,
+            slowest_generation_tokens_per_second: self.slowest_generation_rate,
+            latest_generation_tokens_per_second: if self.latest_latency_ms > 0.0 {
+                self.completion_tokens as f64 / (self.latest_latency_ms / 1000.0)
+            } else {
+                0.0
+            },
+            avg_generation_tokens_per_second: self.generation_rate_sum / self.total_requests as f64,
+            avg_prompt_tokens_per_second: self.prompt_rate_sum / self.total_requests as f64,
             avg_total_latency_ms: avg_latency,
             last_time_to_first_token_ms: None,
-            avg_time_to_first_token_ms: Some(avg_latency / 4.0),
+            avg_time_to_first_token_ms: None,
             last_request_time: self.last_request_time.clone(),
             last_failure_code: self.last_failure_code.clone(),
             reason_message: None,
@@ -298,6 +351,9 @@ mod tests {
             success: true,
             latency_ms: 5_000.0,
             queue_wait_ms: 0.0,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            time_to_first_token_ms: None,
             error_category: None,
         });
         store.mark_run_start(18280);

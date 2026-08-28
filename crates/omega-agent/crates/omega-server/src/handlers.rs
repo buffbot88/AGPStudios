@@ -683,6 +683,9 @@ pub async fn chat(State(state): State<Arc<AppState>>, request: Request<Body>) ->
         success: true,
         latency_ms: started.elapsed().as_secs_f64() * 1000.0,
         queue_wait_ms: 0.0,
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        time_to_first_token_ms: None,
         error_category: None,
     });
 
