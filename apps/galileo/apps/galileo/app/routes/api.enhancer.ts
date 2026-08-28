@@ -11,7 +11,7 @@ export async function action(args: ActionFunctionArgs) {
 }
 
 async function enhancerAction({ request }: ActionFunctionArgs) {
-  const { message } = await request.json<{ message: string }>();
+  const { message } = (await request.json()) as { message: string };
 
   try {
     const result = await streamText(

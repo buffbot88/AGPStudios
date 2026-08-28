@@ -1,10 +1,14 @@
+import { PassThrough, Transform } from 'node:stream';
 import type { AppLoadContext, EntryContext } from '@remix-run/node';
+import { createReadableStreamFromReadable } from '@remix-run/node';
 import { RemixServer } from '@remix-run/react';
 import { isbot } from 'isbot';
-import { renderToReadableStream } from 'react-dom/server';
+import { renderToPipeableStream } from 'react-dom/server';
 import { renderHeadToString } from 'remix-island';
 import { Head } from './root';
 import { themeStore } from '~/lib/stores/theme';
+
+const ABORT_DELAY = 30_000;
 
 export default async function handleRequest(
   request: Request,
@@ -13,66 +17,65 @@ export default async function handleRequest(
   remixContext: EntryContext,
   _loadContext: AppLoadContext,
 ) {
-  const readable = await renderToReadableStream(<RemixServer context={remixContext} url={request.url} />, {
-    signal: request.signal,
-    onError(error: unknown) {
-      console.error(error);
-      responseStatusCode = 500;
-    },
-  });
+  const readyOption = isbot(request.headers.get('user-agent') || '') ? 'onAllReady' : 'onShellReady';
 
-  const body = new ReadableStream({
-    start(controller) {
-      const head = renderHeadToString({ request, remixContext, Head });
+  return new Promise<Response>((resolve, reject) => {
+    let renderedStatusCode = responseStatusCode;
 
-      controller.enqueue(
-        new Uint8Array(
-          new TextEncoder().encode(
-            `<!DOCTYPE html><html lang="en" data-theme="${themeStore.value}"><head>${head}</head><body><div id="root" class="w-full h-full">`,
-          ),
-        ),
-      );
+    const { pipe, abort } = renderToPipeableStream(
+      <RemixServer context={remixContext} url={request.url} abortDelay={ABORT_DELAY} />,
+      {
+        [readyOption]() {
+          const head = renderHeadToString({ request, remixContext, Head });
 
-      const reader = readable.getReader();
+          let shellStarted = false;
+          const passthrough = new PassThrough();
+          const wrapped = new Transform({
+            transform(chunk, _encoding, callback) {
+              if (!shellStarted) {
+                this.push(
+                  new TextEncoder().encode(
+                    `<!DOCTYPE html><html lang="en" data-theme="${themeStore.value}"><head>${head}</head><body><div id="root" class="w-full h-full">`,
+                  ),
+                );
+                shellStarted = true;
+              }
 
-      function read() {
-        reader
-          .read()
-          .then(({ done, value }) => {
-            if (done) {
-              controller.enqueue(new Uint8Array(new TextEncoder().encode(`</div></body></html>`)));
-              controller.close();
-
-              return;
-            }
-
-            controller.enqueue(value);
-            read();
-          })
-          .catch((error) => {
-            controller.error(error);
-            readable.cancel();
+              callback(null, chunk);
+            },
+            flush(callback) {
+              this.push(new TextEncoder().encode('</div></body></html>'));
+              callback();
+            },
           });
-      }
-      read();
-    },
 
-    cancel() {
-      readable.cancel();
-    },
-  });
+          passthrough.pipe(wrapped);
+          pipe(passthrough);
 
-  if (isbot(request.headers.get('user-agent') || '')) {
-    await readable.allReady;
-  }
+          const stream = createReadableStreamFromReadable(wrapped);
 
-  responseHeaders.set('Content-Type', 'text/html');
+          responseHeaders.set('Content-Type', 'text/html');
+          responseHeaders.set('Cross-Origin-Embedder-Policy', 'require-corp');
+          responseHeaders.set('Cross-Origin-Opener-Policy', 'same-origin');
 
-  responseHeaders.set('Cross-Origin-Embedder-Policy', 'require-corp');
-  responseHeaders.set('Cross-Origin-Opener-Policy', 'same-origin');
+          resolve(
+            new Response(stream, {
+              headers: responseHeaders,
+              status: renderedStatusCode,
+            }),
+          );
 
-  return new Response(body, {
-    headers: responseHeaders,
-    status: responseStatusCode,
+          // Prevent a suspended render from hanging the server forever.
+          setTimeout(abort, ABORT_DELAY);
+        },
+        onError(error: unknown) {
+          console.error(error);
+          renderedStatusCode = 500;
+        },
+        onShellError(error: unknown) {
+          reject(error);
+        },
+      } as Parameters<typeof renderToPipeableStream>[1],
+    );
   });
 }

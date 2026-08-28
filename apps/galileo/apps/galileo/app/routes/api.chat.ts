@@ -9,7 +9,7 @@ export async function action(args: ActionFunctionArgs) {
 }
 
 async function chatAction({ request }: ActionFunctionArgs) {
-  const { messages } = await request.json<{ messages: Messages }>();
+  const { messages } = (await request.json()) as { messages: Messages };
 
   const stream = new SwitchableStream();
 
