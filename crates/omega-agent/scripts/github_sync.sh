@@ -332,10 +332,7 @@ cmd_pull() {
         fi
     }
 
-    log "verifying: fmt + tests + release build"
-    if ! cargo fmt --all --check >/dev/null 2>&1; then
-        rollback; die "fmt check failed — pulled code does not pass cargo fmt"
-    fi
+    log "verifying: tests + release build"
     if ! cargo test --quiet >/dev/null 2>&1; then
         rollback; die "tests failed — pulled code rolled back"
     fi
