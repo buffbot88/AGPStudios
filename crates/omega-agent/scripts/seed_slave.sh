@@ -12,7 +12,7 @@
 # Usage:
 #   scripts/seed_slave.sh <ssh-host> [install-dir] [bind-port]
 #   scripts/seed_slave.sh opc@150.136.208.93
-#   scripts/seed_slave.sh opc@129.213.147.225 /home/opc/Projects/ashatneuralhost-slave 8083
+#   scripts/seed_slave.sh opc@129.213.147.225 /var/oled/data/AshatCodingAgent 8083
 #   UPDATE_MODELS=1 scripts/seed_slave.sh opc@150.136.208.93   # also refresh models
 #
 # Connection details live in Beta_Delta.md; auth uses ./oraclehost_id_rsa.
@@ -30,8 +30,13 @@ MASTER="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$MASTER"
 
 HOST="${1:?usage: $0 <ssh-host> [install-dir] [bind-port]}"
-INSTALL="${2:-/home/opc/Projects/ashatneuralhost-slave}"
+INSTALL="${2:-/var/oled/data/AshatCodingAgent}"
 PORT="${3:-8082}"
+case "$HOST" in
+  *150.136.208.93*) SERVER_NAME="Ashat Beta" ;;
+  *129.213.147.225*) SERVER_NAME="Ashat Delta" ;;
+  *) SERVER_NAME="Ashat Slave" ;;
+esac
 HEALTH_PORT="$PORT"
 [ "$PORT" = "8082" ] && HEALTH_PORT="18082"
 [ "$PORT" = "8088" ] && HEALTH_PORT="18088"
@@ -190,7 +195,7 @@ log "installing systemd unit"
 UNIT_SRC="$(mktemp)"
 cat > "$UNIT_SRC" <<EOF
 [Unit]
-Description=Ashat Neural Host Slave Edition (peer)
+Description=$SERVER_NAME Slave Coding Agent
 After=network.target
 
 [Service]

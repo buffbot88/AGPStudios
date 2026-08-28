@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # github_sync.sh — verified bidirectional sync between Omega (the master) and
-# GitHub (buffbot88/ashatnueralhost).
+# GitHub (buffbot88/AshatCodingAgent).
 #
 # The sync never "randomly pulls files": every operation first fetches the
 # remote, computes the exact divergence (which commits, which files, in which
@@ -24,8 +24,8 @@
 #   --restart-service pull: restart the local systemd unit after a build
 #
 # Env overrides:
-#   ASHAT_GITHUB_URL       HTTPS remote (fetch)   default https://github.com/buffbot88/ashatnueralhost.git
-#   ASHAT_GITHUB_SSH_URL   SSH remote (push)      default git@github.com:buffbot88/ashatnueralhost.git
+#   ASHAT_GITHUB_URL       HTTPS remote (fetch)   default https://github.com/buffbot88/AshatCodingAgent.git
+#   ASHAT_GITHUB_SSH_URL   SSH remote (push)      default git@github.com:buffbot88/AshatCodingAgent.git
 #   ASHAT_GITHUB_BRANCH                          default main
 #   ASHAT_GITHUB_KEY       deploy key            default ~/.ssh/ashat_github
 #   ASHAT_GIT_NAME / ASHAT_GIT_EMAIL             commit identity
@@ -35,8 +35,8 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-HTTPS_URL="${ASHAT_GITHUB_URL:-https://github.com/buffbot88/ashatnueralhost.git}"
-SSH_URL="${ASHAT_GITHUB_SSH_URL:-git@github.com:buffbot88/ashatnueralhost.git}"
+HTTPS_URL="${ASHAT_GITHUB_URL:-https://github.com/buffbot88/AshatCodingAgent.git}"
+SSH_URL="${ASHAT_GITHUB_SSH_URL:-git@github.com:buffbot88/AshatCodingAgent.git}"
 BRANCH="${ASHAT_GITHUB_BRANCH:-main}"
 SSH_KEY="${ASHAT_GITHUB_KEY:-$HOME/.ssh/ashat_github}"
 GIT_NAME="${ASHAT_GIT_NAME:-Ashat Master Coding Agent}"
