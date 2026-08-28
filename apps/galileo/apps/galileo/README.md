@@ -17,6 +17,8 @@ The app appends `/v1` automatically, so both `http://127.0.0.1:3000` and `http:/
 
 Galileo is designed to run on the Alpha host itself: the app server talks to `alpha-server` on loopback, the Ashat orchestrator classifies each request and routes coding generations to the **Omega/Beta/Delta** Neural Host pool. Only off-host deployments need the public proxy — see [`docs/ashat-gateway-apache-proxy.md`](./docs/ashat-gateway-apache-proxy.md).
 
+`GET /api/status` reports gateway reachability, queue capacity, local worker health, and per-agent Omega/Beta/Delta health as JSON (always HTTP 200; degradation is in the body). Agent endpoints default to alpha-server's deployed pool and can be overridden with `ASHAT_AGENT_ENDPOINTS="omega=https://host,beta=https://host:8082,delta=https://host:8088"`.
+
 ## What Makes Galileo Different
 
 - **Full-Stack in the Browser**: Galileo integrates AI models routed through Ashat Hub with an in-browser development environment powered by **StackBlitz's WebContainers**. This allows you to:

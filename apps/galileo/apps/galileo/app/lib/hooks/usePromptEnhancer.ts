@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import { toast } from 'react-toastify';
+import { friendlyChatErrorMessage } from '~/utils/chat-errors';
 import { createScopedLogger } from '~/utils/logger';
 
 const logger = createScopedLogger('usePromptEnhancement');
@@ -16,18 +18,34 @@ export function usePromptEnhancer() {
     setEnhancingPrompt(true);
     setPromptEnhanced(false);
 
-    const response = await fetch('/api/enhancer', {
-      method: 'POST',
-      body: JSON.stringify({
-        message: input,
-      }),
-    });
-
-    const reader = response.body?.getReader();
-
     const originalInput = input;
 
-    if (reader) {
+    try {
+      const response = await fetch('/api/enhancer', {
+        method: 'POST',
+        body: JSON.stringify({
+          message: input,
+        }),
+      });
+
+      if (!response.ok) {
+        const detail = (await response.json().catch(() => null)) as Parameters<typeof friendlyChatErrorMessage>[0];
+
+        logger.error('Enhancer request failed', detail);
+        toast.error(friendlyChatErrorMessage(detail), { autoClose: 8000 });
+        setEnhancingPrompt(false);
+
+        return;
+      }
+
+      const reader = response.body?.getReader();
+
+      if (!reader) {
+        setEnhancingPrompt(false);
+
+        return;
+      }
+
       const decoder = new TextDecoder();
 
       let _input = '';
@@ -55,6 +73,7 @@ export function usePromptEnhancer() {
       } finally {
         if (_error) {
           logger.error(_error);
+          toast.error(friendlyChatErrorMessage(_error), { autoClose: 8000 });
         }
 
         setEnhancingPrompt(false);
@@ -64,6 +83,10 @@ export function usePromptEnhancer() {
           setInput(_input);
         });
       }
+    } catch (error) {
+      logger.error(error);
+      toast.error(friendlyChatErrorMessage(error), { autoClose: 8000 });
+      setEnhancingPrompt(false);
     }
   };
 

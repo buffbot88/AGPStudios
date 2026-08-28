@@ -1,7 +1,7 @@
 import { streamText as _streamText, convertToCoreMessages } from 'ai';
 import { getAPIKey, getGatewayURL } from '~/lib/.server/llm/api-key';
 import { getGatewayModel } from '~/lib/.server/llm/model';
-import { MAX_TOKENS } from './constants';
+import { GATEWAY_TIMEOUT_MS, MAX_TOKENS } from './constants';
 import { getSystemPrompt } from './prompts';
 
 interface ToolResult<Name extends string, Args, Result> {
@@ -26,6 +26,7 @@ export function streamText(messages: Messages, options?: StreamingOptions) {
     model: getGatewayModel(getGatewayURL(), getAPIKey()),
     system: getSystemPrompt(),
     maxTokens: MAX_TOKENS,
+    abortSignal: AbortSignal.timeout(GATEWAY_TIMEOUT_MS),
     messages: convertToCoreMessages(messages),
     ...options,
   });

@@ -1,5 +1,6 @@
 import { type ActionFunctionArgs } from '@remix-run/node';
 import { StreamingTextResponse, parseStreamPart } from 'ai';
+import { gatewayErrorResponse } from '~/lib/.server/llm/errors';
 import { streamText } from '~/lib/.server/llm/stream-text';
 import { stripIndents } from '~/utils/stripIndent';
 
@@ -50,9 +51,6 @@ async function enhancerAction({ request }: ActionFunctionArgs) {
   } catch (error) {
     console.log(error);
 
-    throw new Response(null, {
-      status: 500,
-      statusText: 'Internal Server Error',
-    });
+    return gatewayErrorResponse(error);
   }
 }

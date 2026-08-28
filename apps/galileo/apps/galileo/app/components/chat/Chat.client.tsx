@@ -10,6 +10,7 @@ import { chatStore } from '~/lib/stores/chat';
 import { workbenchStore } from '~/lib/stores/workbench';
 import { fileModificationsToHTML } from '~/utils/diff';
 import { cubicEasingFn } from '~/utils/easings';
+import { friendlyChatErrorMessage } from '~/utils/chat-errors';
 import { createScopedLogger, renderLogger } from '~/utils/logger';
 import { BaseChat } from './BaseChat';
 
@@ -79,7 +80,13 @@ export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProp
     api: '/api/chat',
     onError: (error) => {
       logger.error('Request failed\n\n', error);
-      toast.error('There was an error processing your request');
+
+      if (chatStore.get().aborted) {
+        // User pressed stop — not an error worth a toast.
+        return;
+      }
+
+      toast.error(friendlyChatErrorMessage(error), { autoClose: 8000 });
     },
     onFinish: () => {
       logger.debug('Finished streaming');
