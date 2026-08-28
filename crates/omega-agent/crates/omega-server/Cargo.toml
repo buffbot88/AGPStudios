@@ -3,10 +3,10 @@ name = "omega-server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Omega HTTP server binary for the Ashat Neural Host Master Edition."
+description = "Omega HTTP server binary for the Ashat Master Coding Agent."
 
 [[bin]]
-name = "ashat-neural-host-master"
+name = "ashat-master-coding-agent"
 path = "src/main.rs"
 
 [dependencies]

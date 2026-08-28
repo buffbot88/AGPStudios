@@ -132,6 +132,10 @@ pub struct ToolLoopSection {
     pub command_timeout_seconds: u64,
     #[serde(default = "default_tool_output_chars")]
     pub output_max_chars: usize,
+    /// Serper API key for the `web_search` tool. When empty or absent,
+    /// falls back to the `SERPER_API_KEY` env var, then to DDG Lite.
+    #[serde(default)]
+    pub serper_api_key: String,
 }
 
 impl Default for ToolLoopSection {
@@ -140,6 +144,7 @@ impl Default for ToolLoopSection {
             max_iterations: default_tool_max_iterations(),
             command_timeout_seconds: default_tool_command_timeout(),
             output_max_chars: default_tool_output_chars(),
+            serper_api_key: String::new(),
         }
     }
 }
@@ -413,10 +418,28 @@ mod tests {
         assert_eq!(cfg.tool_loop.max_iterations, 5);
         assert_eq!(cfg.tool_loop.command_timeout_seconds, 10);
         assert_eq!(cfg.tool_loop.output_max_chars, 4000);
+        assert!(cfg.tool_loop.serper_api_key.is_empty());
         assert!(!cfg.skills_db.enabled);
         assert_eq!(cfg.skills_db.host, "127.0.0.1");
         assert_eq!(cfg.skills_db.port, 3306);
         assert!(!cfg.inference.llama_mlock);
+    }
+
+    #[test]
+    fn serper_api_key_parses_when_present() {
+        let json = r#"{
+          "ASHAT_KEY": "k",
+          "server": {"bind": "0.0.0.0:8080"},
+          "models": {"dir": "models"},
+          "inference": {"context": 4096, "timeout_seconds": 120},
+          "orchestrator_pool": {"ports_baseline": [18079]},
+          "coding_agent_pool": {"ports": [18080]},
+          "row_chain": [],
+          "metrics": {"persist_path": "logs/metrics.jsonl"},
+          "tool_loop": {"serper_api_key": "sk-test-123"}
+        }"#;
+        let cfg: FileConfig = serde_json::from_str(json).expect("parse");
+        assert_eq!(cfg.tool_loop.serper_api_key, "sk-test-123");
     }
 
     #[test]

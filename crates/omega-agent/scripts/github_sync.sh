@@ -39,7 +39,7 @@ HTTPS_URL="${ASHAT_GITHUB_URL:-https://github.com/buffbot88/ashatnueralhost.git}
 SSH_URL="${ASHAT_GITHUB_SSH_URL:-git@github.com:buffbot88/ashatnueralhost.git}"
 BRANCH="${ASHAT_GITHUB_BRANCH:-main}"
 SSH_KEY="${ASHAT_GITHUB_KEY:-$HOME/.ssh/ashat_github}"
-GIT_NAME="${ASHAT_GIT_NAME:-Ashat Neural Host}"
+GIT_NAME="${ASHAT_GIT_NAME:-Ashat Master Coding Agent}"
 GIT_EMAIL="${ASHAT_GIT_EMAIL:-omega@ashat-neural-host.local}"
 
 # Push goes through SSH with the deploy key (IdentitiesOnly so other ssh
@@ -337,7 +337,7 @@ cmd_pull() {
     if ! cargo build --release >/dev/null 2>&1; then
         rollback; die "release build failed — pulled code rolled back"
     fi
-    log "verification passed — new binary at target/release/ashat-neural-host-master"
+    log "verification passed — new binary at target/release/ashat-master-coding-agent"
 
     # Propagate the new build to enabled peers (same seed path as
     # POST /api/admin/update).

@@ -62,13 +62,13 @@ pub async fn landing() -> Html<&'static str> {
         "\
 <!doctype html><html><head><meta charset=\"utf-8\">\
 <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
-<title>Omega · Ashat Neural Host Master Edition</title>\
+<title>Omega · Ashat Master Coding Agent</title>\
 <style>body{margin:0;background:#0d0d0f;color:#e9e9ee;font:16px system-ui;padding:3rem}\
 a{color:#ff7a45}.pill{display:inline-block;padding:0.15rem 0.6rem;border-radius:999px;\
 background:#1f1f25;color:#ff7a45;font:11px ui-monospace}</style></head>\
 <body>\
 <h1>Omega</h1>\
-<p class=\"pill\">Ashat Neural Host · Master Edition</p>\
+<p class=\"pill\">Ashat Master Coding Agent</p>\
 <p>Universal-source server. LFM2.5-VL-450M intent router + spawn-on-demand 1.2B Coding Agent pool.</p>\
 <ul>\
 <li><a href=\"/health\">/health</a></li>\

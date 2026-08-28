@@ -1,8 +1,8 @@
-# Roadmap — Ashat Neural Host Master Edition
+# Roadmap — Ashat Master Coding Agent
 
 **Server instance name:** Omega
-**Project name:** Ashat Neural Host Master Edition
-**Repo path:** `/home/opc/Projects/ashatneuralhost-master`
+**Project name:** Ashat Master Coding Agent
+**Repo path:** `/home/opc/Projects/ashat-master-coding-agent`
 **Build details:** see `BUILDPLAN.md`
 **Rules of engagement:** `VOWS.md` (protected)
 **Contributing:** `CONTRIBUTING.md`
@@ -48,7 +48,7 @@ workspace of three crates under `crates/`:
 
 - `omega-common` — shared foundation (`types`, `config`, `models`, `metrics`, `log`, `workspace`)
 - `omega-core` — inference engine (`demand`, `queue`, `orchestrator`, `proxy`, `router`, `supervision`)
-- `omega-server` — axum binary `ashat-neural-host-master` (`main`, `handlers`, `auth`, `alpha_status`)
+- `omega-server` — axum binary `ashat-master-coding-agent` (`main`, `handlers`, `auth`, `alpha_status`)
 
 Binary name and public surface are unchanged. See `BUILDPLAN.md` → "Workspace
 migration (v2)" for the locked decisions.

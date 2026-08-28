@@ -36,7 +36,7 @@ HEALTH_PORT="$PORT"
 [ "$PORT" = "8082" ] && HEALTH_PORT="18082"
 [ "$PORT" = "8088" ] && HEALTH_PORT="18088"
 KEY="$MASTER/oraclehost_id_rsa"
-BIN_NAME="ashat-neural-host-master"
+BIN_NAME="ashat-master-coding-agent"
 UPDATE_MODELS="${UPDATE_MODELS:-0}"
 RAND_SUF="$$-$(date +%s)"
 

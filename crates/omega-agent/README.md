@@ -1,9 +1,9 @@
 # Omega
 
-Server instance **Omega** of the **Ashat Neural Host Master Edition**.
+Server instance **Omega** of the **Ashat Master Coding Agent**.
 
 Modular Cargo workspace: `omega-common` (shared foundation) → `omega-core`
-(inference engine) → `omega-server` (axum binary `ashat-neural-host-master`).
+(inference engine) → `omega-server` (axum binary `ashat-master-coding-agent`).
 
 Two-piece local LLM server:
 
@@ -51,9 +51,7 @@ Then build and run:
 
 ```bash
 # Server (workspace build — binary name is unchanged)
-cargo build --release            # or: cargo build -p omega-server --release
-./target/release/ashat-neural-host-master
-
+cargo build --release            # or: cargo build -p omega-server --release./target/release/ashat-master-coding-agent
 ```
 
 This repository currently ships the server and API; use the HTTP endpoints listed above.
@@ -62,7 +60,7 @@ If `:8080` is in use, override the bind:
 
 ```bash
 export OMEGA_BIND=0.0.0.0:9090
-./target/release/ashat-neural-host-master
+./target/release/ashat-master-coding-agent
 ```
 
 ## Configuration keys

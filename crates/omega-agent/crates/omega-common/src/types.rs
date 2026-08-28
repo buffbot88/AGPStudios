@@ -456,7 +456,7 @@ mod sanitizer_tests {
     #[test]
     fn public_name_strips_directory_and_gguf_only() {
         let path = PathBuf::from(
-            "/home/opc/Projects/ashatneuralhost-master/models/LFM2.5-1.2B-Instruct-Q4_K_M.gguf",
+            "/home/opc/Projects/ashat-master-coding-agent/models/LFM2.5-1.2B-Instruct-Q4_K_M.gguf",
         );
         assert_eq!(public_model_name(&path), "LFM2.5-1.2B-Instruct-Q4_K_M");
     }

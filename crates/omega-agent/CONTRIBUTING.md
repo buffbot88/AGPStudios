@@ -1,6 +1,6 @@
-# Contributing — Ashat Neural Host Master Edition (Omega)
+# Contributing — Ashat Master Coding Agent (Omega)
 
-Omega is the always-on master of the Ashat Neural Host ecosystem: a
+Omega is the always-on master of the Ashat coding agent ecosystem: a
 universal-source Rust + Axum LLM server (350M text intent router + spawn-on-demand
 1.2B Coding Agent pool), a weighted row
 chain to the Beta / Delta slave hosts, and verified GitHub sync.
@@ -65,7 +65,7 @@ day-to-day:
 ```bash
 cp server-config.example.json server-config.json   # then set ASHAT_KEY (+ ASHAT_ADMIN_KEY for admin routes)
 cargo build --release
-./target/release/ashat-neural-host-master
+./target/release/ashat-master-coding-agent
 ```
 
 Models live in `models/` (auto-discovered) and `bin/llama-server` is bundled.
@@ -77,7 +77,7 @@ Models live in `models/` (auto-discovered) and `bin/llama-server` is bundled.
 - `crates/omega-core` — demand pools, queues, intent classification, weighted
   row-chain router, tool loop, supervision
 - `crates/omega-server` — axum handlers, auth, alpha status reporter (binary
-  `ashat-neural-host-master`)
+  `ashat-master-coding-agent`)
 - `scripts/` — `seed_slave.sh` (peer deploy), `github_sync.sh` (GitHub sync)
 - `bin/` — bundled `llama-server`
 

@@ -48,7 +48,8 @@
   "tool_loop": {
     "max_iterations": 5,
     "command_timeout_seconds": 10,
-    "output_max_chars": 4000
+    "output_max_chars": 4000,
+    "serper_api_key": ""
   },
   "skills_db": {
     "enabled": false,
