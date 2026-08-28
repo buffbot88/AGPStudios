@@ -3,6 +3,7 @@ import { StreamingTextResponse, parseStreamPart } from 'ai';
 import { gatewayErrorResponse } from '~/lib/.server/llm/errors';
 import { streamText } from '~/lib/.server/llm/stream-text';
 import { stripIndents } from '~/utils/stripIndent';
+import { authenticated } from '~/lib/.server/auth';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -12,6 +13,7 @@ export async function action(args: ActionFunctionArgs) {
 }
 
 async function enhancerAction({ request }: ActionFunctionArgs) {
+  if (!(await authenticated(request))) return new Response('Unauthorized', { status: 401 });
   const { message } = (await request.json()) as { message: string };
 
   try {

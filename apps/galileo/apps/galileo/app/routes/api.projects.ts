@@ -1,6 +1,7 @@
 import { json, type ActionFunctionArgs, type LoaderFunctionArgs } from '@remix-run/node';
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { authenticated } from '~/lib/.server/auth';
 
 const ROOT = '/var/oled/data/users_projects';
 const LIMIT = 200 * 1024 * 1024;
@@ -29,6 +30,7 @@ async function collect(directory: string, prefix = ''): Promise<Record<string, s
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
+  if (!(await authenticated(request))) return json({ error: 'unauthenticated' }, { status: 401 });
   const username = await user(request);
   if (!username) return json({ error: 'unauthenticated' }, { status: 401 });
   const project = safe(new URL(request.url).searchParams.get('project_id') || 'default');
@@ -38,6 +40,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 }
 
 export async function action({ request }: ActionFunctionArgs) {
+  if (!(await authenticated(request))) return json({ error: 'unauthenticated' }, { status: 401 });
   const username = await user(request);
   if (!username) return json({ error: 'unauthenticated' }, { status: 401 });
   const body = (await request.json()) as { project_id?: string; files?: Record<string, string> };

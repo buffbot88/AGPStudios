@@ -4,12 +4,14 @@ import { gatewayErrorResponse } from '~/lib/.server/llm/errors';
 import { CONTINUE_PROMPT } from '~/lib/.server/llm/prompts';
 import { streamText, type Messages, type StreamingOptions } from '~/lib/.server/llm/stream-text';
 import SwitchableStream from '~/lib/.server/llm/switchable-stream';
+import { authenticated } from '~/lib/.server/auth';
 
 export async function action(args: ActionFunctionArgs) {
   return chatAction(args);
 }
 
 async function chatAction({ request }: ActionFunctionArgs) {
+  if (!(await authenticated(request))) return new Response('Unauthorized', { status: 401 });
   const { messages } = (await request.json()) as { messages: Messages };
 
   const stream = new SwitchableStream();
@@ -46,7 +48,7 @@ async function chatAction({ request }: ActionFunctionArgs) {
     return new Response(stream.readable, {
       status: 200,
       headers: {
-        contentType: 'text/plain; charset=utf-8',
+        'Content-Type': 'text/plain; charset=utf-8',
       },
     });
   } catch (error) {
