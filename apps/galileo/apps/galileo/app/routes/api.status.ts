@@ -1,4 +1,5 @@
 import { json } from '@remix-run/node';
+import { env } from 'node:process';
 import { getGatewayURL } from '~/lib/.server/llm/api-key';
 
 const PROBE_TIMEOUT_MS = 5_000;
@@ -61,7 +62,8 @@ async function probe<T>(url: string): Promise<ProbeResult<T>> {
 }
 
 function parseAgents() {
-  const raw = process.env.ASHAT_AGENT_ENDPOINTS;
+  // Native node:process — see the note in app/lib/.server/llm/api-key.ts.
+  const raw = env.ASHAT_AGENT_ENDPOINTS;
 
   if (!raw) {
     return DEFAULT_AGENTS;
