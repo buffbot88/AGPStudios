@@ -18,6 +18,8 @@ interface BaseChatProps {
   chatStarted?: boolean;
   isStreaming?: boolean;
   messages?: Message[];
+  onEdit?: (index: number, content: string) => void;
+  onResend?: (index: number) => void;
   enhancingPrompt?: boolean;
   promptEnhanced?: boolean;
   input?: string;
@@ -49,6 +51,8 @@ export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
       enhancingPrompt = false,
       promptEnhanced = false,
       messages,
+      onEdit,
+      onResend,
       input = '',
       sendMessage,
       handleInputChange,
@@ -94,6 +98,8 @@ export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
                       className="flex flex-col w-full flex-1 max-w-chat px-4 pb-6 mx-auto z-1"
                       messages={messages}
                       isStreaming={isStreaming}
+                      onEdit={onEdit}
+                      onResend={onResend}
                     />
                   ) : null;
                 }}

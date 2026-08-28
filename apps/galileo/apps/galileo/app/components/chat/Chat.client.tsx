@@ -77,7 +77,7 @@ export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProp
 
   const [animationScope, animate] = useAnimate();
 
-  const { messages, isLoading, input, handleInputChange, setInput, stop, append } = useChat({
+  const { messages, isLoading, input, handleInputChange, setInput, setMessages, reload, stop, append } = useChat({
     api: '/api/chat',
     onError: (error) => {
       logger.error('Request failed\n\n', error);
@@ -133,7 +133,7 @@ export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProp
   useEffect(() => {
     parseMessages(messages, isLoading);
 
-    if (messages.length > initialMessages.length) {
+    if (messages.length > 0) {
       storeMessageHistory(messages).catch((error) => toast.error(error.message));
     }
   }, [messages, isLoading, parseMessages]);
@@ -230,6 +230,17 @@ export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProp
     textareaRef.current?.blur();
   };
 
+  const editMessage = (index: number, content: string) => {
+    setMessages(messages.slice(0, index));
+    setInput(content);
+    textareaRef.current?.focus();
+  };
+
+  const resendMessage = (index: number) => {
+    setMessages(messages.slice(0, index));
+    window.setTimeout(() => void reload(), 0);
+  };
+
   const [messageRef, scrollRef] = useSnapScroll();
 
   return (
@@ -257,6 +268,8 @@ export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProp
           content: parsedMessages[i] || '',
         };
       })}
+      onEdit={(index, content) => editMessage(index, content)}
+      onResend={resendMessage}
       enhancePrompt={() => {
         enhancePrompt(input, (input) => {
           setInput(input);
