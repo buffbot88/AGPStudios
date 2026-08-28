@@ -356,7 +356,7 @@ for p in d.get("update", {}).get("peers", []):
     else
         while read -r host install port; do
             log "propagating to $host (port $port)"
-            if ./scripts/seed_slave.sh "$host" "$install" "$port" >/dev/null 2>&1; then
+            if ./scripts/seed_slave.sh "$host" "$install" "$port" </dev/null >/dev/null 2>&1; then
                 peer_results="$peer_results${peer_results:+,}$host:ok"
             else
                 peer_results="$peer_results${peer_results:+,}$host:failed"
@@ -364,6 +364,7 @@ for p in d.get("update", {}).get("peers", []):
             fi
         done <<< "$peers"
         log "propagation: $peer_results"
+        [ "$any_failed" = 0 ] || die "peer propagation failed: $peer_results"
     fi
     local restart_required=1
     if [ "$RESTART" = 1 ]; then
