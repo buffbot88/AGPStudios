@@ -9,9 +9,12 @@ interface GatewayHealth {
 }
 
 interface GatewayStatus {
-  queue_size: number;
+  queued_requests: number;
   max_queue: number;
-  available_slots: number;
+  active_requests: number;
+  available_text_slots: number;
+  available_agent_slots: number;
+  available_vision_slots: number;
 }
 
 interface GatewayWorkers {
