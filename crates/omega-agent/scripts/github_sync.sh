@@ -349,7 +349,7 @@ import json
 d = json.load(open("server-config.json"))
 for p in d.get("update", {}).get("peers", []):
     if p.get("enabled"):
-        print(f"{p[\"host\"]} {p[\"install\"]} {p[\"port\"]}")
+        print(p["host"], p["install"], p["port"])
 ' 2>/dev/null || true)"
     if [ -z "$peers" ]; then
         log "no enabled peers configured — skipping propagation"
