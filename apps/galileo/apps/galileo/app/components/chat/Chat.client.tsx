@@ -8,6 +8,7 @@ import { useMessageParser, usePromptEnhancer, useShortcuts, useSnapScroll } from
 import { useChatHistory } from '~/lib/persistence';
 import { chatStore } from '~/lib/stores/chat';
 import { workbenchStore } from '~/lib/stores/workbench';
+import { webcontainer } from '~/lib/webcontainer';
 import { fileModificationsToHTML } from '~/utils/diff';
 import { cubicEasingFn } from '~/utils/easings';
 import { friendlyChatErrorMessage } from '~/utils/chat-errors';
@@ -95,6 +96,32 @@ export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProp
   });
 
   const { enhancingPrompt, promptEnhanced, enhancePrompt, resetEnhancer } = usePromptEnhancer();
+
+  useEffect(() => {
+    let hydrated = false;
+    let timer: number | undefined;
+    fetch(`/api/projects?project_id=${encodeURIComponent(window.location.pathname.split('/').pop() || 'default')}`, { credentials: 'include' })
+      .then(async (response) => response.ok ? await response.json() as { files: Record<string, string> } : { files: {} as Record<string, string> })
+      .then(async ({ files }) => {
+        const container = await webcontainer;
+        for (const [filePath, content] of Object.entries(files)) {
+          const directory = filePath.split('/').slice(0, -1).join('/');
+          if (directory) await container.fs.mkdir(directory, { recursive: true });
+          await container.fs.writeFile(filePath, content);
+        }
+        hydrated = true;
+      })
+      .catch(() => { hydrated = true; });
+    const unsubscribe = workbenchStore.files.subscribe((files) => {
+      if (!hydrated) return;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        const snapshot = Object.fromEntries(Object.entries(files).filter(([, file]) => file?.type === 'file' && !file.isBinary).map(([filePath, file]) => [filePath.replace(/^.*?\/home\/project\//, ''), (file as { content: string }).content || '']));
+        if (Object.keys(snapshot).length) void fetch('/api/projects', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project_id: window.location.pathname.split('/').pop() || 'default', files: snapshot }) });
+      }, 1500);
+    });
+    return () => { unsubscribe(); window.clearTimeout(timer); };
+  }, []);
   const { parsedMessages, parseMessages } = useMessageParser();
 
   const TEXTAREA_MAX_HEIGHT = chatStarted ? 400 : 200;
