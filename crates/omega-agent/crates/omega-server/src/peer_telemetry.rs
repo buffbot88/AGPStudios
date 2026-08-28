@@ -34,6 +34,10 @@ impl PeerTelemetry {
             peers,
             client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(4))
+                // Peer TLS uses each server's locally issued IP certificate.
+                // Authentication still requires the shared X-Ashat-Key.
+                .danger_accept_invalid_certs(true)
+                .danger_accept_invalid_hostnames(true)
                 .build()
                 .expect("reqwest client build"),
             inner: Arc::new(RwLock::new(HashMap::new())),
@@ -102,7 +106,7 @@ impl PeerTelemetry {
     ) -> Option<T> {
         let mut request = self
             .client
-            .get(format!("http://{}:{}{}", peer.host, peer.port, path));
+            .get(format!("https://{}:{}{}", peer.host, peer.port, path));
         if let Some(api_key) = peer.api_key.as_ref() {
             request = request.header("X-Ashat-Key", api_key);
         }

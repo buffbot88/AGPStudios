@@ -526,7 +526,7 @@ impl CrossServerProxy {
     ) -> Result<ChatResponse, ProxyError> {
         let started = Instant::now();
         let url = format!(
-            "http://{}:{}/v1/chat/completions",
+            "https://{}:{}/v1/chat/completions",
             backend.host, backend.port
         );
         let client = reqwest::Client::builder()
@@ -623,7 +623,7 @@ impl CrossServerProxy {
         metrics: &Arc<MetricsStore>,
     ) -> Result<CrossServerStream, ProxyError> {
         let url = format!(
-            "http://{}:{}/v1/chat/completions",
+            "https://{}:{}/v1/chat/completions",
             backend.host, backend.port
         );
         let client = reqwest::Client::builder()
