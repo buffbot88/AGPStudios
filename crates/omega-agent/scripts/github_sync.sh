@@ -49,6 +49,7 @@ export GIT_SSH_COMMAND="ssh -i $SSH_KEY -o IdentitiesOnly=yes -o BatchMode=yes -
 YES=0
 JSON=0
 RESTART=0
+FORCE=0
 CMD=""
 
 # Files that must never appear in the index, ever. server-config.json embeds
@@ -288,7 +289,7 @@ cmd_pull() {
     refresh_divergence
     set_common_report
 
-    if [ "$BEHIND" -eq 0 ]; then
+    if [ "$BEHIND" -eq 0 ] && [ "$FORCE" -eq 0 ]; then
         log "already up to date with origin/$BRANCH"
         [ "$JSON" = 1 ] && { export GS_MESSAGE="already up to date" GS_PEERS=""; emit_json 1; }
         return 0
@@ -315,8 +316,12 @@ cmd_pull() {
 
     confirm
 
-    log "merging (fast-forward)"
-    git merge --ff-only "origin/$BRANCH" || die "fast-forward merge failed"
+    if [ "$BEHIND" -gt 0 ]; then
+        log "merging (fast-forward)"
+        git merge --ff-only "origin/$BRANCH" || die "fast-forward merge failed"
+    else
+        log "already on origin/$BRANCH; forcing verification and propagation"
+    fi
 
     local rollback_done=0
     rollback() {
@@ -426,6 +431,7 @@ for arg in "$@"; do
         --json) JSON=1 ;;
         --yes)  YES=1 ;;
         --restart-service) RESTART=1 ;;
+        --force) FORCE=1 ;;
         init|status|pull|push) CMD="$arg" ;;
         *) die "unknown argument: $arg" ;;
     esac
