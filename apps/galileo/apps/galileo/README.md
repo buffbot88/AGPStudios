@@ -6,18 +6,33 @@ Galileo is an AI-powered web development agent that allows you to prompt, run, e
 
 Galileo does not call any model provider directly. All chat and prompt-enhancement traffic is sent to the **Ashat Hub Alpha gateway** (`crates/alpha-server` in the AshatHub repository), an OpenAI-compatible `/v1/chat/completions` endpoint. The gateway classifies each request and routes it to the **Omega/Beta/Delta** coding agent pool for script generation and iterations, or to the local text/vision workers.
 
-Configuration (Cloudflare Pages env vars, or shell env in local dev):
+## Configuration
 
-| Variable | Purpose | Default |
-| --- | --- | --- |
-| `ASHAT_GATEWAY_URL` | Base URL of the Alpha gateway | `http://127.0.0.1:3000` |
-| `ASHAT_API_KEY` | Bearer key if the gateway is fronted by auth | *(empty)* |
+All settings live in **`config.json`** in the project root — no environment variables:
 
-The app appends `/v1` automatically, so both `http://127.0.0.1:3000` and `http://127.0.0.1:3000/v1` are valid values for `ASHAT_GATEWAY_URL`.
+```json
+{
+  "gateway": {
+    "url": "http://127.0.0.1:3000",
+    "api_key": ""
+  },
+  "agents": [
+    { "id": "omega", "url": "https://129.213.94.124" },
+    { "id": "beta", "url": "https://150.136.208.93:8082" },
+    { "id": "delta", "url": "https://129.213.147.225:8088" }
+  ]
+}
+```
+
+- `gateway.url` — base URL of the Alpha gateway; the app appends `/v1` automatically.
+- `gateway.api_key` — bearer key if the gateway is fronted by auth (leave empty for loopback on Alpha).
+- `agents` — the Omega/Beta/Delta Neural Host endpoints probed by `GET /api/status`; defaults mirror alpha-server's deployed pool.
+
+Missing keys — or no file at all — fall back to the same built-in defaults. Restart Galileo after editing. If you set a real `api_key`, stop tracking the file in git.
 
 Galileo is designed to run on the Alpha host itself: the app server talks to `alpha-server` on loopback, the Ashat orchestrator classifies each request and routes coding generations to the **Omega/Beta/Delta** Neural Host pool. Only off-host deployments need the public proxy — see [`docs/ashat-gateway-apache-proxy.md`](./docs/ashat-gateway-apache-proxy.md).
 
-`GET /api/status` reports gateway reachability, queue capacity, local worker health, and per-agent Omega/Beta/Delta health as JSON (always HTTP 200; degradation is in the body). Agent endpoints default to alpha-server's deployed pool and can be overridden with `ASHAT_AGENT_ENDPOINTS="omega=https://host,beta=https://host:8082,delta=https://host:8088"`.
+`GET /api/status` reports gateway reachability, queue capacity, local worker health, and per-agent Omega/Beta/Delta health as JSON (always HTTP 200; degradation is in the body).
 
 ## What Makes Galileo Different
 
@@ -55,7 +70,7 @@ pnpm run dev
 | `pnpm run test` | Run Vitest suites |
 | `pnpm run typecheck` | TypeScript project check |
 
-Set `ASHAT_GATEWAY_URL` / `ASHAT_API_KEY` in your shell or a `.env` file for local runs; the default targets alpha-server on loopback.
+Local runs need no extra setup — `config.json` targets alpha-server on loopback by default; edit it to point elsewhere and restart.
 
 ## Hosting on Alpha
 
@@ -82,6 +97,8 @@ Restart=on-failure
 [Install]
 WantedBy=multi-user.target
 ```
+
+The unit's `WorkingDirectory` matters: `config.json` is read from the working directory at startup.
 
 Then proxy it from Apache next to the existing `/api`, `/health`, and `/ready` blocks — for example on a subdomain or path prefix:
 

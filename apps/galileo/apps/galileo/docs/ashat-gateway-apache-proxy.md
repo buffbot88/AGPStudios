@@ -63,6 +63,6 @@ The `/v1/models` response must be JSON, not the AGP Studios SPA HTML. If you sti
 
 ## 4. Galileo side
 
-No code change is required: `ASHAT_GATEWAY_URL` already defaults to `https://agpstudios.org`, and the app appends `/v1`. If the gateway should ever move, set the env var in Cloudflare Pages instead of editing code.
+No code change is required: set `gateway.url` to `https://agpstudios.org` in `config.json` and the app appends `/v1`. On Alpha itself the loopback default (`http://127.0.0.1:3000`) applies and no proxy is needed — this runbook is only for off-host deployments.
 
-Optional hardening later: front `/v1` with the same `X-Ashat-Key` auth alpha-server already uses for its Omega/Beta/Delta agents, then set `ASHAT_API_KEY` in Cloudflare Pages to match.
+Optional hardening later: front `/v1` with the same `X-Ashat-Key` auth alpha-server already uses for its Omega/Beta/Delta agents, then set `gateway.api_key` in `config.json` to match.

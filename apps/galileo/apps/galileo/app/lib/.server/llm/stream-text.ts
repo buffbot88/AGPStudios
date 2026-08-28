@@ -1,5 +1,5 @@
 import { streamText as _streamText, convertToCoreMessages } from 'ai';
-import { getAPIKey, getGatewayURL } from '~/lib/.server/llm/api-key';
+import { getAPIKey, getGatewayURL } from '~/lib/.server/config';
 import { getGatewayModel } from '~/lib/.server/llm/model';
 import { GATEWAY_TIMEOUT_MS, MAX_TOKENS } from './constants';
 import { getSystemPrompt } from './prompts';
