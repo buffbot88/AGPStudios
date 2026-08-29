@@ -29,7 +29,7 @@ async function enhancerAction({ request }: ActionFunctionArgs) {
         },
       ]);
 
-    return new Response(enhanced, {
+    return new Response(enhanced.text, {
       headers: { 'Content-Type': 'text/plain; charset=utf-8' },
     });
   } catch (error) {

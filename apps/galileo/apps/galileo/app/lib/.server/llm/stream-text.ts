@@ -39,9 +39,18 @@ export async function completeText(messages: Messages, mode: 'chat' | 'build' = 
       throw error;
     }
 
-    const body = (await response.json()) as { choices?: { message?: { content?: unknown } }[] };
+    const body = (await response.json()) as {
+      choices?: { message?: { content?: unknown } }[];
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
+    };
     const content = body.choices?.[0]?.message?.content;
-    return typeof content === 'string' ? content : '';
+    return {
+      text: typeof content === 'string' ? content : '',
+      usage: {
+        promptTokens: body.usage?.prompt_tokens ?? 0,
+        completionTokens: body.usage?.completion_tokens ?? 0,
+      },
+    };
   } finally {
     clearTimeout(timeout);
   }

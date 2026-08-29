@@ -20,9 +20,9 @@ async function chatAction({ request }: ActionFunctionArgs) {
   }
 
   try {
-    const text = await completeText(messages, mode);
+    const result = await completeText(messages, mode);
     console.info(JSON.stringify({ event: 'chat.success', request_id: requestId, duration_ms: Date.now() - started }));
-    return new Response(`0:${JSON.stringify(text)}\nd:${JSON.stringify({ finishReason: 'stop' })}\n`, {
+    return new Response(`0:${JSON.stringify(result.text)}\nd:${JSON.stringify({ finishReason: 'stop', usage: result.usage })}\n`, {
       status: 200,
       headers: {
         'Content-Type': 'text/plain; charset=utf-8',
