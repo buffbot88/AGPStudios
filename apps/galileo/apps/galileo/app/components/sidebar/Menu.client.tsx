@@ -40,32 +40,28 @@ export function Menu() {
   const [dialogContent, setDialogContent] = useState<DialogContent>(null);
 
   const loadEntries = useCallback(() => {
-    if (db) {
-      getAll(db)
-        .then((list) => list.filter((item) => item.urlId && item.description))
-        .then(setList)
-        .catch((error) => toast.error(error.message));
-    }
+    getAll(db)
+      .then((list) => list.filter((item) => item.urlId && item.description))
+      .then(setList)
+      .catch((error) => toast.error(error.message));
   }, []);
 
   const deleteItem = useCallback((event: React.UIEvent, item: ChatHistoryItem) => {
     event.preventDefault();
 
-    if (db) {
-      deleteById(db, item.id)
-        .then(() => {
-          loadEntries();
+    deleteById(db, item.id)
+      .then(() => {
+        loadEntries();
 
-          if (chatId.get() === item.id) {
-            // hard page navigation to clear the stores
-            window.location.pathname = '/';
-          }
-        })
-        .catch((error) => {
-          toast.error('Failed to delete conversation');
-          logger.error(error);
-        });
-    }
+        if (chatId.get() === item.id) {
+          // hard page navigation to clear the stores
+          window.location.pathname = '/';
+        }
+      })
+      .catch((error) => {
+        toast.error('Failed to delete conversation');
+        logger.error(error);
+      });
   }, []);
 
   const closeDialog = () => {

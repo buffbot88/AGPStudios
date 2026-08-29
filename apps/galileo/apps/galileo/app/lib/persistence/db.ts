@@ -47,8 +47,9 @@ export async function openDatabase(): Promise<IDBDatabase | undefined> {
   });
 }
 
-export async function getAll(db: IDBDatabase): Promise<ChatHistoryItem[]> {
+export async function getAll(db: IDBDatabase | undefined): Promise<ChatHistoryItem[]> {
   const local = localChats();
+  if (!db) return local.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
   return new Promise((resolve, reject) => {
     const transaction = db.transaction('chats', 'readonly');
     const store = transaction.objectStore('chats');
@@ -64,7 +65,7 @@ export async function getAll(db: IDBDatabase): Promise<ChatHistoryItem[]> {
 }
 
 export async function setMessages(
-  db: IDBDatabase,
+  db: IDBDatabase | undefined,
   id: string,
   messages: Message[],
   urlId?: string,
@@ -72,6 +73,7 @@ export async function setMessages(
 ): Promise<void> {
   const item = { id, messages, urlId, description, timestamp: new Date().toISOString() };
   saveLocalChats([...localChats().filter((chat) => chat.id !== id), item]);
+  if (!db) return Promise.resolve();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction('chats', 'readwrite');
     const store = transaction.objectStore('chats');
@@ -83,9 +85,9 @@ export async function setMessages(
   });
 }
 
-export async function getMessages(db: IDBDatabase, id: string): Promise<ChatHistoryItem> {
+export async function getMessages(db: IDBDatabase | undefined, id: string): Promise<ChatHistoryItem | undefined> {
   const local = localChats().find((item) => item.id === id || item.urlId === id);
-  return local || (await getMessagesById(db, id)) || (await getMessagesByUrlId(db, id));
+  return local || (db ? (await getMessagesById(db, id)) || (await getMessagesByUrlId(db, id)) : undefined);
 }
 
 export async function getMessagesByUrlId(db: IDBDatabase, id: string): Promise<ChatHistoryItem> {
@@ -111,8 +113,9 @@ export async function getMessagesById(db: IDBDatabase, id: string): Promise<Chat
   });
 }
 
-export async function deleteById(db: IDBDatabase, id: string): Promise<void> {
+export async function deleteById(db: IDBDatabase | undefined, id: string): Promise<void> {
   saveLocalChats(localChats().filter((chat) => chat.id !== id));
+  if (!db) return Promise.resolve();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction('chats', 'readwrite');
     const store = transaction.objectStore('chats');
@@ -123,7 +126,11 @@ export async function deleteById(db: IDBDatabase, id: string): Promise<void> {
   });
 }
 
-export async function getNextId(db: IDBDatabase): Promise<string> {
+export async function getNextId(db: IDBDatabase | undefined): Promise<string> {
+  if (!db) {
+    const highestId = localChats().reduce((max, chat) => Math.max(max, Number(chat.id) || 0), 0);
+    return String(highestId + 1);
+  }
   return new Promise((resolve, reject) => {
     const transaction = db.transaction('chats', 'readonly');
     const store = transaction.objectStore('chats');
@@ -138,7 +145,7 @@ export async function getNextId(db: IDBDatabase): Promise<string> {
   });
 }
 
-export async function getUrlId(db: IDBDatabase, id: string): Promise<string> {
+export async function getUrlId(db: IDBDatabase | undefined, id: string): Promise<string> {
   const idList = await getUrlIds(db);
 
   if (!idList.includes(id)) {
@@ -154,7 +161,8 @@ export async function getUrlId(db: IDBDatabase, id: string): Promise<string> {
   }
 }
 
-async function getUrlIds(db: IDBDatabase): Promise<string[]> {
+async function getUrlIds(db: IDBDatabase | undefined): Promise<string[]> {
+  if (!db) return localChats().map((chat) => chat.urlId).filter((id): id is string => Boolean(id));
   return new Promise((resolve, reject) => {
     const transaction = db.transaction('chats', 'readonly');
     const store = transaction.objectStore('chats');

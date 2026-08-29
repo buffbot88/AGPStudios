@@ -30,16 +30,6 @@ export function useChatHistory() {
   const [urlId, setUrlId] = useState<string | undefined>();
 
   useEffect(() => {
-    if (!db) {
-      setReady(true);
-
-      if (persistenceEnabled) {
-        toast.error(`Chat persistence is unavailable`);
-      }
-
-      return;
-    }
-
     if (mixedId) {
       getMessages(db, mixedId)
         .then((storedMessages) => {
@@ -64,7 +54,7 @@ export function useChatHistory() {
     ready: !mixedId || ready,
     initialMessages,
     storeMessageHistory: async (messages: Message[]) => {
-      if (!db || messages.length === 0) {
+      if (messages.length === 0 || (typeof window === 'undefined' && !db)) {
         return;
       }
 
