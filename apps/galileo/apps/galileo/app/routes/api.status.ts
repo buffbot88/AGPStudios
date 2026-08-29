@@ -29,13 +29,13 @@ interface ProbeResult<T> {
   latency_ms: number;
 }
 
-async function probe<T>(url: string): Promise<ProbeResult<T>> {
+async function probe<T>(url: string, headers?: HeadersInit): Promise<ProbeResult<T>> {
   const started = Date.now();
 
   try {
     const response = await fetch(url, {
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
-      headers: { accept: 'application/json' },
+      headers,
       cache: 'no-store',
     });
 
@@ -66,7 +66,10 @@ export async function loader() {
     probe<GatewayStatus>(`${baseURL}/status`),
     probe<GatewayWorkers>(`${baseURL}/workers`),
     ...getAgents().map(async (agent) => {
-      const result = await probe<unknown>(`${agent.url}/health`);
+      const headers: Record<string, string> = { accept: 'application/json' };
+      const agentKey = process.env.ASHAT_AGENT_API_KEY;
+      if (agentKey) headers['X-Ashat-Key'] = agentKey;
+      const result = await probe<unknown>(`${agent.url}/health`, headers);
 
       return {
         id: agent.id,
