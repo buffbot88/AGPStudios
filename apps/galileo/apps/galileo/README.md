@@ -2,37 +2,43 @@
 
 Galileo is an AI-powered web development agent that allows you to prompt, run, edit, and deploy full-stack applications directly from your browser—no local setup required. It is part of the AGP Studios / Ashat Hub ecosystem and is built on the open-source Bolt codebase.
 
-## Ashat Hub Inference Routing
+## Ashat Hub communication
 
-Galileo does not call any model provider directly. All chat and prompt-enhancement traffic is sent to the **Ashat Hub Alpha gateway** (`crates/alpha-server` in the AshatHub repository), an OpenAI-compatible `/v1/chat/completions` endpoint. The gateway classifies each request and routes it to the **Omega/Beta/Delta** coding agent pool for script generation and iterations, or to the local text/vision workers.
+Galileo does not call any model provider or coding agent directly. All AI operations go to the **Ashat Hub Alpha gateway** (`crates/alpha-server` in the AshatHub repository), an OpenAI-compatible `/v1/chat/completions` endpoint. Alpha owns mode routing, local worker selection, agent dispatch, retries, capacity, and agent health.
+
+The target operation paths are:
+
+```text
+Chat / Plan → Alpha → local 350M
+Vision      → Alpha → local 450M VL
+Build       → Alpha → Omega/Beta/Delta job
+Debug       → Alpha → Omega/Beta/Delta validation job
+Deploy      → Galileo deployment boundary → AshatHub snapshot
+```
+
+Galileo knows operation state and structured results, not individual model instances, agent selection, retry policy, or agent telemetry internals. Per-agent telemetry is owned by AshatHub.
 
 ## Configuration
 
-All settings live in **`config.json`** in the project root — no environment variables:
+Runtime gateway settings live in **`config.json`** in the project root:
 
 ```json
 {
   "gateway": {
     "url": "http://127.0.0.1:3000",
     "api_key": ""
-  },
-  "agents": [
-    { "id": "omega", "url": "https://129.213.94.124" },
-    { "id": "beta", "url": "https://150.136.208.93:8082" },
-    { "id": "delta", "url": "https://129.213.147.225:8088" }
-  ]
+  }
 }
 ```
 
 - `gateway.url` — base URL of the Alpha gateway; the app appends `/v1` automatically.
-- `gateway.api_key` — bearer key if the gateway is fronted by auth (leave empty for loopback on Alpha).
-- `agents` — the Omega/Beta/Delta Neural Host endpoints probed by `GET /api/status`; defaults mirror alpha-server's deployed pool.
+- `gateway.api_key` — gateway credential when Alpha is not reached through its protected local boundary.
 
-Missing keys — or no file at all — fall back to the same built-in defaults. Restart Galileo after editing. If you set a real `api_key`, stop tracking the file in git.
+Galileo must not contain Omega/Beta/Delta endpoint configuration. Missing keys—or no file—fall back to the local Alpha gateway. Restart Galileo after editing. Do not commit real credentials.
 
-Galileo is designed to run on the Alpha host itself: the app server talks to `alpha-server` on loopback, the Ashat orchestrator classifies each request and routes coding generations to the **Omega/Beta/Delta** Neural Host pool. Only off-host deployments need the public proxy — see [`docs/ashat-gateway-apache-proxy.md`](./docs/ashat-gateway-apache-proxy.md).
+Galileo is designed to run on the Alpha host itself. Only off-host deployments need the public proxy—see [`docs/ashat-gateway-apache-proxy.md`](./docs/ashat-gateway-apache-proxy.md).
 
-`GET /api/status` reports gateway reachability, queue capacity, local worker health, and per-agent Omega/Beta/Delta health as JSON (always HTTP 200; degradation is in the body).
+`GET /api/status` reports Alpha reachability, queue capacity, local worker health, and Alpha-managed coding capacity. AshatHub remains the source for per-agent telemetry.
 
 ## What Makes Galileo Different
 
@@ -43,7 +49,7 @@ Galileo is designed to run on the Alpha host itself: the app server talks to `al
   - Deploy to production from chat
   - Share your work via a URL
 
-- **AI with Environment Control**: Galileo gives the AI complete control over the environment including the filesystem, node server, package manager, terminal, and browser console—empowering the agent to handle the entire app lifecycle from creation to deployment.
+- **AI with Environment Control**: Galileo provides the live WebContainer workspace, filesystem, node server, package manager, terminal, and browser console. Alpha and its coding-agent pool provide software-engineering operations; explicit deployment creates the durable AshatHub snapshot.
 
 ## Tips and Tricks
 
