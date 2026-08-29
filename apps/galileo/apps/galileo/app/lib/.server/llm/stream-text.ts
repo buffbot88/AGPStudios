@@ -1,34 +1,48 @@
-import { streamText as _streamText, convertToCoreMessages } from 'ai';
 import { getAPIKey, getGatewayURL } from '~/lib/.server/config';
-import { getGatewayModel } from '~/lib/.server/llm/model';
 import { GATEWAY_TIMEOUT_MS, MAX_TOKENS } from './constants';
 import { CHAT_READINESS_PROMPT, getSystemPrompt } from './prompts';
 
-interface ToolResult<Name extends string, Args, Result> {
-  toolCallId: string;
-  toolName: Name;
-  args: Args;
-  result: Result;
-}
-
 interface Message {
   role: 'user' | 'assistant';
-  content: string;
-  toolInvocations?: ToolResult<string, unknown, unknown>[];
+  content: unknown;
 }
 
 export type Messages = Message[];
 
-export type StreamingOptions = Omit<Parameters<typeof _streamText>[0], 'model'>;
+export async function completeText(messages: Messages, mode: 'chat' | 'build' = 'chat') {
+  const base = getGatewayURL().trim().replace(/\/+$/, '');
+  const endpoint = `${base.endsWith('/v1') ? base : `${base}/v1`}/chat/completions`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), GATEWAY_TIMEOUT_MS);
 
-export function streamText(messages: Messages, mode: 'chat' | 'build' = 'chat', options?: StreamingOptions) {
-  return _streamText({
-    model: getGatewayModel(getGatewayURL(), getAPIKey()),
-    system: mode === 'build' ? getSystemPrompt() : CHAT_READINESS_PROMPT,
-    maxTokens: MAX_TOKENS,
-    abortSignal: AbortSignal.timeout(GATEWAY_TIMEOUT_MS),
-    messages: convertToCoreMessages(messages),
-    headers: { 'x-ashat-mode': mode },
-    ...options,
-  });
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(getAPIKey() ? { Authorization: `Bearer ${getAPIKey()}` } : {}),
+        'x-ashat-mode': mode,
+      },
+      body: JSON.stringify({
+        model: 'ashat',
+        messages: [{ role: 'system', content: mode === 'build' ? getSystemPrompt() : CHAT_READINESS_PROMPT }, ...messages],
+        max_tokens: MAX_TOKENS,
+        temperature: 0,
+        stream: false,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const error = new Error(`Alpha returned HTTP ${response.status}`) as Error & { statusCode?: number };
+      error.statusCode = response.status;
+      throw error;
+    }
+
+    const body = (await response.json()) as { choices?: { message?: { content?: unknown } }[] };
+    const content = body.choices?.[0]?.message?.content;
+    return typeof content === 'string' ? content : '';
+  } finally {
+    clearTimeout(timeout);
+  }
 }

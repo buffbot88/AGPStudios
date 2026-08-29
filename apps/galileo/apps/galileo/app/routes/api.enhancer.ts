@@ -1,6 +1,6 @@
 import { type ActionFunctionArgs } from '@remix-run/node';
 import { gatewayErrorResponse } from '~/lib/.server/llm/errors';
-import { streamText } from '~/lib/.server/llm/stream-text';
+import { completeText } from '~/lib/.server/llm/stream-text';
 import { stripIndents } from '~/utils/stripIndent';
 import { authenticated } from '~/lib/.server/auth';
 
@@ -13,7 +13,7 @@ async function enhancerAction({ request }: ActionFunctionArgs) {
   const { message } = (await request.json()) as { message: string };
 
   try {
-    const result = await streamText(
+    const enhanced = await completeText(
       [
         {
           role: 'user',
@@ -27,9 +27,9 @@ async function enhancerAction({ request }: ActionFunctionArgs) {
           </original_prompt>
         `,
         },
-      ])
+      ]);
 
-    return new Response(await result.text, {
+    return new Response(enhanced, {
       headers: { 'Content-Type': 'text/plain; charset=utf-8' },
     });
   } catch (error) {
