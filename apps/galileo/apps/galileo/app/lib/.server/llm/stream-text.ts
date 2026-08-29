@@ -21,13 +21,14 @@ export type Messages = Message[];
 
 export type StreamingOptions = Omit<Parameters<typeof _streamText>[0], 'model'>;
 
-export function streamText(messages: Messages, options?: StreamingOptions) {
+export function streamText(messages: Messages, mode: 'chat' | 'build' = 'chat', options?: StreamingOptions) {
   return _streamText({
     model: getGatewayModel(getGatewayURL(), getAPIKey()),
-    system: getSystemPrompt(),
+    ...(mode === 'build' ? { system: getSystemPrompt() } : {}),
     maxTokens: MAX_TOKENS,
     abortSignal: AbortSignal.timeout(GATEWAY_TIMEOUT_MS),
     messages: convertToCoreMessages(messages),
+    headers: { 'x-ashat-mode': mode },
     ...options,
   });
 }
