@@ -36,7 +36,8 @@ async function chatAction({ request }: ActionFunctionArgs) {
       },
     });
   } catch (error) {
-    console.error(JSON.stringify({ event: 'chat.failure', request_id: requestId, duration_ms: Date.now() - started, error: error instanceof Error ? error.message : String(error) }));
+    const cause = error instanceof Error && error.cause instanceof Error ? error.cause.message : undefined;
+    console.error(JSON.stringify({ event: 'chat.failure', request_id: requestId, duration_ms: Date.now() - started, error: error instanceof Error ? error.message : String(error), cause }));
 
     return gatewayErrorResponse(error, requestId, mode);
   }
