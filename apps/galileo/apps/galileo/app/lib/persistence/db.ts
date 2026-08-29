@@ -3,6 +3,23 @@ import { createScopedLogger } from '~/utils/logger';
 import type { ChatHistoryItem } from './useChatHistory';
 
 const logger = createScopedLogger('ChatHistory');
+const LOCAL_KEY = 'galileo_chats';
+
+function localChats(): ChatHistoryItem[] {
+  try {
+    return JSON.parse(localStorage.getItem(LOCAL_KEY) || '[]') as ChatHistoryItem[];
+  } catch {
+    return [];
+  }
+}
+
+function saveLocalChats(chats: ChatHistoryItem[]) {
+  try {
+    localStorage.setItem(LOCAL_KEY, JSON.stringify(chats));
+  } catch (error) {
+    logger.error('Unable to save chats to localStorage', error);
+  }
+}
 
 // this is used at the top level and never rejects
 export async function openDatabase(): Promise<IDBDatabase | undefined> {
@@ -31,12 +48,17 @@ export async function openDatabase(): Promise<IDBDatabase | undefined> {
 }
 
 export async function getAll(db: IDBDatabase): Promise<ChatHistoryItem[]> {
+  const local = localChats();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction('chats', 'readonly');
     const store = transaction.objectStore('chats');
     const request = store.getAll();
 
-    request.onsuccess = () => resolve(request.result as ChatHistoryItem[]);
+    request.onsuccess = () => {
+      const merged = new Map<string, ChatHistoryItem>();
+      [...(request.result as ChatHistoryItem[]), ...local].forEach((item) => merged.set(item.id, item));
+      resolve([...merged.values()].sort((a, b) => b.timestamp.localeCompare(a.timestamp)));
+    };
     request.onerror = () => reject(request.error);
   });
 }
@@ -48,17 +70,13 @@ export async function setMessages(
   urlId?: string,
   description?: string,
 ): Promise<void> {
+  const item = { id, messages, urlId, description, timestamp: new Date().toISOString() };
+  saveLocalChats([...localChats().filter((chat) => chat.id !== id), item]);
   return new Promise((resolve, reject) => {
     const transaction = db.transaction('chats', 'readwrite');
     const store = transaction.objectStore('chats');
 
-    const request = store.put({
-      id,
-      messages,
-      urlId,
-      description,
-      timestamp: new Date().toISOString(),
-    });
+    const request = store.put(item);
 
     request.onsuccess = () => resolve();
     request.onerror = () => reject(request.error);
@@ -66,7 +84,8 @@ export async function setMessages(
 }
 
 export async function getMessages(db: IDBDatabase, id: string): Promise<ChatHistoryItem> {
-  return (await getMessagesById(db, id)) || (await getMessagesByUrlId(db, id));
+  const local = localChats().find((item) => item.id === id || item.urlId === id);
+  return local || (await getMessagesById(db, id)) || (await getMessagesByUrlId(db, id));
 }
 
 export async function getMessagesByUrlId(db: IDBDatabase, id: string): Promise<ChatHistoryItem> {
@@ -93,6 +112,7 @@ export async function getMessagesById(db: IDBDatabase, id: string): Promise<Chat
 }
 
 export async function deleteById(db: IDBDatabase, id: string): Promise<void> {
+  saveLocalChats(localChats().filter((chat) => chat.id !== id));
   return new Promise((resolve, reject) => {
     const transaction = db.transaction('chats', 'readwrite');
     const store = transaction.objectStore('chats');
