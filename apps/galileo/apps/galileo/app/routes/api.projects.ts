@@ -1,10 +1,13 @@
 import { json, type ActionFunctionArgs, type LoaderFunctionArgs } from '@remix-run/node';
-import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import path from 'node:path';
 import { authenticated } from '~/lib/.server/auth';
 
 const ROOT = '/var/oled/data/users_projects';
 const LIMIT = 200 * 1024 * 1024;
+const exec = promisify(execFile);
 
 async function user(request: Request): Promise<string | null> {
   const response = await fetch('https://agpstudios.org/api/auth/session', { headers: { cookie: request.headers.get('cookie') || '' } });
@@ -52,10 +55,20 @@ export async function action({ request }: ActionFunctionArgs) {
   if (!(await authenticated(request))) return json({ error: 'unauthenticated' }, { status: 401 });
   const username = await user(request);
   if (!username) return json({ error: 'unauthenticated' }, { status: 401 });
-  const body = (await request.json()) as { action?: string; name?: string; project_id?: string; files?: Record<string, string> };
-  if (body.action === 'create') {
-    const project = safe(body.name || 'new-project');
-    await mkdir(path.join(ROOT, safe(username), project), { recursive: true });
+  const body = (await request.json()) as { action?: string; name?: string; repository?: string; project_id?: string; files?: Record<string, string> };
+  if (body.action === 'create' || body.action === 'import') {
+    const repository = body.repository?.match(/^https:\/\/github\.com\/([a-zA-Z0-9_-]+)\/([a-zA-Z0-9_.-]+?)(?:\.git)?\/?$/);
+    if (body.action === 'import' && !repository) return json({ error: 'public_github_url_required' }, { status: 400 });
+    const project = safe(body.name || repository?.[2] || 'new-project');
+    const destination = path.join(ROOT, safe(username), project);
+    await mkdir(path.dirname(destination), { recursive: true });
+    if (body.action === 'import') {
+      const temporary = await mkdtemp(path.join('/tmp', 'galileo-github-'));
+      try {
+        await exec('git', ['clone', '--depth', '1', body.repository!, temporary], { timeout: 120_000 });
+        await cp(temporary, destination, { recursive: true, filter: (source) => !source.endsWith(`${path.sep}.git`) });
+      } finally { await rm(temporary, { recursive: true, force: true }); }
+    } else await mkdir(destination, { recursive: true });
     return json({ ok: true, project });
   }
   const project = safe(body.project_id || 'default');

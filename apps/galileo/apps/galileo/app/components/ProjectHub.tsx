@@ -5,6 +5,7 @@ type Project = { id: string; updated_at: string };
 export function ProjectHub() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [name, setName] = useState('');
+  const [repository, setRepository] = useState('');
   const [error, setError] = useState('');
 
   const load = () => fetch('/api/projects?list=1', { credentials: 'include' }).then(async (response) => {
@@ -14,8 +15,8 @@ export function ProjectHub() {
 
   useEffect(() => { void load(); }, []);
 
-  const create = async () => {
-    const response = await fetch('/api/projects', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'create', name }) });
+  const create = async (action: 'create' | 'import') => {
+    const response = await fetch('/api/projects', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, name, repository }) });
     if (!response.ok) { setError('Project could not be created'); return; }
     const project = await response.json() as { project: string };
     window.location.href = `/chat/${project.project}`;
@@ -33,8 +34,12 @@ export function ProjectHub() {
     </section>
     <section className="mt-10 flex gap-2">
       <input value={name} onChange={(event) => setName(event.target.value)} placeholder="New project name" className="flex-1 rounded border border-bolt-elements-borderColor bg-transparent px-3 py-2" />
-      <button type="button" disabled={!name.trim()} onClick={() => void create()} className="rounded bg-bolt-elements-item-backgroundAccent px-4 py-2">Create workspace</button>
+      <button type="button" disabled={!name.trim()} onClick={() => void create('create')} className="rounded bg-bolt-elements-item-backgroundAccent px-4 py-2">Create workspace</button>
     </section>
-    <p className="mt-8 text-sm text-bolt-elements-textSecondary">GitHub import will be enabled through the account connection before importing private repositories.</p>
+    <section className="mt-4 flex gap-2">
+      <input value={repository} onChange={(event) => setRepository(event.target.value)} placeholder="https://github.com/owner/repository" className="flex-1 rounded border border-bolt-elements-borderColor bg-transparent px-3 py-2" />
+      <button type="button" disabled={!repository.trim()} onClick={() => void create('import')} className="rounded border border-bolt-elements-borderColor px-4 py-2">Import public GitHub repo</button>
+    </section>
+    <p className="mt-3 text-sm text-bolt-elements-textSecondary">Private repositories will use the account GitHub connection when that contract is enabled.</p>
   </main>;
 }
