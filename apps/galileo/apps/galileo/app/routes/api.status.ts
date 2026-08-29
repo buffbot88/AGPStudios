@@ -85,7 +85,7 @@ export async function loader() {
 
   return json(
     {
-      ok: reachable && healthyAgents > 0,
+      ok: reachable,
       gateway: {
         url: gatewayURL,
         reachable,
