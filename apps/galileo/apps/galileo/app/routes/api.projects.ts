@@ -1,5 +1,5 @@
 import { json, type ActionFunctionArgs, type LoaderFunctionArgs } from '@remix-run/node';
-import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { authenticated } from '~/lib/.server/auth';
 
@@ -33,7 +33,16 @@ export async function loader({ request }: LoaderFunctionArgs) {
   if (!(await authenticated(request))) return json({ error: 'unauthenticated' }, { status: 401 });
   const username = await user(request);
   if (!username) return json({ error: 'unauthenticated' }, { status: 401 });
-  const project = safe(new URL(request.url).searchParams.get('project_id') || 'default');
+  const params = new URL(request.url).searchParams;
+  if (params.get('list') === '1') {
+    const root = path.join(ROOT, safe(username));
+    try {
+      const entries = await readdir(root, { withFileTypes: true });
+      const projects = await Promise.all(entries.filter((entry) => entry.isDirectory()).map(async (entry) => ({ id: entry.name, updated_at: (await stat(path.join(root, entry.name))).mtime.toISOString() })));
+      return json({ projects: projects.sort((a, b) => b.updated_at.localeCompare(a.updated_at)) });
+    } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return json({ projects: [] }); throw error; }
+  }
+  const project = safe(params.get('project_id') || 'default');
   const directory = path.join(ROOT, safe(username), project);
   try { return json({ ok: true, project, files: await collect(directory) }); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return json({ ok: true, project, files: {} }); throw error; }
@@ -43,7 +52,12 @@ export async function action({ request }: ActionFunctionArgs) {
   if (!(await authenticated(request))) return json({ error: 'unauthenticated' }, { status: 401 });
   const username = await user(request);
   if (!username) return json({ error: 'unauthenticated' }, { status: 401 });
-  const body = (await request.json()) as { project_id?: string; files?: Record<string, string> };
+  const body = (await request.json()) as { action?: string; name?: string; project_id?: string; files?: Record<string, string> };
+  if (body.action === 'create') {
+    const project = safe(body.name || 'new-project');
+    await mkdir(path.join(ROOT, safe(username), project), { recursive: true });
+    return json({ ok: true, project });
+  }
   const project = safe(body.project_id || 'default');
   const files = body.files || {};
   let size = 0;
