@@ -167,6 +167,9 @@ importers:
       unist-util-visit:
         specifier: ^5.0.0
         version: 5.0.0
+      web-streams-polyfill:
+        specifier: 3.3.3
+        version: 3.3.3
     devDependencies:
       '@blitz/eslint-plugin':
         specifier: 0.1.0
@@ -7532,7 +7535,7 @@ snapshots:
 
   capnp-ts@0.7.0:
     dependencies:
-      debug: 4.3.5
+      debug: 4.4.3
       tslib: 2.6.3
     transitivePeerDependencies:
       - supports-color
