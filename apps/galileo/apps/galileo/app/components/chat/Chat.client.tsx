@@ -72,6 +72,7 @@ export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProp
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const [chatStarted, setChatStarted] = useState(initialMessages.length > 0);
+  const [mode, setMode] = useState<'chat' | 'build'>('chat');
 
   const { showChat } = useStore(chatStore);
 
@@ -212,7 +213,7 @@ export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProp
        * manually reset the input and we'd have to manually pass in file attachments. However, those
        * aren't relevant here.
        */
-      append({ role: 'user', content: `${diff}\n\n${_input}` });
+      append({ role: 'user', content: `${diff}\n\n${_input}` }, { body: { mode } });
 
       /**
        * After sending a new message we reset all modifications since the model
@@ -220,7 +221,7 @@ export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProp
        */
       workbenchStore.resetAllFileModifications();
     } else {
-      append({ role: 'user', content: _input });
+      append({ role: 'user', content: _input }, { body: { mode } });
     }
 
     setInput('');
@@ -238,7 +239,7 @@ export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProp
 
   const resendMessage = (index: number) => {
     setMessages(messages.slice(0, index));
-    window.setTimeout(() => void reload(), 0);
+    window.setTimeout(() => void reload({ body: { mode } }), 0);
   };
 
   const [messageRef, scrollRef] = useSnapScroll();
@@ -251,6 +252,8 @@ export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProp
       showChat={showChat}
       chatStarted={chatStarted}
       isStreaming={isLoading}
+      mode={mode}
+      onModeChange={setMode}
       enhancingPrompt={enhancingPrompt}
       promptEnhanced={promptEnhanced}
       sendMessage={sendMessage}

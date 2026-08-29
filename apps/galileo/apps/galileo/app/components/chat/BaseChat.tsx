@@ -27,6 +27,8 @@ interface BaseChatProps {
   sendMessage?: (event: React.UIEvent, messageInput?: string) => void;
   handleInputChange?: (event: React.ChangeEvent<HTMLTextAreaElement>) => void;
   enhancePrompt?: () => void;
+  mode?: 'chat' | 'build';
+  onModeChange?: (mode: 'chat' | 'build') => void;
 }
 
 const EXAMPLE_PROMPTS = [
@@ -58,6 +60,8 @@ export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
       handleInputChange,
       enhancePrompt,
       handleStop,
+      mode = 'chat',
+      onModeChange,
     },
     ref,
   ) => {
@@ -155,7 +159,10 @@ export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
                       />
                     )}
                   </ClientOnly>
-                  <div className="flex justify-between text-sm p-4 pt-2">
+                  <div className="flex justify-between items-center text-sm p-4 pt-2">
+                    <div className="flex gap-1">
+                      {(['chat', 'build'] as const).map((value) => <button key={value} type="button" className={classNames('px-2 py-1 rounded text-xs uppercase', value === mode ? 'bg-bolt-elements-item-backgroundAccent text-bolt-elements-item-contentAccent' : 'text-bolt-elements-textTertiary')} onClick={() => onModeChange?.(value)}>{value === 'chat' ? 'Chat / Plan' : 'Build'}</button>)}
+                    </div>
                     <div className="flex gap-1 items-center">
                       <IconButton
                         title="Enhance prompt"
