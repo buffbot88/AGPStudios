@@ -1,6 +1,6 @@
 import { getAPIKey, getGatewayURL } from '~/lib/.server/config';
 import { GATEWAY_TIMEOUT_MS, MAX_TOKENS } from './constants';
-import { CHAT_READINESS_PROMPT, getSystemPrompt } from './prompts';
+import { BUILD_READY_MARKER, CHAT_READINESS_PROMPT, getSystemPrompt } from './prompts';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -45,7 +45,7 @@ export async function completeText(messages: Messages, mode: 'chat' | 'build' = 
     };
     const content = body.choices?.[0]?.message?.content;
     return {
-      text: typeof content === 'string' ? content : '',
+      text: typeof content === 'string' ? content.replace(/(?:<!--\s*)?GALILEO_BUILD_READY(?:\s*-->)?/g, BUILD_READY_MARKER) : '',
       usage: {
         promptTokens: body.usage?.prompt_tokens ?? 0,
         completionTokens: body.usage?.completion_tokens ?? 0,
