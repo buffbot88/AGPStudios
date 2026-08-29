@@ -1,6 +1,5 @@
 import { createOpenAI } from '@ai-sdk/openai';
-// @ts-expect-error The package exposes the runtime ponyfill without a matching subpath declaration.
-import { TransformStream } from 'web-streams-polyfill/dist/ponyfill.js';
+import 'web-streams-polyfill/dist/polyfill.js';
 
 class CompatibleTextDecoderStream {
   readable: ReadableStream<string>;
@@ -8,7 +7,7 @@ class CompatibleTextDecoderStream {
 
   constructor() {
     const decoder = new TextDecoder();
-    const stream = new TransformStream<Uint8Array, string>({
+    const stream = new globalThis.TransformStream<Uint8Array, string>({
       transform(chunk: Uint8Array, controller: TransformStreamDefaultController<string>) {
         controller.enqueue(decoder.decode(chunk, { stream: true }));
       },
@@ -22,9 +21,9 @@ class CompatibleTextDecoderStream {
   }
 }
 
-// The AI SDK response parser uses the Web Streams polyfill. Node 24 exposes
-// native stream constructors globally, which are not interchangeable.
-Object.assign(globalThis, { TextDecoderStream: CompatibleTextDecoderStream, TransformStream });
+// The AI SDK response parser uses the Web Streams polyfill. Install it globally
+// so Remix and the provider parser share the same constructor identity.
+globalThis.TextDecoderStream = CompatibleTextDecoderStream as typeof globalThis.TextDecoderStream;
 
 /**
  * Builds a model backed by the Ashat Hub gateway. The gateway classifies
