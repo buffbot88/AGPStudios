@@ -63,6 +63,8 @@ function log(level: DebugLevel, scope: string | undefined, messages: any[]) {
     return `${acc} ${current}`;
   }, '');
 
+  if (level === 'error' || level === 'warn') saveDiagnostic({ level, scope, message: allMessages });
+
   if (!supportsColor) {
     console.log(`[${level.toUpperCase()}]`, allMessages);
 
@@ -86,6 +88,19 @@ function log(level: DebugLevel, scope: string | undefined, messages: any[]) {
 
 function getLabelStyles(color: string, textColor: string) {
   return `background-color: ${color}; color: white; border: 4px solid ${color}; color: ${textColor};`;
+}
+
+function saveDiagnostic(entry: { level: DebugLevel; scope?: string; message: string }) {
+  if (typeof localStorage === 'undefined') return;
+
+  try {
+    const key = 'galileo_diagnostics';
+    const entries = JSON.parse(localStorage.getItem(key) || '[]') as unknown[];
+    entries.push({ ...entry, timestamp: new Date().toISOString() });
+    localStorage.setItem(key, JSON.stringify(entries.slice(-100)));
+  } catch {
+    // Diagnostics must never break the application.
+  }
 }
 
 function getColorForLevel(level: DebugLevel): string {

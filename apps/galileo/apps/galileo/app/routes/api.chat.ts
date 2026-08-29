@@ -9,8 +9,11 @@ export async function action(args: ActionFunctionArgs) {
 }
 
 async function chatAction({ request }: ActionFunctionArgs) {
-  if (!(await authenticated(request))) return new Response('Unauthorized', { status: 401 });
+  const requestId = crypto.randomUUID();
+  const started = Date.now();
+  if (!(await authenticated(request))) return new Response('Unauthorized', { status: 401, headers: { 'X-Request-Id': requestId } });
   const { messages } = (await request.json()) as { messages: Messages };
+  console.info(JSON.stringify({ event: 'chat.start', request_id: requestId, message_count: messages.length }));
 
   try {
     const options: StreamingOptions = {
@@ -24,15 +27,17 @@ async function chatAction({ request }: ActionFunctionArgs) {
 
     const result = await streamText(messages, options);
 
+    console.info(JSON.stringify({ event: 'chat.success', request_id: requestId, duration_ms: Date.now() - started }));
     return new Response(result.toAIStream(), {
       status: 200,
       headers: {
         'Content-Type': 'text/plain; charset=utf-8',
+        'X-Request-Id': requestId,
       },
     });
   } catch (error) {
-    console.log(error);
+    console.error(JSON.stringify({ event: 'chat.failure', request_id: requestId, duration_ms: Date.now() - started, error: error instanceof Error ? error.message : String(error) }));
 
-    return gatewayErrorResponse(error);
+    return gatewayErrorResponse(error, requestId);
   }
 }
