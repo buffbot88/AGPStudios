@@ -18,8 +18,6 @@ export function usePromptEnhancer() {
     setEnhancingPrompt(true);
     setPromptEnhanced(false);
 
-    const originalInput = input;
-
     try {
       const response = await fetch('/api/enhancer', {
         method: 'POST',
@@ -38,51 +36,10 @@ export function usePromptEnhancer() {
         return;
       }
 
-      const reader = response.body?.getReader();
-
-      if (!reader) {
-        setEnhancingPrompt(false);
-
-        return;
-      }
-
-      const decoder = new TextDecoder();
-
-      let _input = '';
-      let _error;
-
-      try {
-        setInput('');
-
-        while (true) {
-          const { value, done } = await reader.read();
-
-          if (done) {
-            break;
-          }
-
-          _input += decoder.decode(value);
-
-          logger.trace('Set input', _input);
-
-          setInput(_input);
-        }
-      } catch (error) {
-        _error = error;
-        setInput(originalInput);
-      } finally {
-        if (_error) {
-          logger.error(_error);
-          toast.error(friendlyChatErrorMessage(_error), { autoClose: 8000 });
-        }
-
-        setEnhancingPrompt(false);
-        setPromptEnhanced(true);
-
-        setTimeout(() => {
-          setInput(_input);
-        });
-      }
+      const enhanced = await response.text();
+      setInput(enhanced);
+      setEnhancingPrompt(false);
+      setPromptEnhanced(true);
     } catch (error) {
       logger.error(error);
       toast.error(friendlyChatErrorMessage(error), { autoClose: 8000 });
