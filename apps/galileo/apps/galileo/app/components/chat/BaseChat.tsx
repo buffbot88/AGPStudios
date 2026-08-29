@@ -29,6 +29,7 @@ interface BaseChatProps {
   enhancePrompt?: () => void;
   mode?: 'chat' | 'build';
   onModeChange?: (mode: 'chat' | 'build') => void;
+  buildReady?: boolean;
 }
 
 const EXAMPLE_PROMPTS = [
@@ -62,6 +63,7 @@ export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
       handleStop,
       mode = 'chat',
       onModeChange,
+      buildReady = false,
     },
     ref,
   ) => {
@@ -161,7 +163,7 @@ export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
                   </ClientOnly>
                   <div className="flex justify-between items-center text-sm p-4 pt-2">
                     <div className="flex gap-1">
-                      {(['chat', 'build'] as const).map((value) => <button key={value} type="button" className={classNames('px-2 py-1 rounded text-xs uppercase', value === mode ? 'bg-bolt-elements-item-backgroundAccent text-bolt-elements-item-contentAccent' : 'text-bolt-elements-textTertiary')} onClick={() => onModeChange?.(value)}>{value === 'chat' ? 'Chat / Plan' : 'Build'}</button>)}
+                      {(['chat', 'build'] as const).map((value) => <button key={value} type="button" disabled={value === 'build' && !buildReady} title={value === 'build' && !buildReady ? 'Chat / Plan needs more context first' : undefined} className={classNames('px-2 py-1 rounded text-xs uppercase', value === mode ? 'bg-bolt-elements-item-backgroundAccent text-bolt-elements-item-contentAccent' : 'text-bolt-elements-textTertiary', value === 'build' && !buildReady ? 'opacity-40 cursor-not-allowed' : '')} onClick={() => onModeChange?.(value)}>{value === 'chat' ? 'Chat / Plan' : 'Build'}</button>)}
                     </div>
                     <div className="flex gap-1 items-center">
                       <IconButton

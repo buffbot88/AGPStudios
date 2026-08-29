@@ -9,7 +9,7 @@ interface AssistantMessageProps {
 export const AssistantMessage = memo(({ content, onResend }: AssistantMessageProps) => {
   return (
     <div className="overflow-hidden w-full">
-      <Markdown html>{content}</Markdown>
+      <Markdown html>{content.replace('<!-- GALILEO_BUILD_READY -->', '')}</Markdown>
       {onResend && <button type="button" className="mt-2 text-xs text-bolt-elements-textTertiary hover:text-bolt-elements-textPrimary" onClick={onResend}>Resend</button>}
     </div>
   );

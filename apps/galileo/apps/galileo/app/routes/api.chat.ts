@@ -3,6 +3,7 @@ import { MAX_TOKENS } from '~/lib/.server/llm/constants';
 import { gatewayErrorResponse } from '~/lib/.server/llm/errors';
 import { streamText, type Messages, type StreamingOptions } from '~/lib/.server/llm/stream-text';
 import { authenticated } from '~/lib/.server/auth';
+import { BUILD_READY_MARKER } from '~/lib/.server/llm/prompts';
 
 export async function action(args: ActionFunctionArgs) {
   return chatAction(args);
@@ -14,6 +15,10 @@ async function chatAction({ request }: ActionFunctionArgs) {
   if (!(await authenticated(request))) return new Response('Unauthorized', { status: 401, headers: { 'X-Request-Id': requestId } });
   const { messages, mode } = (await request.json()) as { messages: Messages; mode?: 'chat' | 'build' };
   console.info(JSON.stringify({ event: 'chat.start', request_id: requestId, message_count: messages.length }));
+
+  if (mode === 'build' && !messages.some((message) => message.role === 'assistant' && message.content.includes(BUILD_READY_MARKER))) {
+    return new Response('Galileo needs more context before Build mode is available.', { status: 409, headers: { 'X-Request-Id': requestId } });
+  }
 
   try {
     const options: StreamingOptions = {

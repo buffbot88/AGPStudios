@@ -124,6 +124,7 @@ export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProp
     return () => { unsubscribe(); window.clearTimeout(timer); };
   }, []);
   const { parsedMessages, parseMessages } = useMessageParser();
+  const buildReady = messages.length > 0 && messages[messages.length - 1].role === 'assistant' && messages[messages.length - 1].content.includes('<!-- GALILEO_BUILD_READY -->');
 
   const TEXTAREA_MAX_HEIGHT = chatStarted ? 400 : 200;
 
@@ -253,7 +254,8 @@ export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProp
       chatStarted={chatStarted}
       isStreaming={isLoading}
       mode={mode}
-      onModeChange={setMode}
+      onModeChange={(nextMode) => { if (nextMode === 'chat' || buildReady) setMode(nextMode); }}
+      buildReady={buildReady}
       enhancingPrompt={enhancingPrompt}
       promptEnhanced={promptEnhanced}
       sendMessage={sendMessage}

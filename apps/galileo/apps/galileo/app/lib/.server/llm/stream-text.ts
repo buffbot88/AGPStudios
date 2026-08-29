@@ -2,7 +2,7 @@ import { streamText as _streamText, convertToCoreMessages } from 'ai';
 import { getAPIKey, getGatewayURL } from '~/lib/.server/config';
 import { getGatewayModel } from '~/lib/.server/llm/model';
 import { GATEWAY_TIMEOUT_MS, MAX_TOKENS } from './constants';
-import { getSystemPrompt } from './prompts';
+import { CHAT_READINESS_PROMPT, getSystemPrompt } from './prompts';
 
 interface ToolResult<Name extends string, Args, Result> {
   toolCallId: string;
@@ -24,7 +24,7 @@ export type StreamingOptions = Omit<Parameters<typeof _streamText>[0], 'model'>;
 export function streamText(messages: Messages, mode: 'chat' | 'build' = 'chat', options?: StreamingOptions) {
   return _streamText({
     model: getGatewayModel(getGatewayURL(), getAPIKey()),
-    ...(mode === 'build' ? { system: getSystemPrompt() } : {}),
+    system: mode === 'build' ? getSystemPrompt() : CHAT_READINESS_PROMPT,
     maxTokens: MAX_TOKENS,
     abortSignal: AbortSignal.timeout(GATEWAY_TIMEOUT_MS),
     messages: convertToCoreMessages(messages),
