@@ -125,6 +125,32 @@ export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProp
   }, []);
   const { parsedMessages, parseMessages } = useMessageParser();
   const buildReady = messages.length > 0 && messages[messages.length - 1].role === 'assistant' && messages[messages.length - 1].content.includes('<!-- GALILEO_BUILD_READY -->');
+  const [jobEvents, setJobEvents] = useState<string[]>([]);
+  const submittedBuild = useRef(false);
+
+  useEffect(() => {
+    if (!buildReady || submittedBuild.current) return;
+    submittedBuild.current = true;
+    const projectId = window.location.pathname.split('/').pop() || 'default';
+    const requestText = messages.filter((message) => message.role === 'user').map((message) => message.content).join('\\n\\n');
+    const files = Object.fromEntries(Object.entries(workbenchStore.files.get()).filter(([, file]) => file?.type === 'file' && !file.isBinary).map(([path, file]) => [path.replace(/^.*?\/home\/project\//, ''), (file as { content?: string }).content || '']));
+    void fetch('/api/jobs', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project_id: projectId, request: requestText, files }) })
+      .then(async (response) => { const body = await response.json() as { job?: { id: string }; content?: string; error?: string }; if (!response.ok || !body.job) throw new Error(body.content || body.error || 'Build job could not be created'); return body.job.id; })
+      .then(async (jobId) => {
+        let afterId = 0;
+        for (;;) {
+          const response = await fetch(`/api/galileo/agents/jobs/${jobId}/events?after_id=${afterId}`, { credentials: 'include' });
+          if (!response.ok) throw new Error('Build event stream unavailable');
+          const body = await response.json() as { events: { id: number; kind: string }[] };
+          if (body.events.length) { afterId = body.events[body.events.length - 1].id; setJobEvents((current) => [...current, ...body.events.map((event) => event.kind)]); }
+          const status = await fetch(`/api/galileo/agents/jobs/${jobId}`, { credentials: 'include' });
+          const state = await status.json() as { job?: { status: string } };
+          if (['complete', 'failed', 'cancelled'].includes(state.job?.status || '')) break;
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+      })
+      .catch((error: Error) => setJobEvents((current) => [...current, `failed: ${error.message}`]));
+  }, [buildReady, messages]);
 
   const TEXTAREA_MAX_HEIGHT = chatStarted ? 400 : 200;
 
@@ -256,6 +282,7 @@ export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProp
       mode={mode}
       onModeChange={(nextMode) => { if (nextMode === 'chat' || buildReady) setMode(nextMode); }}
       buildReady={buildReady}
+      jobEvents={jobEvents}
       enhancingPrompt={enhancingPrompt}
       promptEnhanced={promptEnhanced}
       sendMessage={sendMessage}

@@ -30,6 +30,7 @@ interface BaseChatProps {
   mode?: 'chat' | 'build';
   onModeChange?: (mode: 'chat' | 'build') => void;
   buildReady?: boolean;
+  jobEvents?: string[];
 }
 
 const EXAMPLE_PROMPTS = [
@@ -64,6 +65,7 @@ export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
       mode = 'chat',
       onModeChange,
       buildReady = false,
+      jobEvents = [],
     },
     ref,
   ) => {
@@ -106,6 +108,7 @@ export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
                       isStreaming={isStreaming}
                       onEdit={onEdit}
                       onResend={onResend}
+                      jobEvents={jobEvents}
                     />
                   ) : null;
                 }}

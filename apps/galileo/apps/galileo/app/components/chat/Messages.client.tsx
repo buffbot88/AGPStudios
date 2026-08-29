@@ -11,10 +11,11 @@ interface MessagesProps {
   messages?: Message[];
   onEdit?: (index: number, content: string) => void;
   onResend?: (index: number) => void;
+  jobEvents?: string[];
 }
 
 export const Messages = React.forwardRef<HTMLDivElement, MessagesProps>((props: MessagesProps, ref) => {
-  const { id, isStreaming = false, messages = [], onEdit, onResend } = props;
+  const { id, isStreaming = false, messages = [], onEdit, onResend, jobEvents = [] } = props;
 
   return (
     <div id={id} ref={ref} className={props.className}>
@@ -51,6 +52,12 @@ export const Messages = React.forwardRef<HTMLDivElement, MessagesProps>((props: 
             );
           })
         : null}
+      {jobEvents.length > 0 && (
+        <details open className="mt-4 rounded border border-bolt-elements-borderColor p-4 text-sm">
+          <summary className="cursor-pointer">Build activity ({jobEvents.length})</summary>
+          <div className="mt-2 space-y-1 font-mono">{jobEvents.map((event, index) => <div key={`${event}-${index}`}>{event}</div>)}</div>
+        </details>
+      )}
       {isStreaming && (
         <div className="text-center w-full text-bolt-elements-textSecondary i-svg-spinners:3-dots-fade text-4xl mt-4"></div>
       )}
