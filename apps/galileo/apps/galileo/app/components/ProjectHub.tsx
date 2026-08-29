@@ -11,6 +11,7 @@ export function ProjectHub() {
   const [repository, setRepository] = useState('');
   const [error, setError] = useState('');
   const [github, setGithub] = useState<GithubStatus | null>(null);
+  const [importing, setImporting] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const load = () => fetch('/api/projects?list=1', { credentials: 'include' }).then(async (response) => {
@@ -20,17 +21,20 @@ export function ProjectHub() {
 
   useEffect(() => {
     void load().finally(() => setLoading(false));
-    fetch('/api/github/status', { credentials: 'include' })
+    fetch('/api/account', { credentials: 'include' })
       .then((response) => response.ok ? response.json() : null)
-      .then((value: GithubStatus | null) => setGithub(value));
+      .then((value: { github_linked?: boolean; user?: { username?: string } } | null) => setGithub(value ? { connected: value.github_linked, username: value.user?.username } : null));
   }, []);
 
   const create = async (action: 'create' | 'import') => {
     setError('');
-    const response = await fetch('/api/projects', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, name, repository }) });
-    if (!response.ok) { setError(action === 'import' ? 'We could not import that repository.' : 'We could not create that project.'); return; }
-    const project = await response.json() as { project: string };
-    window.location.href = `/chat/${project.project}`;
+    setImporting(action === 'import');
+    const response = action === 'create'
+      ? await fetch('/api/galileo/projects', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) })
+      : await fetch('/api/projects', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, name, repository }) });
+    if (!response.ok) { setError(action === 'import' ? 'We could not import that repository.' : 'We could not create that project.'); setImporting(false); return; }
+    const project = await response.json() as { project?: string; project_id?: string };
+    window.location.href = `/chat/${project.project_id || project.project}`;
   };
 
   return <main className="flex-1 overflow-auto bg-bolt-elements-background-depth-1 px-6 py-10 text-bolt-elements-textPrimary sm:px-10">
@@ -60,7 +64,7 @@ export function ProjectHub() {
         </div>
         <div className="rounded-xl border border-bolt-elements-borderColor bg-bolt-elements-background-depth-2 p-6">
           <h2 className="text-xl font-semibold">Import from GitHub</h2><p className="mt-1 text-sm text-bolt-elements-textSecondary">Bring in a repository you already own or contribute to.</p>
-          <div className="mt-5 flex gap-3"><input value={repository} onChange={(event) => setRepository(event.target.value)} placeholder="https://github.com/owner/repository" aria-label="GitHub repository URL" className="min-w-0 flex-1 rounded-lg border border-bolt-elements-borderColor bg-bolt-elements-background-depth-1 px-3 py-2.5 outline-none focus:border-accent" /><button type="button" disabled={!repository.trim()} onClick={() => void create('import')} className="rounded-lg border border-bolt-elements-borderColor px-4 py-2.5 font-medium hover:bg-bolt-elements-item-backgroundActive disabled:cursor-not-allowed disabled:opacity-40">Import</button></div>
+          <div className="mt-5 flex gap-3"><input value={repository} onChange={(event) => setRepository(event.target.value)} placeholder="https://github.com/owner/repository" aria-label="GitHub repository URL" className="min-w-0 flex-1 rounded-lg border border-bolt-elements-borderColor bg-bolt-elements-background-depth-1 px-3 py-2.5 outline-none focus:border-accent" /><button type="button" disabled={!repository.trim() || importing} onClick={() => void create('import')} className="rounded-lg border border-bolt-elements-borderColor px-4 py-2.5 font-medium hover:bg-bolt-elements-item-backgroundActive disabled:cursor-not-allowed disabled:opacity-40">{importing ? 'Importing…' : 'Import'}</button></div>
           <p className="mt-3 text-xs text-bolt-elements-textTertiary">{github?.connected ? `Connected as ${github.username || 'your GitHub account'} — private repositories are available.` : 'Public repositories work now. Connect GitHub to import private repositories.'}</p>
         </div>
       </section>

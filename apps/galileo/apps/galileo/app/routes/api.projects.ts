@@ -9,15 +9,26 @@ const ROOT = '/var/oled/data/users_projects';
 const LIMIT = 200 * 1024 * 1024;
 const exec = promisify(execFile);
 
-async function user(request: Request): Promise<string | null> {
+async function user(request: Request): Promise<{ username: string; githubLinked: boolean }> {
+  const fallback = { username: '', githubLinked: false };
   const response = await fetch('https://agpstudios.org/api/auth/session', { headers: { cookie: request.headers.get('cookie') || '' } });
-  if (!response.ok) return null;
-  const data = (await response.json()) as { authenticated?: boolean; user?: { username?: string } };
-  return data.authenticated && data.user?.username ? data.user.username : null;
+  if (!response.ok) return fallback;
+  const data = (await response.json()) as { authenticated?: boolean; user?: { username?: string }; github_linked?: boolean };
+  return data.authenticated && data.user?.username ? { username: data.user.username, githubLinked: data.github_linked === true } : fallback;
 }
 
 function safe(value: string) {
   return value.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80) || 'default';
+}
+
+async function githubAccessToken(request: Request): Promise<string> {
+  const response = await fetch('https://agpstudios.org/api/account/github/token', {
+    headers: { cookie: request.headers.get('cookie') || '' },
+  });
+  if (!response.ok) throw new Error('github_token_unavailable');
+  const data = (await response.json()) as { access_token?: string };
+  if (!data.access_token) throw new Error('github_token_unavailable');
+  return data.access_token;
 }
 
 async function collect(directory: string, prefix = ''): Promise<Record<string, string>> {
@@ -34,8 +45,9 @@ async function collect(directory: string, prefix = ''): Promise<Record<string, s
 
 export async function loader({ request }: LoaderFunctionArgs) {
   if (!(await authenticated(request))) return json({ error: 'unauthenticated' }, { status: 401 });
-  const username = await user(request);
-  if (!username) return json({ error: 'unauthenticated' }, { status: 401 });
+  const account = await user(request);
+  if (!account.username) return json({ error: 'unauthenticated' }, { status: 401 });
+  const username = account.username;
   const params = new URL(request.url).searchParams;
   if (params.get('list') === '1') {
     const root = path.join(ROOT, safe(username));
@@ -53,22 +65,30 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
 export async function action({ request }: ActionFunctionArgs) {
   if (!(await authenticated(request))) return json({ error: 'unauthenticated' }, { status: 401 });
-  const username = await user(request);
-  if (!username) return json({ error: 'unauthenticated' }, { status: 401 });
+  const account = await user(request);
+  if (!account.username) return json({ error: 'unauthenticated' }, { status: 401 });
+  const username = account.username;
   const body = (await request.json()) as { action?: string; name?: string; repository?: string; project_id?: string; files?: Record<string, string> };
   if (body.action === 'create' || body.action === 'import') {
     const repository = body.repository?.match(/^https:\/\/github\.com\/([a-zA-Z0-9_-]+)\/([a-zA-Z0-9_.-]+?)(?:\.git)?\/?$/);
-    if (body.action === 'import' && !repository) return json({ error: 'public_github_url_required' }, { status: 400 });
+    if (body.action === 'import' && !repository) return json({ error: 'github_url_required' }, { status: 400 });
+    if (body.action === 'import' && !account.githubLinked) return json({ error: 'github_account_not_linked' }, { status: 403 });
     const project = safe(body.name || repository?.[2] || 'new-project');
     const destination = path.join(ROOT, safe(username), project);
     await mkdir(path.dirname(destination), { recursive: true });
     if (body.action === 'import') {
       const temporary = await mkdtemp(path.join('/tmp', 'galileo-github-'));
       try {
-        await exec('git', ['clone', '--depth', '1', body.repository!, temporary], { timeout: 120_000 });
+        const githubToken = await githubAccessToken(request);
+        const authenticatedUrl = `https://x-access-token:${encodeURIComponent(githubToken)}@github.com/${repository[1]}/${repository[2]}.git`;
+        await exec('git', ['clone', '--depth', '1', authenticatedUrl, temporary], { timeout: 120_000 });
         await cp(temporary, destination, { recursive: true, filter: (source) => !source.endsWith(`${path.sep}.git`) });
+      } catch (error) {
+        if (error instanceof Error && error.message === 'github_token_unavailable') return json({ error: 'github_token_unavailable' }, { status: 502 });
+        throw error;
       } finally { await rm(temporary, { recursive: true, force: true }); }
     } else await mkdir(destination, { recursive: true });
+    await writeFile(path.join(destination, '.project-meta.json'), JSON.stringify({ name: body.name || repository?.[2] || project, source: body.action === 'import' ? body.repository : undefined, created_at: new Date().toISOString() }));
     return json({ ok: true, project });
   }
   const project = safe(body.project_id || 'default');
