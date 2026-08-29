@@ -32,8 +32,9 @@ async function chatAction({ request }: ActionFunctionArgs) {
 
     const result = await streamText(messages, mode, options);
 
+    const text = await result.text;
     console.info(JSON.stringify({ event: 'chat.success', request_id: requestId, duration_ms: Date.now() - started }));
-    return new Response(result.toAIStream(), {
+    return new Response(`0:${JSON.stringify(text)}\nd:${JSON.stringify({ finishReason: 'stop' })}\n`, {
       status: 200,
       headers: {
         'Content-Type': 'text/plain; charset=utf-8',
