@@ -1,5 +1,5 @@
 import { json } from '@remix-run/node';
-import { getAgents, getGatewayURL } from '~/lib/.server/config';
+import { getGatewayURL } from '~/lib/.server/config';
 
 const PROBE_TIMEOUT_MS = 5_000;
 
@@ -55,33 +55,19 @@ async function probe<T>(url: string, headers?: HeadersInit): Promise<ProbeResult
 
 /**
  * Reports gateway reachability, queue capacity, local worker health, and
- * Omega/Beta/Delta pool health. Always returns 200; degradation is in the body.
+ * Alpha-managed coding capacity. Agent telemetry remains owned by AshatHub.
  */
 export async function loader() {
   const gatewayURL = getGatewayURL().replace(/\/+$/, '');
   const baseURL = gatewayURL.endsWith('/v1') ? gatewayURL.slice(0, -3) : gatewayURL;
 
-  const [health, status, workers, ...agents] = await Promise.all([
+  const [health, status, workers] = await Promise.all([
     probe<GatewayHealth>(`${baseURL}/health`),
     probe<GatewayStatus>(`${baseURL}/status`),
     probe<GatewayWorkers>(`${baseURL}/workers`),
-    ...getAgents().map(async (agent) => {
-      const headers: Record<string, string> = { accept: 'application/json' };
-      const agentKey = process.env.ASHAT_AGENT_API_KEY;
-      if (agentKey) headers['X-Ashat-Key'] = agentKey;
-      const result = await probe<unknown>(`${agent.url}/health`, headers);
-
-      return {
-        id: agent.id,
-        healthy: result.ok,
-        latency_ms: result.latency_ms,
-        error: result.error ?? null,
-      };
-    }),
   ]);
 
   const reachable = health.ok && health.data?.status === 'ok';
-  const healthyAgents = agents.filter((agent) => agent.healthy).length;
 
   return json(
     {
@@ -96,10 +82,9 @@ export async function loader() {
       queue: status.data ?? null,
       workers: workers.data ?? null,
       pool: {
-        healthy_agents: healthyAgents,
-        total_agents: agents.length,
+        managed_by: 'alpha',
+        available_agent_slots: status.data?.available_agent_slots ?? null,
       },
-      agents,
       updated_at: new Date().toISOString(),
     },
     { headers: { 'cache-control': 'no-store' } },
