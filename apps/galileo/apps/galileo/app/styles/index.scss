@@ -11,4 +11,32 @@ html,
 body {
   height: 100%;
   width: 100%;
+  scrollbar-color: var(--bolt-elements-bg-depth-4) var(--bolt-elements-bg-depth-2);
+  scrollbar-width: thin;
+}
+
+* {
+  scrollbar-color: var(--bolt-elements-bg-depth-4) transparent;
+  scrollbar-width: thin;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--bolt-elements-bg-depth-4);
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--bolt-elements-textTertiary);
+  background-clip: content-box;
 }

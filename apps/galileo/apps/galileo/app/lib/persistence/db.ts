@@ -126,6 +126,16 @@ export async function deleteById(db: IDBDatabase | undefined, id: string): Promi
   });
 }
 
+export async function deleteAll(db: IDBDatabase | undefined): Promise<void> {
+  localStorage.removeItem(LOCAL_KEY);
+  if (!db) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const request = db.transaction('chats', 'readwrite').objectStore('chats').clear();
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+}
+
 export async function getNextId(db: IDBDatabase | undefined): Promise<string> {
   if (!db) {
     const highestId = localChats().reduce((max, chat) => Math.max(max, Number(chat.id) || 0), 0);

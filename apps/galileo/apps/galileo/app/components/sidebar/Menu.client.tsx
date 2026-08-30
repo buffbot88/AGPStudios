@@ -4,7 +4,7 @@ import { toast } from 'react-toastify';
 import { Dialog, DialogButton, DialogDescription, DialogRoot, DialogTitle } from '~/components/ui/Dialog';
 import { IconButton } from '~/components/ui/IconButton';
 import { ThemeSwitch } from '~/components/ui/ThemeSwitch';
-import { db, deleteById, getAll, chatId, type ChatHistoryItem } from '~/lib/persistence';
+import { db, deleteAll, deleteById, getAll, chatId, type ChatHistoryItem } from '~/lib/persistence';
 import { cubicEasingFn } from '~/utils/easings';
 import { logger } from '~/utils/logger';
 import { HistoryItem } from './HistoryItem';
@@ -31,7 +31,7 @@ const menuVariants = {
   },
 } satisfies Variants;
 
-type DialogContent = { type: 'delete'; item: ChatHistoryItem } | null;
+type DialogContent = { type: 'delete'; item: ChatHistoryItem } | { type: 'clear' } | null;
 
 export function Menu() {
   const menuRef = useRef<HTMLDivElement>(null);
@@ -41,7 +41,7 @@ export function Menu() {
 
   const loadEntries = useCallback(() => {
     getAll(db)
-      .then((list) => list.filter((item) => item.urlId && item.description))
+      .then((list) => list.filter((item) => item.urlId))
       .then(setList)
       .catch((error) => toast.error(error.message));
   }, []);
@@ -67,6 +67,18 @@ export function Menu() {
   const closeDialog = () => {
     setDialogContent(null);
   };
+
+  const clearHistory = useCallback(() => {
+    deleteAll(db)
+      .then(() => {
+        setList([]);
+        if (chatId.get()) window.location.pathname = '/';
+      })
+      .catch((error) => {
+        toast.error('Failed to clear chat history');
+        logger.error(error);
+      });
+  }, []);
 
   useEffect(() => {
     if (open) {
@@ -96,14 +108,25 @@ export function Menu() {
   }, []);
 
   return (
-    <motion.div
+    <>
+      <IconButton
+        icon={open ? 'i-ph:x' : 'i-ph:list'}
+        size="lg"
+        title={open ? 'Close chat history' : 'Open chat history'}
+        className="fixed left-3 top-3 z-[1000] bg-bolt-elements-background-depth-2/90 shadow-md backdrop-blur-sm"
+        onClick={() => setOpen((value) => !value)}
+      />
+      <motion.div
       ref={menuRef}
       initial="closed"
       animate={open ? 'open' : 'closed'}
       variants={menuVariants}
       className="flex flex-col side-menu fixed top-0 w-[350px] h-full bg-bolt-elements-background-depth-2 border-r rounded-r-3xl border-bolt-elements-borderColor z-sidebar shadow-xl shadow-bolt-elements-sidebar-dropdownShadow text-sm"
     >
-      <div className="flex items-center h-[var(--header-height)]">{/* Placeholder */}</div>
+      <div className="flex items-center justify-between h-[var(--header-height)] px-4">
+        <span className="text-bolt-elements-textPrimary font-medium">Galileo</span>
+        <IconButton icon="i-ph:x" size="md" title="Close chat history" onClick={() => setOpen(false)} />
+      </div>
       <div className="flex-1 flex flex-col h-full w-full overflow-hidden">
         <div className="p-4">
           <a
@@ -156,13 +179,30 @@ export function Menu() {
                   </div>
                 </>
               )}
+              {dialogContent?.type === 'clear' && (
+                <>
+                  <DialogTitle>Clear chat history?</DialogTitle>
+                  <DialogDescription>This deletes all saved conversations from this browser.</DialogDescription>
+                  <div className="px-5 pb-4 bg-bolt-elements-background-depth-2 flex gap-2 justify-end">
+                    <DialogButton type="secondary" onClick={closeDialog}>Cancel</DialogButton>
+                    <DialogButton type="danger" onClick={() => { clearHistory(); closeDialog(); }}>Clear all</DialogButton>
+                  </div>
+                </>
+              )}
             </Dialog>
           </DialogRoot>
         </div>
-        <div className="flex items-center border-t border-bolt-elements-borderColor p-4">
+        <div className="flex items-center gap-2 border-t border-bolt-elements-borderColor p-4">
+          <button
+            className="text-bolt-elements-textTertiary hover:text-bolt-elements-item-contentDanger transition-colors"
+            onClick={() => setDialogContent({ type: 'clear' })}
+          >
+            Clear history
+          </button>
           <ThemeSwitch className="ml-auto" />
         </div>
       </div>
-    </motion.div>
+      </motion.div>
+    </>
   );
 }

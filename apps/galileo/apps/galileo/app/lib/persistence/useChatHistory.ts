@@ -41,6 +41,7 @@ export function useChatHistory() {
           } else if (project && mixedId) {
             chatId.set(mixedId);
             setUrlId(mixedId);
+            if (project) description.set(`Project: ${mixedId}`);
           } else {
             navigate(`/`, { replace: true });
           }
