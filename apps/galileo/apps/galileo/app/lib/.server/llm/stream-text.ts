@@ -9,7 +9,7 @@ interface Message {
 
 export type Messages = Message[];
 
-export async function completeText(messages: Messages, mode: 'chat' | 'build' = 'chat') {
+export async function completeText(messages: Messages, mode: 'chat' | 'build' = 'chat', projectContext = '') {
   const base = getGatewayURL().trim().replace(/\/+$/, '');
   const endpoint = `${base.endsWith('/v1') ? base : `${base}/v1`}/chat/completions`;
   const controller = new AbortController();
@@ -25,7 +25,7 @@ export async function completeText(messages: Messages, mode: 'chat' | 'build' = 
       },
       body: JSON.stringify({
         model: 'ashat',
-        messages: [{ role: 'system', content: mode === 'build' ? getSystemPrompt() : CHAT_READINESS_PROMPT }, ...messages],
+        messages: [{ role: 'system', content: `${mode === 'build' ? getSystemPrompt() : CHAT_READINESS_PROMPT}${projectContext ? `\n\n<project_context>\n${projectContext}\n</project_context>` : ''}` }, ...messages],
         max_tokens: MAX_TOKENS,
         temperature: 0,
         stream: false,

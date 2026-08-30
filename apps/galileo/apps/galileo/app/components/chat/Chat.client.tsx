@@ -73,6 +73,8 @@ export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProp
 
   const [chatStarted, setChatStarted] = useState(initialMessages.length > 0);
   const [mode, setMode] = useState<'chat' | 'build'>('chat');
+  const [projectContext, setProjectContext] = useState('');
+  const contextIntroSent = useRef(false);
 
   const { showChat } = useStore(chatStore);
 
@@ -94,6 +96,7 @@ export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProp
       logger.debug('Finished streaming');
     },
     initialMessages,
+    body: { mode, projectContext },
   });
 
   const { enhancingPrompt, promptEnhanced, enhancePrompt, resetEnhancer } = usePromptEnhancer();
@@ -104,6 +107,8 @@ export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProp
     fetch(`/api/projects?project_id=${encodeURIComponent(window.location.pathname.split('/').pop() || 'default')}`, { credentials: 'include' })
       .then(async (response) => response.ok ? await response.json() as { files: Record<string, string> } : { files: {} as Record<string, string> })
       .then(async ({ files }) => {
+        const context = Object.entries(files).filter(([filePath]) => /(^|\/)(README|package\.json|tsconfig.*|vite\.config|src\/.*\.(ts|tsx|js|jsx))$/i.test(filePath)).slice(0, 40).map(([filePath, content]) => `FILE: ${filePath}\n${content.slice(0, 12000)}`).join('\n\n').slice(0, 100000);
+        setProjectContext(context);
         const container = await webcontainer;
         for (const [filePath, content] of Object.entries(files)) {
           const directory = filePath.split('/').slice(0, -1).join('/');
@@ -123,6 +128,11 @@ export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProp
     });
     return () => { unsubscribe(); window.clearTimeout(timer); };
   }, []);
+  useEffect(() => {
+    if (!projectContext || initialMessages.length || contextIntroSent.current) return;
+    contextIntroSent.current = true;
+    void append({ role: 'user', content: 'This is an existing project. Use the supplied project files to briefly explain what it does, its main structure, and the most important conventions. Then ask what I want to work on. Do not invent details.' });
+  }, [append, initialMessages.length, projectContext]);
   const { parsedMessages, parseMessages } = useMessageParser();
   const buildReady = messages.length > 0 && messages[messages.length - 1].role === 'assistant' && messages[messages.length - 1].content.includes('<!-- GALILEO_BUILD_READY -->');
   const [jobEvents, setJobEvents] = useState<string[]>([]);

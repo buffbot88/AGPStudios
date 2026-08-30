@@ -23,7 +23,7 @@ export const description = atom<string | undefined>(undefined);
 
 export function useChatHistory() {
   const navigate = useNavigate();
-  const { id: mixedId } = useLoaderData<{ id?: string }>();
+  const { id: mixedId, project } = useLoaderData<{ id?: string; project?: boolean }>();
 
   const [initialMessages, setInitialMessages] = useState<Message[]>([]);
   const [ready, setReady] = useState<boolean>(false);
@@ -38,6 +38,9 @@ export function useChatHistory() {
             setUrlId(storedMessages.urlId);
             description.set(storedMessages.description);
             chatId.set(storedMessages.id);
+          } else if (project && mixedId) {
+            chatId.set(mixedId);
+            setUrlId(mixedId);
           } else {
             navigate(`/`, { replace: true });
           }

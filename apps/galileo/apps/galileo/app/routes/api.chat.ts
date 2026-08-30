@@ -12,7 +12,7 @@ async function chatAction({ request }: ActionFunctionArgs) {
   const requestId = crypto.randomUUID();
   const started = Date.now();
   if (!(await authenticated(request))) return new Response('Unauthorized', { status: 401, headers: { 'X-Request-Id': requestId } });
-  const { messages, mode } = (await request.json()) as { messages: Messages; mode?: 'chat' | 'build' };
+  const { messages, mode, projectContext } = (await request.json()) as { messages: Messages; mode?: 'chat' | 'build'; projectContext?: string };
   console.info(JSON.stringify({ event: 'chat.start', request_id: requestId, mode: mode ?? 'chat', message_count: messages.length }));
 
   if (mode === 'build' && !messages.some((message) => message.role === 'assistant' && typeof message.content === 'string' && message.content.includes(BUILD_READY_MARKER))) {
@@ -20,7 +20,7 @@ async function chatAction({ request }: ActionFunctionArgs) {
   }
 
   try {
-    const result = await completeText(messages, mode);
+    const result = await completeText(messages, mode, projectContext);
     console.info(JSON.stringify({ event: 'chat.success', request_id: requestId, duration_ms: Date.now() - started }));
     return new Response(`0:${JSON.stringify(result.text)}\nd:${JSON.stringify({ finishReason: 'stop', usage: result.usage })}\n`, {
       status: 200,
