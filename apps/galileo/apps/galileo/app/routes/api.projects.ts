@@ -64,8 +64,12 @@ export async function action({ request }: ActionFunctionArgs) {
         headers: { 'Content-Type': 'application/json', cookie: request.headers.get('cookie') || '', 'x-csrf-token': account.csrf },
         body: JSON.stringify({ repository: body.repository, name: body.name || repository![2] }),
       });
-      if (!response.ok) return json({ error: 'github_import_failed' }, { status: 502 });
-      return json(await response.json());
+      const result = await response.json() as { error?: string | { code?: string } };
+      if (!response.ok) {
+        const error = typeof result.error === 'string' ? result.error : result.error?.code || 'github_import_failed';
+        return json({ error }, { status: response.status === 400 ? 400 : 502 });
+      }
+      return json(result);
     }
     const project = safe(body.name || repository?.[2] || 'new-project');
     const destination = path.join(ROOT, safe(username), project);
