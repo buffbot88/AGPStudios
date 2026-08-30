@@ -13,7 +13,7 @@ async function chatAction({ request }: ActionFunctionArgs) {
   const started = Date.now();
   if (!(await authenticated(request))) return new Response('Unauthorized', { status: 401, headers: { 'X-Request-Id': requestId } });
   const { messages, mode, projectContext } = (await request.json()) as { messages: Messages; mode?: 'chat' | 'build'; projectContext?: string };
-  console.info(JSON.stringify({ event: 'chat.start', request_id: requestId, mode: mode ?? 'chat', message_count: messages.length }));
+  console.info(JSON.stringify({ event: 'chat.start', request_id: requestId, mode: mode ?? 'chat', message_count: messages.length, project_context_chars: projectContext?.length ?? 0 }));
 
   if (mode === 'build' && !messages.some((message) => message.role === 'assistant' && typeof message.content === 'string' && message.content.includes(BUILD_READY_MARKER))) {
     return new Response('Galileo needs more context before Build mode is available.', { status: 409, headers: { 'X-Request-Id': requestId } });
