@@ -5,12 +5,12 @@ import { authenticated } from '~/lib/.server/auth';
 
 const ROOT = '/var/oled/data/users_projects';
 const LIMIT = 200 * 1024 * 1024;
-async function user(request: Request): Promise<{ username: string; githubLinked: boolean }> {
-  const fallback = { username: '', githubLinked: false };
+async function user(request: Request): Promise<{ username: string; githubLinked: boolean; csrf: string }> {
+  const fallback = { username: '', githubLinked: false, csrf: '' }; 
   const response = await fetch('https://agpstudios.org/api/auth/session', { headers: { cookie: request.headers.get('cookie') || '' } });
   if (!response.ok) return fallback;
-  const data = (await response.json()) as { authenticated?: boolean; user?: { username?: string }; github_linked?: boolean };
-  return data.authenticated && data.user?.username ? { username: data.user.username, githubLinked: data.github_linked === true } : fallback;
+  const data = (await response.json()) as { authenticated?: boolean; user?: { username?: string }; github_linked?: boolean; csrf?: string };
+  return data.authenticated && data.user?.username ? { username: data.user.username, githubLinked: data.github_linked === true, csrf: data.csrf || '' } : fallback;
 }
 
 function safe(value: string) {
@@ -61,7 +61,7 @@ export async function action({ request }: ActionFunctionArgs) {
     if (body.action === 'import') {
       const response = await fetch('https://agpstudios.org/api/github/app/import', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', cookie: request.headers.get('cookie') || '' },
+        headers: { 'Content-Type': 'application/json', cookie: request.headers.get('cookie') || '', 'x-csrf-token': account.csrf },
         body: JSON.stringify({ repository: body.repository, name: body.name || repository![2] }),
       });
       if (!response.ok) return json({ error: 'github_import_failed' }, { status: 502 });
