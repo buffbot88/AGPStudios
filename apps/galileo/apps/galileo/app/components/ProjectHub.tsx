@@ -23,13 +23,8 @@ export function ProjectHub() {
 
   useEffect(() => {
     void load().finally(() => setLoading(false));
-    fetch('/api/account', { credentials: 'include' })
+    fetch('/api/github/app/repositories', { credentials: 'include' })
       .then((response) => response.ok ? response.json() : null)
-      .then((value: { github_linked?: boolean; user?: { username?: string } } | null) => {
-        setGithub(value ? { connected: value.github_linked, username: value.user?.username } : null);
-        return fetch('/api/github/app/repositories', { credentials: 'include' });
-      })
-      .then((response) => response?.ok ? response.json() : null)
       .then((value: GithubRepository[] | null) => { if (value) { setRepositories(value); setGithub((current) => ({ ...current, connected: true })); } });
   }, []);
 

@@ -57,10 +57,7 @@ export async function action({ request }: ActionFunctionArgs) {
   const body = (await request.json()) as { action?: string; name?: string; repository?: string; project_id?: string; files?: Record<string, string> };
   if (body.action === 'create' || body.action === 'import') {
     const repository = body.repository?.match(/^https:\/\/github\.com\/([a-zA-Z0-9_-]+)\/([a-zA-Z0-9_.-]+?)(?:\.git)?\/?$/);
-    if (body.action === 'import') {
-      if (!repository) return json({ error: 'github_url_required' }, { status: 400 });
-      if (!account.githubLinked) return json({ error: 'github_account_not_linked' }, { status: 403 });
-    }
+    if (body.action === 'import' && !repository) return json({ error: 'github_url_required' }, { status: 400 });
     if (body.action === 'import') {
       const response = await fetch('https://agpstudios.org/api/github/app/import', {
         method: 'POST',
