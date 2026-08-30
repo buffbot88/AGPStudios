@@ -71,8 +71,10 @@ export async function action({ request }: ActionFunctionArgs) {
   const body = (await request.json()) as { action?: string; name?: string; repository?: string; project_id?: string; files?: Record<string, string> };
   if (body.action === 'create' || body.action === 'import') {
     const repository = body.repository?.match(/^https:\/\/github\.com\/([a-zA-Z0-9_-]+)\/([a-zA-Z0-9_.-]+?)(?:\.git)?\/?$/);
-    if (body.action === 'import' && !repository) return json({ error: 'github_url_required' }, { status: 400 });
-    if (body.action === 'import' && !account.githubLinked) return json({ error: 'github_account_not_linked' }, { status: 403 });
+    if (body.action === 'import') {
+      if (!repository) return json({ error: 'github_url_required' }, { status: 400 });
+      if (!account.githubLinked) return json({ error: 'github_account_not_linked' }, { status: 403 });
+    }
     const project = safe(body.name || repository?.[2] || 'new-project');
     const destination = path.join(ROOT, safe(username), project);
     await mkdir(path.dirname(destination), { recursive: true });
@@ -80,7 +82,7 @@ export async function action({ request }: ActionFunctionArgs) {
       const temporary = await mkdtemp(path.join('/tmp', 'galileo-github-'));
       try {
         const githubToken = await githubAccessToken(request);
-        const authenticatedUrl = `https://x-access-token:${encodeURIComponent(githubToken)}@github.com/${repository[1]}/${repository[2]}.git`;
+        const authenticatedUrl = `https://x-access-token:${encodeURIComponent(githubToken)}@github.com/${repository![1]}/${repository![2]}.git`;
         await exec('git', ['clone', '--depth', '1', authenticatedUrl, temporary], { timeout: 120_000 });
         await cp(temporary, destination, { recursive: true, filter: (source) => !source.endsWith(`${path.sep}.git`) });
       } catch (error) {
