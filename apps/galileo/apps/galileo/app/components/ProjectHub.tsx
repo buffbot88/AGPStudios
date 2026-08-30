@@ -4,6 +4,7 @@ import { ThemeSwitch } from '~/components/ui/ThemeSwitch';
 type Project = { id: string; updated_at: string };
 
 type GithubStatus = { connected?: boolean; username?: string };
+type GithubRepository = { id: number; full_name: string; clone_url: string; private: boolean };
 
 export function ProjectHub() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -11,6 +12,7 @@ export function ProjectHub() {
   const [repository, setRepository] = useState('');
   const [error, setError] = useState('');
   const [github, setGithub] = useState<GithubStatus | null>(null);
+  const [repositories, setRepositories] = useState<GithubRepository[]>([]);
   const [importing, setImporting] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -23,7 +25,12 @@ export function ProjectHub() {
     void load().finally(() => setLoading(false));
     fetch('/api/account', { credentials: 'include' })
       .then((response) => response.ok ? response.json() : null)
-      .then((value: { github_linked?: boolean; user?: { username?: string } } | null) => setGithub(value ? { connected: value.github_linked, username: value.user?.username } : null));
+      .then((value: { github_linked?: boolean; user?: { username?: string } } | null) => {
+        setGithub(value ? { connected: value.github_linked, username: value.user?.username } : null);
+        return fetch('/api/github/app/repositories', { credentials: 'include' });
+      })
+      .then((response) => response?.ok ? response.json() : null)
+      .then((value: GithubRepository[] | null) => { if (value) { setRepositories(value); setGithub((current) => ({ ...current, connected: true })); } });
   }, []);
 
   const create = async (action: 'create' | 'import') => {
@@ -65,7 +72,8 @@ export function ProjectHub() {
         <div className="rounded-xl border border-bolt-elements-borderColor bg-bolt-elements-background-depth-2 p-6">
           <h2 className="text-xl font-semibold">Import from GitHub</h2><p className="mt-1 text-sm text-bolt-elements-textSecondary">Connect your GitHub account to choose a repository securely.</p>
           <a href="/api/github/app/install" className="mt-5 inline-block rounded-lg border border-bolt-elements-borderColor px-4 py-2.5 font-medium hover:bg-bolt-elements-item-backgroundActive">{github?.connected ? `Reconnect ${github.username || 'GitHub'}` : 'Connect GitHub'}</a>
-          <p className="mt-3 text-xs text-bolt-elements-textTertiary">The GitHub App receives repository access; Galileo never receives or stores GitHub credentials.</p>
+          {repositories.length > 0 && <div className="mt-5 flex gap-3"><select value={repository} onChange={(event) => setRepository(event.target.value)} aria-label="GitHub repository" className="min-w-0 flex-1 rounded-lg border border-bolt-elements-borderColor bg-bolt-elements-background-depth-1 px-3 py-2.5"><option value="">Choose a repository</option>{repositories.map((repo) => <option key={repo.id} value={repo.clone_url}>{repo.full_name}{repo.private ? ' (private)' : ''}</option>)}</select><button type="button" disabled={!repository || importing} onClick={() => void create('import')} className="rounded-lg border border-bolt-elements-borderColor px-4 py-2.5 font-medium hover:bg-bolt-elements-item-backgroundActive disabled:cursor-not-allowed disabled:opacity-40">{importing ? 'Importing…' : 'Import'}</button></div>}
+          <p className="mt-3 text-xs text-bolt-elements-textTertiary">{repositories.length ? `${repositories.length} repositories available.` : 'The GitHub App receives repository access; Galileo never receives or stores GitHub credentials.'}</p>
         </div>
       </section>
     </div>
