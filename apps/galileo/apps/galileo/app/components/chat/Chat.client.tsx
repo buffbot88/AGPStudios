@@ -25,11 +25,11 @@ const logger = createScopedLogger('Chat');
 export function Chat() {
   renderLogger.trace('Chat');
 
-  const { ready, initialMessages, storeMessageHistory } = useChatHistory();
+  const { project, ready, initialMessages, storeMessageHistory } = useChatHistory();
 
   return (
     <>
-      {ready && <ChatImpl initialMessages={initialMessages} storeMessageHistory={storeMessageHistory} />}
+      {ready && <ChatImpl project={project} initialMessages={initialMessages} storeMessageHistory={storeMessageHistory} />}
       <ToastContainer
         closeButton={({ closeToast }) => {
           return (
@@ -62,11 +62,12 @@ export function Chat() {
 }
 
 interface ChatProps {
+  project?: boolean;
   initialMessages: Message[];
   storeMessageHistory: (messages: Message[]) => Promise<void>;
 }
 
-export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProps) => {
+export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }: ChatProps) => {
   useShortcuts();
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -135,6 +136,11 @@ export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProp
   }, [append, initialMessages.length, projectContext]);
   const { parsedMessages, parseMessages } = useMessageParser();
   const buildReady = messages.length > 0 && messages[messages.length - 1].role === 'assistant' && messages[messages.length - 1].content.includes('<!-- GALILEO_BUILD_READY -->');
+
+  useEffect(() => {
+    if (project && buildReady) setMode('build');
+  }, [project, buildReady]);
+
   const [jobEvents, setJobEvents] = useState<string[]>([]);
   const submittedBuild = useRef(false);
 

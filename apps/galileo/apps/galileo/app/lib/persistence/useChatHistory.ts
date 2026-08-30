@@ -55,6 +55,7 @@ export function useChatHistory() {
   }, []);
 
   return {
+    project,
     ready: !mixedId || ready,
     initialMessages,
     storeMessageHistory: async (messages: Message[]) => {
