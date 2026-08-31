@@ -10,7 +10,7 @@ use std::{
     collections::{HashMap, VecDeque},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicU32, Ordering},
+        atomic::{AtomicU32, AtomicU64, Ordering},
         Arc, Mutex,
     },
     time::{Duration, Instant},
@@ -46,6 +46,7 @@ pub struct DemandPool {
     spawn_attempts_threshold: u32,
     consecutive_spawn_failures: AtomicU32,
     last_failure_reason: Mutex<Option<String>>,
+    last_startup_latency_ms: AtomicU64,
 }
 
 impl DemandPool {
@@ -193,6 +194,8 @@ impl DemandPool {
             queue_depth: self.queue.depth().await,
             queue_limit: self.queue.limit(),
             last_failure_reason: self.last_failure(),
+            worker_startup_latency_ms: (self.last_startup_latency_ms.load(Ordering::Relaxed) > 0)
+                .then(|| self.last_startup_latency_ms.load(Ordering::Relaxed) as f64),
         }
     }
     /// Acquire a port for an immediate task. Returns the RAII `InstanceGuard`.
@@ -253,6 +256,7 @@ impl DemandPool {
             free.pop_front()?
         };
 
+        let startup_started = Instant::now();
         match spawn_llama_server(&self.spec, port).await {
             Ok(child) => {
                 {
@@ -282,6 +286,7 @@ impl DemandPool {
                     self.queue().notify_slot_available();
                     return None;
                 }
+                self.last_startup_latency_ms.store(startup_started.elapsed().as_millis() as u64, Ordering::Relaxed);
                 metrics.event(format!("{} spawn-on {port} succeeded", self.name.as_str()));
                 self.consecutive_spawn_failures.store(0, Ordering::SeqCst);
                 Some(InstanceGuard::spawned(Arc::clone(self), port))
@@ -405,6 +410,7 @@ pub struct PoolSnapshotCompact {
     pub queue_depth: usize,
     pub queue_limit: usize,
     pub last_failure_reason: Option<String>,
+    pub worker_startup_latency_ms: Option<f64>,
 }
 
 pub struct DemandPoolBuilder {
@@ -444,6 +450,7 @@ impl DemandPoolBuilder {
             spawn_attempts_threshold: self.spawn_attempts_threshold,
             consecutive_spawn_failures: AtomicU32::new(0),
             last_failure_reason: Mutex::new(None),
+            last_startup_latency_ms: AtomicU64::new(0),
         }
     }
 }
