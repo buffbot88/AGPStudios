@@ -84,6 +84,7 @@ background:#1f1f25;color:#ff7a45;font:11px ui-monospace}</style></head>\
 pub async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
     let orchestrator_ready = state.orchestrator_pool.baseline_alive().await;
     let snapshot = state.coding_agent_pool.snapshot().await;
+    let metrics = state.metrics.summary(state.started.elapsed().as_secs_f64());
     Json(HealthResponse {
         status: "ok",
         uptime_seconds: state.started.elapsed().as_secs_f64(),
@@ -96,8 +97,10 @@ pub async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> 
             memory_available_mb: memory_available_mb(),
             memory_pressure: memory_pressure(),
             worker_startup_latency_ms: None,
-            recent_failure_rate: None,
-            estimated_request_cost: None,
+            recent_failure_rate: (metrics.summaries.omega.total_requests > 0)
+                .then(|| (100.0 - metrics.summaries.omega.success_rate) / 100.0),
+            estimated_request_cost: (metrics.summaries.omega.total_requests > 0)
+                .then_some(metrics.summaries.omega.avg_total_latency_ms),
         },
     })
 }
