@@ -123,6 +123,16 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
           if (directory) await container.fs.mkdir(directory, { recursive: true });
           await container.fs.writeFile(filePath, content);
         }
+        const packageJson = files['package.json'];
+        if (packageJson) {
+          try {
+            const scripts = (JSON.parse(packageJson) as { scripts?: Record<string, string> }).scripts || {};
+            const script = scripts.dev ? 'dev' : scripts.start ? 'start' : undefined;
+            if (script) void container.spawn('jsh', ['-c', `npm run ${script} -- --host 0.0.0.0`]);
+          } catch {
+            // Invalid package manifests are left for the user to fix in the workspace.
+          }
+        }
         hydrated = true;
       })
       .catch(() => { hydrated = true; });
