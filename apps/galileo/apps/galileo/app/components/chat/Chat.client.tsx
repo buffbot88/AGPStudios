@@ -253,12 +253,6 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
     await workbenchStore.saveAllFiles();
 
     const fileModifications = workbenchStore.getFileModifcations();
-    const liveContext = Object.entries(workbenchStore.files.get())
-      .filter(([, file]) => file?.type === 'file' && !file.isBinary)
-      .map(([path, file]) => `FILE CONTENT: ${path.replace(/^.*?\/home\/project\//, '')}\n${(file as { content?: string }).content || ''}`)
-      .join('\n\n')
-      .slice(0, 100000);
-    setProjectContext(liveContext);
 
     chatStore.setKey('aborted', false);
 
@@ -274,7 +268,7 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
        * manually reset the input and we'd have to manually pass in file attachments. However, those
        * aren't relevant here.
        */
-      append({ role: 'user', content: `${diff}\n\n${_input}` }, { body: { mode, projectContext: liveContext } });
+      append({ role: 'user', content: `${diff}\n\n${_input}` }, { body: { mode } });
 
       /**
        * After sending a new message we reset all modifications since the model
@@ -282,7 +276,7 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
        */
       workbenchStore.resetAllFileModifications();
     } else {
-      append({ role: 'user', content: _input }, { body: { mode, projectContext: liveContext } });
+      append({ role: 'user', content: _input }, { body: { mode } });
     }
 
     setInput('');
