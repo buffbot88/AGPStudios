@@ -22,6 +22,16 @@ const toastAnimation = cssTransition({
 
 const logger = createScopedLogger('Chat');
 
+function buildProjectContext(files: Record<string, string>) {
+  const outline = Object.keys(files).sort().map((filePath) => `FILE: ${filePath}`).join('\n');
+  const details = Object.entries(files)
+    .filter(([filePath]) => /(^|\/)(README|package\.json|tsconfig.*|vite\.config|src\/.*\.(ts|tsx|js|jsx))$/i.test(filePath))
+    .slice(0, 40)
+    .map(([filePath, content]) => `FILE CONTENT: ${filePath}\n${content.slice(0, 12000)}`)
+    .join('\n\n');
+  return `${outline}\n\n${details}`.slice(0, 100000);
+}
+
 export function Chat() {
   renderLogger.trace('Chat');
 
@@ -108,9 +118,7 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
     fetch(`/api/projects?project_id=${encodeURIComponent(window.location.pathname.split('/').pop() || 'default')}`, { credentials: 'include' })
       .then(async (response) => response.ok ? await response.json() as { files: Record<string, string>; project?: string } : { files: {} as Record<string, string> })
       .then(async ({ files, project }) => {
-        const outline = Object.keys(files).sort().map((filePath) => `FILE: ${filePath}`).join('\n');
-        const details = Object.entries(files).filter(([filePath]) => /(^|\/)(README|package\.json|tsconfig.*|vite\.config|src\/.*\.(ts|tsx|js|jsx))$/i.test(filePath)).slice(0, 40).map(([filePath, content]) => `FILE CONTENT: ${filePath}\n${content.slice(0, 12000)}`).join('\n\n');
-        const context = `${outline}\n\n${details}`.slice(0, 100000);
+        const context = buildProjectContext(files);
         setProjectContext(context);
         if (Object.keys(files).length && !initialMessages.length && !contextIntroSent.current) {
           contextIntroSent.current = true;
@@ -253,6 +261,20 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
     await workbenchStore.saveAllFiles();
 
     const fileModifications = workbenchStore.getFileModifcations();
+    let requestContext = projectContext;
+    const projectId = window.location.pathname.split('/').pop() || 'default';
+    try {
+      const response = await fetch(`/api/projects?project_id=${encodeURIComponent(projectId)}`, { credentials: 'include' });
+      if (response.ok) {
+        const body = await response.json() as { files?: Record<string, string> };
+        if (body.files) {
+          requestContext = buildProjectContext(body.files);
+          setProjectContext(requestContext);
+        }
+      }
+    } catch {
+      // Keep the last known context when the durable reload is unavailable.
+    }
 
     chatStore.setKey('aborted', false);
 
@@ -268,7 +290,7 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
        * manually reset the input and we'd have to manually pass in file attachments. However, those
        * aren't relevant here.
        */
-      append({ role: 'user', content: `${diff}\n\n${_input}` }, { body: { mode } });
+      append({ role: 'user', content: `${diff}\n\n${_input}` }, { body: { mode, projectContext: requestContext } });
 
       /**
        * After sending a new message we reset all modifications since the model
@@ -276,7 +298,7 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
        */
       workbenchStore.resetAllFileModifications();
     } else {
-      append({ role: 'user', content: _input }, { body: { mode } });
+      append({ role: 'user', content: _input }, { body: { mode, projectContext: requestContext } });
     }
 
     setInput('');
