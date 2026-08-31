@@ -24,12 +24,43 @@ const logger = createScopedLogger('Chat');
 
 function buildProjectContext(files: Record<string, string>) {
   const outline = Object.keys(files).sort().map((filePath) => `FILE: ${filePath}`).join('\n');
+  
   const details = Object.entries(files)
     .filter(([filePath]) => /(^|\/)(README|package\.json|tsconfig.*|vite\.config|src\/.*\.(ts|tsx|js|jsx))$/i.test(filePath))
     .slice(0, 40)
     .map(([filePath, content]) => `FILE CONTENT: ${filePath}\n${content.slice(0, 12000)}`)
     .join('\n\n');
   return `${outline}\n\n${details}`.slice(0, 100000);
+}
+
+function safeToolPath(value: string) {
+  return value !== '' && !value.startsWith('/') && !value.split('/').includes('..') ? value : '.';
+}
+
+function shellQuote(value: string) {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+async function readProcessOutput(output: ReadableStream<string>) {
+  const reader = output.getReader();
+  let result = '';
+  for (;;) {
+    const next = await reader.read();
+    if (next.done) return result;
+    result += next.value;
+  }
+}
+
+function requestedTool(content: unknown) {
+  if (typeof content !== 'string') return null;
+  const match = content.match(/<galileo-tool>(\{[\s\S]*?\})<\/galileo-tool>/);
+  if (!match) return null;
+  try {
+    const request = JSON.parse(match[1]) as { name?: string; path?: string; query?: string };
+    return ['list', 'read', 'search', 'refresh_context'].includes(request.name || '') ? request : null;
+  } catch {
+    return null;
+  }
 }
 
 export function Chat() {
@@ -85,6 +116,7 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
   const [chatStarted, setChatStarted] = useState(initialMessages.length > 0);
   const [mode, setMode] = useState<'chat' | 'build'>('chat');
   const [projectContext, setProjectContext] = useState('');
+  const [pendingTool, setPendingTool] = useState<{ name?: string; path?: string; query?: string } | null>(null);
   const contextIntroSent = useRef(false);
 
   const { showChat } = useStore(chatStore);
@@ -103,14 +135,36 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
 
       toast.error(friendlyChatErrorMessage(error), { autoClose: 8000 });
     },
-    onFinish: () => {
+    onFinish: (message) => {
       logger.debug('Finished streaming');
+      setPendingTool(requestedTool(message.content));
     },
     initialMessages,
     body: { mode, projectContext },
   });
 
   const { enhancingPrompt, promptEnhanced, enhancePrompt, resetEnhancer } = usePromptEnhancer();
+
+  useEffect(() => {
+    if (!pendingTool) return;
+    setPendingTool(null);
+    void (async () => {
+      const container = await webcontainer;
+      const path = safeToolPath(pendingTool.path || '.');
+      let result = '';
+      if (pendingTool.name === 'read') {
+        result = `FILE: ${path}\n${await container.fs.readFile(path)}`.slice(0, 20000);
+      } else if (pendingTool.name === 'list') {
+        result = (await container.fs.readdir(path)).join('\n');
+      } else if (pendingTool.name === 'search') {
+        const output = await container.spawn('jsh', ['-c', `grep -RIn --exclude-dir=node_modules -- ${shellQuote(pendingTool.query || '')} ${shellQuote(path)}`]);
+        result = (await readProcessOutput(output.output)).slice(0, 20000);
+      } else {
+        result = 'Project context refreshed from the active WebContainer.';
+      }
+      append({ role: 'user', content: `<galileo-tool-result>\n${result}\n</galileo-tool-result>` }, { body: { mode, projectContext } });
+    })().catch((error: Error) => append({ role: 'user', content: `<galileo-tool-result>Tool failed: ${error.message}</galileo-tool-result>` }, { body: { mode, projectContext } }));
+  }, [pendingTool]);
 
   useEffect(() => {
     let hydrated = false;
