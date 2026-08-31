@@ -53,11 +53,9 @@ async function readProcessOutput(output: ReadableStream<string>) {
 
 function requestedTool(content: unknown) {
   if (typeof content !== 'string') return null;
-  const match = content.match(/<galileo-tool>(\{[\s\S]*?\})<\/galileo-tool>/);
-  if (!match) return null;
   try {
-    const request = JSON.parse(match[1]) as { name?: string; path?: string; query?: string };
-    return ['list', 'read', 'search', 'refresh_context'].includes(request.name || '') ? request : null;
+    const request = (JSON.parse(content) as { tool?: { name?: string; path?: string; query?: string } }).tool;
+    return request && ['list', 'read', 'search', 'refresh_context'].includes(request.name || '') ? request : null;
   } catch {
     return null;
   }
@@ -162,8 +160,8 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
       } else {
         result = 'Project context refreshed from the active WebContainer.';
       }
-      append({ role: 'user', content: `<galileo-tool-result>\n${result}\n</galileo-tool-result>` }, { body: { mode, projectContext } });
-    })().catch((error: Error) => append({ role: 'user', content: `<galileo-tool-result>Tool failed: ${error.message}</galileo-tool-result>` }, { body: { mode, projectContext } }));
+      append({ role: 'user', content: JSON.stringify({ tool_result: { ok: true, result } }) }, { body: { mode, projectContext } });
+    })().catch((error: Error) => append({ role: 'user', content: JSON.stringify({ tool_result: { ok: false, error: error.message } }) }, { body: { mode, projectContext } }));
   }, [pendingTool]);
 
   useEffect(() => {
