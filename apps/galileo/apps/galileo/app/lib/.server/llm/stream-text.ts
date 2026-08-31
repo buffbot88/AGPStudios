@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { getAPIKey, getGatewayURL } from '~/lib/.server/config';
 import { GATEWAY_TIMEOUT_MS, MAX_TOKENS } from './constants';
 import { BUILD_READY_MARKER, CHAT_READINESS_PROMPT, getSystemPrompt } from './prompts';
@@ -9,7 +10,7 @@ interface Message {
 
 export type Messages = Message[];
 
-export async function completeText(messages: Messages, mode: 'chat' | 'build' = 'chat', projectContext = '') {
+export async function completeText(messages: Messages, mode: 'chat' | 'build' = 'chat', projectContext = '', sessionCookie = '') {
   const base = getGatewayURL().trim().replace(/\/+$/, '');
   const endpoint = `${base.endsWith('/v1') ? base : `${base}/v1`}/chat/completions`;
   const controller = new AbortController();
@@ -22,6 +23,7 @@ export async function completeText(messages: Messages, mode: 'chat' | 'build' = 
         'Content-Type': 'application/json',
         ...(getAPIKey() ? { Authorization: `Bearer ${getAPIKey()}` } : {}),
         'x-ashat-mode': mode,
+        'x-ashat-account': createHash('sha256').update(sessionCookie).digest('hex'),
       },
       body: JSON.stringify({
         model: 'ashat',
