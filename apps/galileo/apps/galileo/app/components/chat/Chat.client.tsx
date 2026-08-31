@@ -108,12 +108,14 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
     fetch(`/api/projects?project_id=${encodeURIComponent(window.location.pathname.split('/').pop() || 'default')}`, { credentials: 'include' })
       .then(async (response) => response.ok ? await response.json() as { files: Record<string, string>; project?: string } : { files: {} as Record<string, string> })
       .then(async ({ files, project }) => {
-        const context = Object.entries(files).filter(([filePath]) => /(^|\/)(README|package\.json|tsconfig.*|vite\.config|src\/.*\.(ts|tsx|js|jsx))$/i.test(filePath)).slice(0, 40).map(([filePath, content]) => `FILE: ${filePath}\n${content.slice(0, 12000)}`).join('\n\n').slice(0, 100000);
+        const outline = Object.keys(files).sort().map((filePath) => `FILE: ${filePath}`).join('\n');
+        const details = Object.entries(files).filter(([filePath]) => /(^|\/)(README|package\.json|tsconfig.*|vite\.config|src\/.*\.(ts|tsx|js|jsx))$/i.test(filePath)).slice(0, 40).map(([filePath, content]) => `FILE CONTENT: ${filePath}\n${content.slice(0, 12000)}`).join('\n\n');
+        const context = `${outline}\n\n${details}`.slice(0, 100000);
         setProjectContext(context);
         if (Object.keys(files).length && !initialMessages.length && !contextIntroSent.current) {
           contextIntroSent.current = true;
           const projectName = project || window.location.pathname.split('/').pop() || 'this project';
-          void append({ role: 'user', content: `This is the existing project “${projectName}”. Use the supplied project files to briefly explain what it does, its main structure, and the most important conventions. Then ask what I want to work on. Do not invent details.` });
+          void append({ role: 'user', content: `This is the existing project “${projectName}”. Use the supplied project files to briefly explain what it does, its main structure, and the most important conventions. Then ask what I want to work on. Do not invent details.` }, { body: { mode: 'chat', projectContext: context } });
         }
         const container = await webcontainer;
         for (const [filePath, content] of Object.entries(files)) {
