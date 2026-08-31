@@ -22,6 +22,9 @@ export async function action({ request }: ActionFunctionArgs) {
 
   const snapshot = await rust(request, `/api/galileo/projects/${encodeURIComponent(projectId)}/files/snapshot`, { files: input.files });
   if (!snapshot.ok) return new Response(await snapshot.text(), { status: snapshot.status, headers: { 'Content-Type': 'application/json' } });
+  const checkpoint = await rust(request, `/api/galileo/projects/${encodeURIComponent(projectId)}/checkpoints`, { files: input.files });
+  const checkpointBody = await checkpoint.json() as { checkpoint?: { id?: string } };
+  if (!checkpoint.ok || !checkpointBody.checkpoint?.id) return json({ error: 'checkpoint_unavailable' }, { status: 503 });
 
   const discovery = await rust(request, '/api/galileo/discovery', { project_id: projectId, message: prompt });
   const discoveryBody = await discovery.json() as { plan_id?: string; kind?: string; content?: string };
@@ -29,6 +32,6 @@ export async function action({ request }: ActionFunctionArgs) {
     return json({ error: 'plan_not_ready', kind: discoveryBody.kind, content: discoveryBody.content }, { status: 409 });
   }
 
-  const job = await rust(request, '/api/galileo/agents/jobs', { project_id: projectId, request: prompt, plan_id: discoveryBody.plan_id });
+  const job = await rust(request, '/api/galileo/agents/jobs', { project_id: projectId, checkpoint_id: checkpointBody.checkpoint.id, request: prompt, plan_id: discoveryBody.plan_id });
   return new Response(await job.text(), { status: job.status, headers: { 'Content-Type': 'application/json' } });
 }
