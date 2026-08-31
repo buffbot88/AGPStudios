@@ -163,6 +163,11 @@ pub struct CodingCapacitySnapshot {
     pub ports_active: usize,
     pub queue_depth: usize,
     pub queue_limit: usize,
+    pub memory_available_mb: Option<u64>,
+    pub memory_pressure: Option<f64>,
+    pub worker_startup_latency_ms: Option<f64>,
+    pub recent_failure_rate: Option<f64>,
+    pub estimated_request_cost: Option<f64>,
 }
 
 /// A backend row in `server-config.json:row_chain`.

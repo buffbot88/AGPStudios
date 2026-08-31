@@ -93,8 +93,23 @@ pub async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> 
             ports_active: snapshot.ports_active,
             queue_depth: snapshot.queue_depth,
             queue_limit: snapshot.queue_limit,
+            memory_available_mb: memory_available_mb(),
+            memory_pressure: memory_pressure(),
+            worker_startup_latency_ms: None,
+            recent_failure_rate: None,
+            estimated_request_cost: None,
         },
     })
+}
+
+fn memory_available_mb() -> Option<u64> {
+    std::fs::read_to_string("/proc/meminfo").ok()?.lines().find(|line| line.starts_with("MemAvailable:"))?.split_whitespace().nth(1)?.parse::<u64>().ok().map(|kb| kb / 1024)
+}
+
+fn memory_pressure() -> Option<f64> {
+    let available = memory_available_mb()? as f64;
+    let total = std::fs::read_to_string("/proc/meminfo").ok()?.lines().find(|line| line.starts_with("MemTotal:"))?.split_whitespace().nth(1)?.parse::<f64>().ok()? / 1024.0;
+    Some((1.0 - available / total).clamp(0.0, 1.0))
 }
 
 pub async fn public_status(State(state): State<Arc<AppState>>) -> Json<PublicStatus> {
