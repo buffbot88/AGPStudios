@@ -96,7 +96,7 @@ pub async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> 
             queue_limit: snapshot.queue_limit,
             memory_available_mb: memory_available_mb(),
             memory_pressure: memory_pressure(),
-            worker_startup_latency_ms: None,
+            worker_startup_latency_ms: snapshot.worker_startup_latency_ms,
             recent_failure_rate: (metrics.summaries.omega.total_requests > 0)
                 .then(|| (100.0 - metrics.summaries.omega.success_rate) / 100.0),
             estimated_request_cost: (metrics.summaries.omega.total_requests > 0)
