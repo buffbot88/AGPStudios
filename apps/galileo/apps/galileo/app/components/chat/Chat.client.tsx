@@ -322,6 +322,8 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
     setMessages(conversation);
     try {
       for await (const event of runAgentTurn([...messages, userMessage], { mode, projectContext: context, signal: controller.signal })) {
+        if (event.type === 'tool.start') setStreamingTool({ name: event.name, args: event.args || {} });
+        if (event.type === 'tool.result') setStreamingTool(null);
         if (event.type === 'text.delta') {
           assistant = { ...assistant, content: assistant.content + event.delta };
           conversation[conversation.length - 1] = assistant;
