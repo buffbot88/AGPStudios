@@ -1,5 +1,7 @@
 import type { Message } from 'ai';
 import React from 'react';
+import { normalizeBuildEvent } from '~/lib/runtime/agent-parts';
+import { AgentPart } from './AgentPart';
 import { classNames } from '~/utils/classNames';
 import { AssistantMessage } from './AssistantMessage';
 import { UserMessage } from './UserMessage';
@@ -55,7 +57,7 @@ export const Messages = React.forwardRef<HTMLDivElement, MessagesProps>((props: 
       {jobEvents.length > 0 && (
         <details open className="mt-4 rounded border border-bolt-elements-borderColor p-4 text-sm">
           <summary className="cursor-pointer">Build activity ({jobEvents.length})</summary>
-          <div className="mt-2 space-y-1 font-mono">{jobEvents.map((event, index) => <div key={`${event}-${index}`}>{event}</div>)}</div>
+          <div className="mt-2 space-y-1">{jobEvents.map((event, index) => <AgentPart key={`${event}-${index}`} part={normalizeBuildEvent(event, index)} />)}</div>
         </details>
       )}
       {isStreaming && (
