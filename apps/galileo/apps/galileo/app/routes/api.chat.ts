@@ -1,6 +1,6 @@
 import { type ActionFunctionArgs } from '@remix-run/node';
 import { gatewayErrorResponse } from '~/lib/.server/llm/errors';
-import { completeText, type Messages } from '~/lib/.server/llm/stream-text';
+import { streamText, type Messages } from '~/lib/.server/llm/stream-text';
 import { authenticated } from '~/lib/.server/auth';
 import { BUILD_READY_MARKER } from '~/lib/.server/llm/prompts';
 
@@ -20,15 +20,10 @@ async function chatAction({ request }: ActionFunctionArgs) {
   }
 
   try {
-    const result = await completeText(messages, mode, projectContext, request.headers.get('cookie') || '');
+    const response = await streamText(messages, mode, projectContext, request.headers.get('cookie') || '');
     console.info(JSON.stringify({ event: 'chat.success', request_id: requestId, duration_ms: Date.now() - started }));
-    return new Response(`0:${JSON.stringify(result.text)}\nd:${JSON.stringify({ finishReason: 'stop', usage: result.usage })}\n`, {
-      status: 200,
-      headers: {
-        'Content-Type': 'text/plain; charset=utf-8',
-        'X-Request-Id': requestId,
-      },
-    });
+    response.headers.set('X-Request-Id', requestId);
+    return response;
   } catch (error) {
     const cause = error instanceof Error && error.cause instanceof Error ? error.cause.message : undefined;
     console.error(JSON.stringify({ event: 'chat.failure', request_id: requestId, duration_ms: Date.now() - started, error: error instanceof Error ? error.message : String(error), cause }));
