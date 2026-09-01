@@ -107,7 +107,6 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
   const [projectContext, setProjectContext] = useState('');
   const [pendingTool, setPendingTool] = useState<{ name: string; args: Record<string, unknown> } | null>(null);
   const [streamingTool, setStreamingTool] = useState<{ name: string; args: Record<string, unknown> } | null>(null);
-  const contextIntroSent = useRef(false);
   const [agentRunning, setAgentRunning] = useState(false);
   const agentAbort = useRef<AbortController | null>(null);
 
@@ -174,11 +173,6 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
     fetch(`/api/projects?project_id=${encodeURIComponent(window.location.pathname.split('/').pop() || 'default')}`, { credentials: 'include' })
       .then(async (response) => response.ok ? await response.json() as { files: Record<string, string>; project?: string } : { files: {} as Record<string, string> })
       .then(async ({ files, project }) => {
-        if (Object.keys(files).length && !initialMessages.length && !contextIntroSent.current) {
-          contextIntroSent.current = true;
-          const projectName = project || window.location.pathname.split('/').pop() || 'this project';
-          void append({ role: 'user', content: `This is the existing project “${projectName}”. Use the read-only workspace tools to inspect it, then briefly explain what it does, its main structure, and the most important conventions. Start with list, then read only the files needed to support your explanation. Do not invent details.` }, { body: { mode: 'chat', projectContext: '' } });
-        }
         const container = await webcontainer;
         for (const [filePath, content] of Object.entries(files)) {
           const directory = filePath.split('/').slice(0, -1).join('/');
