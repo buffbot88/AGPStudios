@@ -65,11 +65,26 @@ export async function streamText(messages: Messages, mode: 'chat' | 'build' = 'c
     const reader = response.body.getReader();
     const messageId = crypto.randomUUID();
     let started = false;
+    let eventText = '';
     let buffer = '';
     const stream = new ReadableStream<Uint8Array>({
       async pull(streamController) {
         const next = await reader.read();
         if (next.done) {
+          if (events && eventText.trimStart().startsWith('{')) {
+            try {
+              const request = JSON.parse(eventText) as { tool?: { name?: string; path?: string; query?: string } };
+              const tool = request.tool;
+              if (tool && typeof tool.name === 'string' && ['list', 'read', 'search', 'refresh_context'].includes(tool.name)) {
+                const args = Object.fromEntries(Object.entries(tool).filter(([key, value]) => key !== 'name' && typeof value === 'string'));
+                streamController.enqueue(encoder.encode(encodeGalileoEvent({ type: 'tool.start', toolCallId: crypto.randomUUID(), name: tool.name, args })));
+              } else {
+                streamController.enqueue(encoder.encode(encodeGalileoEvent({ type: 'text.delta', messageId, delta: eventText })));
+              }
+            } catch {
+              streamController.enqueue(encoder.encode(encodeGalileoEvent({ type: 'text.delta', messageId, delta: eventText })));
+            }
+          }
           if (events) streamController.enqueue(encoder.encode(encodeGalileoEvent({ type: 'response.complete', messageId })));
           else streamController.enqueue(encoder.encode(`d:${JSON.stringify({ finishReason: 'stop' })}\n`));
           streamController.close();
@@ -89,7 +104,8 @@ export async function streamText(messages: Messages, mode: 'chat' | 'build' = 'c
                 started = true;
                 streamController.enqueue(encoder.encode(encodeGalileoEvent({ type: 'response.start', messageId })));
               }
-              streamController.enqueue(encoder.encode(events ? encodeGalileoEvent({ type: 'text.delta', messageId, delta: content }) : `0:${JSON.stringify(content)}\n`));
+              if (events && (eventText || content.trimStart().startsWith('{'))) eventText += content;
+              else streamController.enqueue(encoder.encode(events ? encodeGalileoEvent({ type: 'text.delta', messageId, delta: content }) : `0:${JSON.stringify(content)}\n`));
             }
           } catch {
             // Ignore malformed or incomplete SSE records.
