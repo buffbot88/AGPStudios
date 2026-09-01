@@ -29,6 +29,17 @@ export interface AgentMessage {
 
 const READ_ONLY_TOOLS = new Set(['list', 'read', 'search', 'refresh_context']);
 
+export function normalizeToolRequest(content: unknown) {
+  if (typeof content !== 'string') return null;
+  return parseToolRequest(content);
+}
+
+export function normalizeToolResult(content: unknown, toolCallId = 'unknown') {
+  if (typeof content !== 'string') return null;
+  const result = parseToolResult(content);
+  return result ? { ...result, toolCallId } : null;
+}
+
 export function normalizeChatMessage(message: Message, index = 0): AgentMessage {
   const id = message.id || `message-${index}`;
   const content = typeof message.content === 'string' ? message.content : '';
@@ -97,7 +108,8 @@ export function normalizeAction(action: ActionState, id: string): AgentPart {
     id,
     command: action.content,
     status: action.status,
-    ...(action.status === 'failed' ? { output: action.error } : {}),
+    ...(action.output ? { output: action.output } : {}),
+    ...(action.status === 'failed' ? { output: action.error || action.output } : {}),
   };
 }
 

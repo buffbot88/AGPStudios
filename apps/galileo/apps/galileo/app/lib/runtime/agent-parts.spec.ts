@@ -18,7 +18,7 @@ describe('agent parts normalization', () => {
     const request = normalizeChatMessage({ id: 'a1', role: 'assistant', content: '{"tool":{"name":"read","path":"src/App.tsx"}}' } as Message);
     const result = normalizeChatMessage({ id: 'r1', role: 'user', content: '{"tool_result":{"ok":true,"result":"content"}}' } as Message);
 
-    expect(request.parts).toEqual([{ type: 'tool-call', id: 'a1-tool', tool: 'read', args: { path: 'src/App.tsx' }, status: 'complete' }]);
+    expect(request.parts).toEqual([{ type: 'tool-call', id: 'a1-tool', tool: 'read', args: { path: 'src/App.tsx' }, status: 'complete', agent: 'Galileo' }]);
     expect(result.parts).toEqual([{ type: 'tool-result', toolCallId: 'unknown', result: 'content' }]);
 
     expect(normalizeChatMessages([
@@ -33,15 +33,15 @@ describe('agent parts normalization', () => {
   });
 
   it('normalizes file and shell actions', () => {
-    const file = { type: 'file', filePath: 'src/App.tsx', content: 'new content', status: 'complete' } as ActionState;
-    const shell = { type: 'shell', content: 'pnpm test', status: 'failed', error: 'exit 1' } as ActionState;
+    const file = { type: 'file', filePath: 'src/App.tsx', content: 'new content', output: '', status: 'complete' } as ActionState;
+    const shell = { type: 'shell', content: 'pnpm test', output: 'output', status: 'failed', error: 'exit 1' } as ActionState;
 
     expect(normalizeAction(file, 'file-1')).toMatchObject({ type: 'file-change', path: 'src/App.tsx', operation: 'update', status: 'complete' });
     expect(normalizeAction(shell, 'command-1')).toMatchObject({ type: 'command', id: 'command-1', command: 'pnpm test', status: 'failed', output: 'exit 1' });
   });
 
   it('turns build event names into status parts', () => {
-    expect(normalizeBuildEvent('tests_started')).toEqual({ type: 'status', state: 'verifying', text: 'Tests Started' });
-    expect(normalizeBuildEvent('worker_running')).toEqual({ type: 'status', state: 'working', text: 'Worker Running' });
+    expect(normalizeBuildEvent('tests_started')).toEqual({ type: 'status', state: 'verifying', text: 'Tests Started', agent: 'Verifier' });
+    expect(normalizeBuildEvent('worker_running')).toEqual({ type: 'status', state: 'working', text: 'Worker Running', agent: 'Builder' });
   });
 });

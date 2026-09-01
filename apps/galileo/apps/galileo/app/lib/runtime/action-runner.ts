@@ -12,6 +12,7 @@ export type ActionStatus = 'pending' | 'running' | 'complete' | 'aborted' | 'fai
 
 export type BaseActionState = BoltAction & {
   status: Exclude<ActionStatus, 'failed'>;
+  output: string;
   abort: () => void;
   executed: boolean;
   abortSignal: AbortSignal;
@@ -19,8 +20,9 @@ export type BaseActionState = BoltAction & {
 
 export type FailedActionState = BoltAction &
   Omit<BaseActionState, 'status'> & {
-    status: Extract<ActionStatus, 'failed'>;
-    error: string;
+  status: Extract<ActionStatus, 'failed'>;
+  output: string;
+  error: string;
   };
 
 export type ActionState = BaseActionState | FailedActionState;
@@ -59,6 +61,7 @@ export class ActionRunner {
     this.actions.setKey(actionId, {
       ...data.action,
       status: 'pending',
+      output: '',
       executed: false,
       abort: () => {
         abortController.abort();
@@ -114,7 +117,8 @@ export class ActionRunner {
 
       this.#updateAction(actionId, { status: action.abortSignal.aborted ? 'aborted' : 'complete' });
     } catch (error) {
-      this.#updateAction(actionId, { status: 'failed', error: 'Action failed' });
+      const message = error instanceof Error ? error.message : 'Action failed';
+      this.#updateAction(actionId, { status: 'failed', error: message, output: message });
 
       // re-throw the error to be caught in the promise chain
       throw error;
@@ -138,8 +142,8 @@ export class ActionRunner {
 
     process.output.pipeTo(
       new WritableStream({
-        write(data) {
-          console.log(data);
+        write: (data) => {
+          this.#appendOutput(actionId, data);
         },
       }),
     );
@@ -176,6 +180,12 @@ export class ActionRunner {
     } catch (error) {
       logger.error('Failed to write file\n\n', error);
     }
+  }
+
+  #appendOutput(id: string, output: string) {
+    const action = this.actions.get()[id];
+    if (!action) return;
+    this.actions.setKey(id, { ...action, output: action.output + output });
   }
 
   #updateAction(id: string, newState: ActionStateUpdate) {

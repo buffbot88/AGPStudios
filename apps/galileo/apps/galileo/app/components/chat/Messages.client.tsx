@@ -1,7 +1,7 @@
 import type { Message } from 'ai';
 import React from 'react';
 import { normalizeBuildEvent } from '~/lib/runtime/agent-parts';
-import { AgentPart } from './AgentPart';
+import { AgentPart, StreamingAgentStatus } from './AgentPart';
 import { classNames } from '~/utils/classNames';
 import { AssistantMessage } from './AssistantMessage';
 import { UserMessage } from './UserMessage';
@@ -14,10 +14,11 @@ interface MessagesProps {
   onEdit?: (index: number, content: string) => void;
   onResend?: (index: number) => void;
   jobEvents?: string[];
+  streamingTool?: { name: string; args: Record<string, unknown> } | null;
 }
 
 export const Messages = React.forwardRef<HTMLDivElement, MessagesProps>((props: MessagesProps, ref) => {
-  const { id, isStreaming = false, messages = [], onEdit, onResend, jobEvents = [] } = props;
+  const { id, isStreaming = false, messages = [], onEdit, onResend, jobEvents = [], streamingTool = null } = props;
 
   return (
     <div id={id} ref={ref} className={props.className}>
@@ -60,9 +61,8 @@ export const Messages = React.forwardRef<HTMLDivElement, MessagesProps>((props: 
           <div className="mt-2 space-y-1">{jobEvents.map((event, index) => <AgentPart key={`${event}-${index}`} part={normalizeBuildEvent(event, index)} />)}</div>
         </details>
       )}
-      {isStreaming && (
-        <div className="text-center w-full text-bolt-elements-textSecondary i-svg-spinners:3-dots-fade text-4xl mt-4"></div>
-      )}
+      {streamingTool && <AgentPart part={{ type: 'tool-call', id: 'streaming-tool', tool: streamingTool.name, args: streamingTool.args, status: 'running', agent: 'Galileo' }} />}
+      {isStreaming && !streamingTool && <StreamingAgentStatus />}
     </div>
   );
 });

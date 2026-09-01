@@ -11,13 +11,13 @@ export function AgentPart({ part }: AgentPartProps) {
     case 'text':
       return null;
     case 'status':
-      return <ActivityRow icon="i-ph:circle-notch" label={part.text} status="running" />;
+      return <ActivityRow icon="i-ph:circle-notch" label={part.text} agent={part.agent} status="running" />;
     case 'tool-call':
       return <ToolCallPart part={part} />;
     case 'tool-result':
       return <ToolResultPart part={part} />;
     case 'file-change':
-      return <ActivityRow icon="i-ph:file-code" label={`${part.operation === 'create' ? 'Create' : 'Update'} ${part.path}`} status={part.status} />;
+      return <ActivityRow icon="i-ph:file-code" label={`${part.operation === 'create' ? 'Create' : 'Update'} ${part.path}`} agent="Builder" status={part.status} />;
     case 'command':
       return <CommandPart part={part} />;
     case 'task-status':
@@ -38,7 +38,7 @@ function ToolCallPart({ part }: { part: Extract<AgentPartData, { type: 'tool-cal
     <div className="my-2 rounded-md border border-bolt-elements-borderColor text-xs">
       <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-bolt-elements-item-backgroundActive" onClick={() => setOpen((value) => !value)}>
         <StatusIcon status={part.status} />
-        <span className="flex-1 text-bolt-elements-textSecondary">{summary}</span>
+        <span className="flex-1 text-bolt-elements-textSecondary"><strong className="mr-1 text-bolt-elements-textPrimary">{part.agent}</strong>{summary}</span>
         <span className={open ? 'i-ph:caret-up' : 'i-ph:caret-down'} />
       </button>
       {open && <pre className="overflow-x-auto border-t border-bolt-elements-borderColor px-3 py-2 text-[11px] text-bolt-elements-textTertiary">{JSON.stringify(part.args, null, 2)}</pre>}
@@ -70,16 +70,20 @@ function CommandPart({ part }: { part: Extract<AgentPartData, { type: 'command' 
     <div className="my-2 rounded-md border border-bolt-elements-borderColor text-xs">
       <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-bolt-elements-item-backgroundActive" onClick={() => setOpen((value) => !value)}>
         <StatusIcon status={part.status} />
-        <code className="flex-1 truncate text-bolt-elements-textSecondary">{part.command}</code>
+        <strong className="text-bolt-elements-textPrimary">Builder</strong><code className="flex-1 truncate text-bolt-elements-textSecondary">{part.command}</code>
         <span className={open ? 'i-ph:caret-up' : 'i-ph:caret-down'} />
       </button>
-      {open && part.output && <pre className="max-h-64 overflow-auto whitespace-pre-wrap border-t border-bolt-elements-borderColor px-3 py-2 text-[11px] text-bolt-elements-textTertiary">{part.output}</pre>}
+      {open && <pre className="max-h-64 overflow-auto whitespace-pre-wrap border-t border-bolt-elements-borderColor px-3 py-2 text-[11px] text-bolt-elements-textTertiary">{part.output || (part.status === 'running' ? 'Waiting for output…' : '')}</pre>}
     </div>
   );
 }
 
-function ActivityRow({ icon, label, status }: { icon: string; label: string; status: string }) {
-  return <div className="my-2 flex items-center gap-2 text-xs text-bolt-elements-textSecondary"><StatusIcon status={status} fallbackIcon={icon} /><span>{label}</span></div>;
+export function StreamingAgentStatus() {
+  return <ActivityRow icon="i-ph:circle-notch" label="Working on your request…" agent="Galileo" status="running" />;
+}
+
+function ActivityRow({ icon, label, status, agent }: { icon: string; label: string; status: string; agent: string }) {
+  return <div className="my-2 flex items-center gap-2 text-xs text-bolt-elements-textSecondary"><StatusIcon status={status} fallbackIcon={icon} /><strong className="text-bolt-elements-textPrimary">{agent}</strong><span>{label}</span></div>;
 }
 
 function StatusIcon({ status, fallbackIcon }: { status: string; fallbackIcon?: string }) {
