@@ -41,6 +41,7 @@ pub struct DemandPool {
     pub baseline_port: Option<u16>,
     free_ports: Mutex<VecDeque<u16>>,
     active: Mutex<HashMap<u16, tokio::process::Child>>,
+    idle_since: Mutex<HashMap<u16, Instant>>,
     baseline_child: Mutex<Option<tokio::process::Child>>,
     queue: WaitQueue,
     spawn_attempts_threshold: u32,
@@ -217,6 +218,11 @@ impl DemandPool {
             ));
         }
 
+        // Reuse an idle lane before starting another model process.
+        if let Some(port) = self.take_idle().await {
+            return Ok(InstanceGuard::spawned(Arc::clone(&self), port));
+        }
+
         // Fast path: free port available.
         if let Some(guard) = self.spawn_on_demand(metrics).await {
             return Ok(guard);
@@ -310,6 +316,40 @@ impl DemandPool {
         }
     }
 
+    async fn take_idle(&self) -> Option<u16> {
+        let mut idle = self.idle_since.lock().ok()?;
+        let port = idle.keys().next().copied()?;
+        idle.remove(&port);
+        Some(port)
+    }
+
+    /// Kill idle lanes after the retention window.
+    pub fn spawn_idle_reaper(self: Arc<Self>, timeout: Duration, interval: Duration) {
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(interval);
+            loop {
+                tick.tick().await;
+                self.reap_idle(timeout).await;
+            }
+        });
+    }
+
+    pub async fn reap_idle(&self, timeout: Duration) {
+        let expired: Vec<u16> = self.idle_since.lock().map(|idle| idle.iter()
+            .filter_map(|(port, since)| (since.elapsed() >= timeout).then_some(*port))
+            .collect()).unwrap_or_default();
+        for port in expired {
+            self.idle_since.lock().ok().map(|mut idle| idle.remove(&port));
+            if let Some(mut child) = self.active.lock().ok().and_then(|mut active| active.remove(&port)) {
+                let _ = child.start_kill();
+                let _ = child.wait().await;
+                self.free_ports.lock().ok().map(|mut free| free.push_back(port));
+                self.queue.notify_slot_available();
+                tracing::info!(port, "stopped idle coding lane");
+            }
+        }
+    }
+
     /// Kill any active spawn slot immediately. Called on graceful shutdown.
     pub async fn kill_active(&self) {
         let drain: Vec<(u16, tokio::process::Child)> = {
@@ -374,25 +414,8 @@ impl Drop for InstanceGuard {
                 pool.queue().notify_slot_available();
                 return;
             }
-            let child = {
-                let mut active = match pool.active.lock() {
-                    Ok(g) => g,
-                    Err(_) => return,
-                };
-                active.remove(&port)
-            };
-            if let Some(mut c) = child {
-                let _ = c.start_kill();
-                let _ = c.wait().await;
-            }
-            {
-                let mut free = match pool.free_ports.lock() {
-                    Ok(g) => g,
-                    Err(_) => return,
-                };
-                if !free.contains(&port) {
-                    free.push_back(port);
-                }
+            if let Ok(mut idle) = pool.idle_since.lock() {
+                idle.insert(port, Instant::now());
             }
             pool.queue().notify_slot_available();
         });
@@ -445,6 +468,7 @@ impl DemandPoolBuilder {
             baseline_port,
             free_ports: Mutex::new(free_ports),
             active: Mutex::new(HashMap::new()),
+            idle_since: Mutex::new(HashMap::new()),
             baseline_child: Mutex::new(None),
             queue: WaitQueue::new(self.queue_max),
             spawn_attempts_threshold: self.spawn_attempts_threshold,

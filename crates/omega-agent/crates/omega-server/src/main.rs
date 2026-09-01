@@ -93,7 +93,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .build(&cfg.coding_agent_pool.ports),
     );
 
-    // Seed the intent-router baseline (LFM2.5-VL-450M). If this fails: log
+    // Retain 1.2B lanes for reuse, then unload them after 30 minutes idle.
+    Arc::clone(&coding_agent_pool).spawn_idle_reaper(
+        Duration::from_secs(1800),
+        Duration::from_secs(30),
+    );
+
+    // Seed the intent-router baseline (350M). If this fails: log
     // loudly and exit without binding the public listener — Omega does NOT
     // serve unauthenticated traffic while the orchestrator is dead.
     if let Err(err) = orchestrator_pool.seed_baseline(&metrics).await {
