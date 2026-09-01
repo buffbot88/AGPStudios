@@ -2,6 +2,7 @@ import type { Message } from 'ai';
 import type { ActionState } from './action-runner';
 
 export type AgentStatus = 'thinking' | 'planning' | 'working' | 'verifying';
+export type AgentName = 'Galileo' | 'Oracle' | 'Builder' | 'Verifier';
 export type AgentPartStatus = 'pending' | 'running' | 'complete' | 'failed' | 'aborted';
 
 export interface AgentTask {
@@ -12,8 +13,8 @@ export interface AgentTask {
 
 export type AgentPart =
   | { type: 'text'; text: string }
-  | { type: 'status'; state: AgentStatus; text: string }
-  | { type: 'tool-call'; id: string; tool: string; args: Record<string, unknown>; status: AgentPartStatus }
+  | { type: 'status'; state: AgentStatus; text: string; agent: AgentName }
+  | { type: 'tool-call'; id: string; tool: string; args: Record<string, unknown>; status: AgentPartStatus; agent: AgentName }
   | { type: 'tool-result'; toolCallId: string; result?: unknown; error?: string; durationMs?: number }
   | { type: 'file-change'; path: string; operation: 'create' | 'update'; content?: string; status: AgentPartStatus }
   | { type: 'command'; id: string; command: string; status: AgentPartStatus; output?: string; exitCode?: number }
@@ -52,7 +53,7 @@ export function normalizeChatMessage(message: Message, index = 0): AgentMessage 
     return {
       id,
       role: 'assistant',
-      parts: [{ type: 'tool-call', id: `${id}-tool`, tool: tool.name, args: tool.args, status: 'complete' }],
+      parts: [{ type: 'tool-call', id: `${id}-tool`, tool: tool.name, args: tool.args, status: 'complete', agent: agentForTool(tool.name) }],
     };
   }
 
@@ -108,6 +109,7 @@ export function normalizeBuildEvent(kind: string, index = 0): AgentPart {
     type: 'status',
     state: status,
     text: formatBuildEvent(kind),
+    agent: status === 'verifying' ? 'Verifier' : 'Builder',
   };
 }
 
@@ -139,6 +141,10 @@ function parseToolResult(content: string): Extract<AgentPart, { type: 'tool-resu
   } catch {
     return null;
   }
+}
+
+function agentForTool(tool: string): AgentName {
+  return tool === 'refresh_context' ? 'Oracle' : 'Galileo';
 }
 
 function stripBuildMarker(content: string) {
