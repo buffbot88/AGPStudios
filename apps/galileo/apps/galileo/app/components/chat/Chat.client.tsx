@@ -6,6 +6,7 @@ import { memo, useEffect, useRef, useState } from 'react';
 import { cssTransition, toast, ToastContainer } from 'react-toastify';
 import { useMessageParser, usePromptEnhancer, useShortcuts, useSnapScroll } from '~/lib/hooks';
 import { normalizeToolRequest } from '~/lib/runtime/agent-parts';
+import { runAgentTurn } from '~/lib/runtime/agent-controller';
 import { useChatHistory } from '~/lib/persistence';
 import { chatStore } from '~/lib/stores/chat';
 import { workbenchStore } from '~/lib/stores/workbench';
@@ -118,6 +119,8 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
   const [pendingTool, setPendingTool] = useState<{ name: string; args: Record<string, unknown> } | null>(null);
   const [streamingTool, setStreamingTool] = useState<{ name: string; args: Record<string, unknown> } | null>(null);
   const contextIntroSent = useRef(false);
+  const [agentRunning, setAgentRunning] = useState(false);
+  const agentAbort = useRef<AbortController | null>(null);
 
   const { showChat } = useStore(chatStore);
 
@@ -170,7 +173,7 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
   }, [pendingTool]);
 
   useEffect(() => {
-    if (!isLoading || !messages.length) return;
+    if (!(isLoading || agentRunning) || !messages.length) return;
     const content = messages[messages.length - 1].content;
     const tool = normalizeToolRequest(content);
     setStreamingTool(tool);
@@ -275,6 +278,7 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
   };
 
   const abort = () => {
+    agentAbort.current?.abort();
     stop();
     chatStore.setKey('aborted', true);
     workbenchStore.abortAllActions();
@@ -308,10 +312,33 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
     setChatStarted(true);
   };
 
+  const runCustomTurn = async (content: string, context: string) => {
+    const controller = new AbortController();
+    agentAbort.current = controller;
+    setAgentRunning(true);
+    const userMessage = { id: crypto.randomUUID(), role: 'user' as const, content };
+    let assistant = { id: crypto.randomUUID(), role: 'assistant' as const, content: '' };
+    const conversation = [...messages, userMessage, assistant];
+    setMessages(conversation);
+    try {
+      for await (const event of runAgentTurn([...messages, userMessage], { mode, projectContext: context, signal: controller.signal })) {
+        if (event.type === 'text.delta') {
+          assistant = { ...assistant, content: assistant.content + event.delta };
+          conversation[conversation.length - 1] = assistant;
+          setMessages([...conversation]);
+        }
+        if (event.type === 'response.error') throw new Error(event.error);
+      }
+    } finally {
+      agentAbort.current = null;
+      setAgentRunning(false);
+    }
+  };
+
   const sendMessage = async (_event: React.UIEvent, messageInput?: string) => {
     const _input = messageInput || input;
 
-    if (_input.length === 0 || isLoading) {
+    if (_input.length === 0 || isLoading || agentRunning) {
       return;
     }
 
@@ -354,7 +381,7 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
        * manually reset the input and we'd have to manually pass in file attachments. However, those
        * aren't relevant here.
        */
-      append({ role: 'user', content: `${diff}\n\n${_input}` }, { body: { mode, projectContext: requestContext } });
+      await runCustomTurn(`${diff}\n\n${_input}`, requestContext);
 
       /**
        * After sending a new message we reset all modifications since the model
@@ -362,7 +389,7 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
        */
       workbenchStore.resetAllFileModifications();
     } else {
-      append({ role: 'user', content: _input }, { body: { mode, projectContext: requestContext } });
+      await runCustomTurn(_input, requestContext);
     }
 
     setInput('');
@@ -392,7 +419,7 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
       input={input}
       showChat={showChat}
       chatStarted={chatStarted}
-      isStreaming={isLoading}
+      isStreaming={isLoading || agentRunning}
       mode={mode}
       onModeChange={(nextMode) => { if (nextMode === 'chat' || buildReady) setMode(nextMode); }}
       buildReady={buildReady}
