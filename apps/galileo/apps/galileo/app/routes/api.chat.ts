@@ -20,7 +20,7 @@ async function chatAction({ request }: ActionFunctionArgs) {
   }
 
   try {
-    const response = await streamText(messages, mode, projectContext, request.headers.get('cookie') || '');
+    const response = await streamText(messages, mode, projectContext, request.headers.get('cookie') || '', request.headers.get('x-galileo-protocol') === 'events');
     console.info(JSON.stringify({ event: 'chat.success', request_id: requestId, duration_ms: Date.now() - started }));
     response.headers.set('X-Request-Id', requestId);
     return response;

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { getAPIKey, getGatewayURL } from '~/lib/.server/config';
 import { GATEWAY_TIMEOUT_MS, MAX_TOKENS } from './constants';
 import { BUILD_READY_MARKER, CHAT_READINESS_PROMPT, getSystemPrompt } from './prompts';
+import { encodeGalileoEvent } from '~/lib/runtime/galileo-stream';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -27,7 +28,7 @@ export async function completeText(messages: Messages, mode: 'chat' | 'build' = 
   return { text: text.replace(/(?:<!--\s*)?GALILEO_BUILD_READY(?:\s*-->)?/g, BUILD_READY_MARKER), usage: {} };
 }
 
-export async function streamText(messages: Messages, mode: 'chat' | 'build' = 'chat', projectContext = '', sessionCookie = '') {
+export async function streamText(messages: Messages, mode: 'chat' | 'build' = 'chat', projectContext = '', sessionCookie = '', events = false) {
   const base = getGatewayURL().trim().replace(/\/+$/, '');
   const endpoint = `${base.endsWith('/v1') ? base : `${base}/v1`}/chat/completions`;
   const controller = new AbortController();
@@ -62,12 +63,15 @@ export async function streamText(messages: Messages, mode: 'chat' | 'build' = 'c
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
     const reader = response.body.getReader();
+    const messageId = crypto.randomUUID();
+    let started = false;
     let buffer = '';
     const stream = new ReadableStream<Uint8Array>({
       async pull(streamController) {
         const next = await reader.read();
         if (next.done) {
-          streamController.enqueue(encoder.encode(`d:${JSON.stringify({ finishReason: 'stop' })}\n`));
+          if (events) streamController.enqueue(encoder.encode(encodeGalileoEvent({ type: 'response.complete', messageId })));
+          else streamController.enqueue(encoder.encode(`d:${JSON.stringify({ finishReason: 'stop' })}\n`));
           streamController.close();
           clearTimeout(timeout);
           return;
@@ -80,7 +84,13 @@ export async function streamText(messages: Messages, mode: 'chat' | 'build' = 'c
           try {
             const chunk = JSON.parse(line.slice(6)) as { choices?: { delta?: { content?: unknown } }[] };
             const content = chunk.choices?.[0]?.delta?.content;
-            if (typeof content === 'string' && content) streamController.enqueue(encoder.encode(`0:${JSON.stringify(content)}\n`));
+            if (typeof content === 'string' && content) {
+              if (!started && events) {
+                started = true;
+                streamController.enqueue(encoder.encode(encodeGalileoEvent({ type: 'response.start', messageId })));
+              }
+              streamController.enqueue(encoder.encode(events ? encodeGalileoEvent({ type: 'text.delta', messageId, delta: content }) : `0:${JSON.stringify(content)}\n`));
+            }
           } catch {
             // Ignore malformed or incomplete SSE records.
           }
