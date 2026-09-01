@@ -27,7 +27,7 @@ export type FailedActionState = BoltAction &
 
 export type ActionState = BaseActionState | FailedActionState;
 
-type BaseActionUpdate = Partial<Pick<BaseActionState, 'status' | 'abort' | 'executed'>>;
+type BaseActionUpdate = Partial<Pick<BaseActionState, 'status' | 'abort' | 'executed' | 'output'>>;
 
 export type ActionStateUpdate =
   | BaseActionUpdate
@@ -106,7 +106,7 @@ export class ActionRunner {
     try {
       switch (action.type) {
         case 'shell': {
-          await this.#runShellAction(action);
+          await this.#runShellAction(action, actionId);
           break;
         }
         case 'file': {
@@ -125,7 +125,7 @@ export class ActionRunner {
     }
   }
 
-  async #runShellAction(action: ActionState) {
+  async #runShellAction(action: ActionState, actionId: string) {
     if (action.type !== 'shell') {
       unreachable('Expected shell action');
     }

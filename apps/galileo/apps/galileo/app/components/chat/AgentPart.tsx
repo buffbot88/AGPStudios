@@ -24,7 +24,7 @@ export function AgentPart({ part }: AgentPartProps) {
       return (
         <div className="my-2 rounded-md border border-bolt-elements-borderColor px-3 py-2 text-xs">
           <div className="mb-1 font-medium text-bolt-elements-textSecondary">Tasks</div>
-          {part.tasks.map((task) => <ActivityRow key={task.id} icon="i-ph:check-square" label={task.label} status={task.status} />)}
+          {part.tasks.map((task) => <ActivityRow key={task.id} icon="i-ph:check-square" label={task.label} agent="Galileo" status={task.status} />)}
         </div>
       );
   }

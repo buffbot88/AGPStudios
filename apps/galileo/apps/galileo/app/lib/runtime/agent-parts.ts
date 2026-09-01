@@ -51,7 +51,7 @@ export function normalizeChatMessage(message: Message, index = 0): AgentMessage 
       return {
         id,
         role: 'assistant',
-        parts: [{ type: 'tool-result', ...toolResult }],
+        parts: [toolResult],
       };
     }
 
