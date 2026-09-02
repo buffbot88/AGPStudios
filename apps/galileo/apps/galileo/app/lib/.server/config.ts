@@ -47,8 +47,8 @@ function loadConfig() {
   const agents = (fileConfig.agents ?? []).filter((agent) => agent?.id && agent?.url);
 
   cached = {
-    gatewayURL: fileConfig.gateway?.url?.trim() || DEFAULT_GATEWAY_URL,
-    apiKey: fileConfig.gateway?.api_key ?? '',
+    gatewayURL: process.env.ASHAT_GATEWAY_URL?.trim() || fileConfig.gateway?.url?.trim() || DEFAULT_GATEWAY_URL,
+    apiKey: process.env.ASHAT_GATEWAY_API_KEY || fileConfig.gateway?.api_key || '',
     agents: agents.length > 0 ? agents : DEFAULT_AGENTS,
   };
 

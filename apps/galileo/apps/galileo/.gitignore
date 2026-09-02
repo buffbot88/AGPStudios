@@ -25,6 +25,7 @@ dist-ssr
 /.cache
 /build
 .env*
+config.json
 *.vars
 .wrangler
 _worker.bundle
