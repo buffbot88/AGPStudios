@@ -15,12 +15,15 @@ export function usePromptEnhancer() {
   };
 
   const enhancePrompt = async (input: string, setInput: (value: string) => void) => {
+    if (!input.trim()) return;
     setEnhancingPrompt(true);
     setPromptEnhanced(false);
 
     try {
       const response = await fetch('/api/enhancer', {
         method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: input,
         }),

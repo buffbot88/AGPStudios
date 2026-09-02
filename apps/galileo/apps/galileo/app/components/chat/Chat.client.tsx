@@ -5,7 +5,6 @@ import { useAnimate } from 'framer-motion';
 import { memo, useEffect, useRef, useState } from 'react';
 import { cssTransition, toast, ToastContainer } from 'react-toastify';
 import { useMessageParser, usePromptEnhancer, useShortcuts, useSnapScroll } from '~/lib/hooks';
-import { normalizeToolRequest } from '~/lib/runtime/agent-parts';
 import { runAgentTurn } from '~/lib/runtime/agent-controller';
 import { useChatHistory } from '~/lib/persistence';
 import { chatStore } from '~/lib/stores/chat';
@@ -23,34 +22,6 @@ const toastAnimation = cssTransition({
 });
 
 const logger = createScopedLogger('Chat');
-
-function safeToolPath(value: string) {
-  return value !== '' && !value.startsWith('/') && !value.split('/').includes('..') ? value : '.';
-}
-
-function shellQuote(value: string) {
-  return `'${value.replaceAll("'", "'\\''")}'`;
-}
-
-async function readProcessOutput(output: ReadableStream<string>) {
-  const reader = output.getReader();
-  let result = '';
-  for (;;) {
-    const next = await reader.read();
-    if (next.done) return result;
-    result += next.value;
-  }
-}
-
-function requestedTool(content: unknown) {
-  if (typeof content !== 'string') return null;
-  try {
-    const request = (JSON.parse(content) as { tool?: { name?: string; path?: string; query?: string } }).tool;
-    return request && ['list', 'read', 'search', 'refresh_context'].includes(request.name || '') ? request : null;
-  } catch {
-    return null;
-  }
-}
 
 export function Chat() {
   renderLogger.trace('Chat');
@@ -104,8 +75,6 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
 
   const [chatStarted, setChatStarted] = useState(initialMessages.length > 0);
   const [mode, setMode] = useState<'chat' | 'build'>('chat');
-  const [projectContext, setProjectContext] = useState('');
-  const [pendingTool, setPendingTool] = useState<{ name: string; args: Record<string, unknown> } | null>(null);
   const [streamingTool, setStreamingTool] = useState<{ name: string; args: Record<string, unknown> } | null>(null);
   const [agentRunning, setAgentRunning] = useState(false);
   const agentAbort = useRef<AbortController | null>(null);
@@ -114,7 +83,7 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
 
   const [animationScope, animate] = useAnimate();
 
-  const { messages, isLoading, input, handleInputChange, setInput, setMessages, reload, stop, append } = useChat({
+  const { messages, isLoading, input, handleInputChange, setInput, setMessages, reload, stop } = useChat({
     api: '/api/chat',
     onError: (error) => {
       logger.error('Request failed\n\n', error);
@@ -126,46 +95,15 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
 
       toast.error(friendlyChatErrorMessage(error), { autoClose: 8000 });
     },
-    onFinish: (message) => {
+    onFinish: () => {
       logger.debug('Finished streaming');
-      const tool = normalizeToolRequest(message.content);
       setStreamingTool(null);
-      setPendingTool(tool);
     },
     initialMessages,
-    body: { mode, projectContext },
+    body: { mode },
   });
 
   const { enhancingPrompt, promptEnhanced, enhancePrompt, resetEnhancer } = usePromptEnhancer();
-
-  useEffect(() => {
-    if (!pendingTool) return;
-    setPendingTool(null);
-    void (async () => {
-      const container = await webcontainer;
-      const path = safeToolPath(typeof pendingTool.args.path === 'string' ? pendingTool.args.path : '.');
-      let result = '';
-      if (pendingTool.name === 'read') {
-        result = `FILE: ${path}\n${await container.fs.readFile(path)}`.slice(0, 20000);
-      } else if (pendingTool.name === 'list') {
-        result = (await container.fs.readdir(path)).join('\n');
-      } else if (pendingTool.name === 'search') {
-        const query = typeof pendingTool.args.query === 'string' ? pendingTool.args.query : '';
-        const output = await container.spawn('jsh', ['-c', `grep -RIn --exclude-dir=node_modules -- ${shellQuote(query)} ${shellQuote(path)}`]);
-        result = (await readProcessOutput(output.output)).slice(0, 20000);
-      } else {
-        result = 'Project context refreshed from the active WebContainer.';
-      }
-      append({ role: 'user', content: JSON.stringify({ tool_result: { ok: true, result } }) }, { body: { mode, projectContext } });
-    })().catch((error: Error) => append({ role: 'user', content: JSON.stringify({ tool_result: { ok: false, error: error.message } }) }, { body: { mode, projectContext } }));
-  }, [pendingTool]);
-
-  useEffect(() => {
-    if (!(isLoading || agentRunning) || !messages.length) return;
-    const content = messages[messages.length - 1].content;
-    const tool = normalizeToolRequest(content);
-    setStreamingTool(tool);
-  }, [isLoading, messages]);
 
   useEffect(() => {
     let hydrated = false;
