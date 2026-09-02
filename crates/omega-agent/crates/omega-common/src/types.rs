@@ -86,6 +86,58 @@ pub struct ChatMessage {
     pub content: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentMessage {
+    pub role: String,
+    pub content: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentCapabilities {
+    pub tools: bool,
+    pub vision: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentRequest {
+    pub conversation_id: String,
+    #[serde(default)]
+    pub project_id: Option<String>,
+    pub messages: Vec<AgentMessage>,
+    #[serde(default)]
+    pub operation: Option<AgentOperation>,
+    pub capabilities: AgentCapabilities,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentOperation {
+    Chat,
+    Agent,
+    Vision,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type")]
+pub enum AgentEvent {
+    #[serde(rename = "response.start")]
+    ResponseStart { response_id: String },
+    #[serde(rename = "text.delta")]
+    TextDelta { delta: String },
+    #[serde(rename = "tool.start")]
+    ToolStart { id: String, name: String },
+    #[serde(rename = "tool.arguments")]
+    ToolArguments { id: String, arguments: Value },
+    #[serde(rename = "tool.result")]
+    ToolResult { id: String, ok: bool, result: Option<Value>, error: Option<String> },
+    #[serde(rename = "status")]
+    Status { state: String, message: Option<String> },
+    #[serde(rename = "error")]
+    Error { code: String, message: String, retryable: bool },
+    #[serde(rename = "response.complete")]
+    ResponseComplete,
+}
+
 /// Body of POST /v1/chat/completions. OpenAI-compatible shape.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatRequest {
