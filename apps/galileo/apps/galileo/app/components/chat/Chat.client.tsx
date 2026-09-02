@@ -74,7 +74,6 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const [chatStarted, setChatStarted] = useState(initialMessages.length > 0);
-  const [mode, setMode] = useState<'chat' | 'build'>('chat');
   const [streamingTool, setStreamingTool] = useState<{ name: string; args: Record<string, unknown> } | null>(null);
   const [agentRunning, setAgentRunning] = useState(false);
   const agentAbort = useRef<AbortController | null>(null);
@@ -100,7 +99,6 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
       setStreamingTool(null);
     },
     initialMessages,
-    body: { mode },
   });
 
   const { enhancingPrompt, promptEnhanced, enhancePrompt, resetEnhancer } = usePromptEnhancer();
@@ -110,7 +108,7 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
     let timer: number | undefined;
     fetch(`/api/projects?project_id=${encodeURIComponent(window.location.pathname.split('/').pop() || 'default')}`, { credentials: 'include' })
       .then(async (response) => response.ok ? await response.json() as { files: Record<string, string>; project?: string } : { files: {} as Record<string, string> })
-      .then(async ({ files, project }) => {
+      .then(async ({ files }) => {
         const container = await webcontainer;
         for (const [filePath, content] of Object.entries(files)) {
           const directory = filePath.split('/').slice(0, -1).join('/');
@@ -142,10 +140,6 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
   }, []);
   const { parsedMessages, parseMessages } = useMessageParser();
   const buildReady = messages.length > 0 && messages[messages.length - 1].role === 'assistant' && messages[messages.length - 1].content.includes('<!-- GALILEO_BUILD_READY -->');
-
-  useEffect(() => {
-    if (project && buildReady) setMode('build');
-  }, [project, buildReady]);
 
   const [jobEvents, setJobEvents] = useState<string[]>([]);
   const submittedBuild = useRef(false);
@@ -240,7 +234,7 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
     const conversation = [...messages, userMessage, assistant];
     setMessages(conversation);
     try {
-      for await (const event of runAgentTurn([...messages, userMessage], { mode, projectContext: context, signal: controller.signal })) {
+      for await (const event of runAgentTurn([...messages, userMessage], { projectContext: context, signal: controller.signal })) {
         if (event.type === 'tool.start') setStreamingTool({ name: event.name, args: event.args || {} });
         if (event.type === 'tool.result') setStreamingTool(null);
         if (event.type === 'text.delta') {
@@ -313,7 +307,7 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
 
   const resendMessage = (index: number) => {
     setMessages(messages.slice(0, index));
-    window.setTimeout(() => void reload({ body: { mode } }), 0);
+    window.setTimeout(() => void reload(), 0);
   };
 
   const [messageRef, scrollRef] = useSnapScroll();
@@ -326,9 +320,6 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
       showChat={showChat}
       chatStarted={chatStarted}
       isStreaming={isLoading || agentRunning}
-      mode={mode}
-      onModeChange={(nextMode) => { if (nextMode === 'chat' || buildReady) setMode(nextMode); }}
-      buildReady={buildReady}
       jobEvents={jobEvents}
       streamingTool={streamingTool}
       enhancingPrompt={enhancingPrompt}

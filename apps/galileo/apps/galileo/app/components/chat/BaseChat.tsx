@@ -27,9 +27,6 @@ interface BaseChatProps {
   sendMessage?: (event: React.UIEvent, messageInput?: string) => void;
   handleInputChange?: (event: React.ChangeEvent<HTMLTextAreaElement>) => void;
   enhancePrompt?: () => void;
-  mode?: 'chat' | 'build';
-  onModeChange?: (mode: 'chat' | 'build') => void;
-  buildReady?: boolean;
   jobEvents?: string[];
   streamingTool?: { name: string; args: Record<string, unknown> } | null;
 }
@@ -63,9 +60,6 @@ export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
       handleInputChange,
       enhancePrompt,
       handleStop,
-      mode = 'chat',
-      onModeChange,
-      buildReady = false,
       jobEvents = [],
       streamingTool = null,
     },
@@ -168,9 +162,7 @@ export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
                     )}
                   </ClientOnly>
                   <div className="flex justify-between items-center text-sm p-4 pt-2">
-                    <div className="flex gap-1">
-                      {(['chat', 'build'] as const).map((value) => <button key={value} type="button" disabled={value === 'build' && !buildReady} title={value === 'build' && !buildReady ? 'Chat / Plan needs more context first' : undefined} className={classNames('px-2 py-1 rounded text-xs uppercase', value === mode ? 'bg-bolt-elements-item-backgroundAccent text-bolt-elements-item-contentAccent' : 'text-bolt-elements-textTertiary', value === 'build' && !buildReady ? 'opacity-40 cursor-not-allowed' : '')} onClick={() => onModeChange?.(value)}>{value === 'chat' ? 'Chat / Plan' : 'Build'}</button>)}
-                    </div>
+                    <div />
                     <div className="flex gap-1 items-center">
                       <IconButton
                         title="Enhance prompt"
