@@ -1,6 +1,5 @@
 import { useStore } from '@nanostores/react';
 import type { Message } from 'ai';
-import { useChat } from 'ai/react';
 import { useAnimate } from 'framer-motion';
 import { memo, useEffect, useRef, useState } from 'react';
 import { cssTransition, toast, ToastContainer } from 'react-toastify';
@@ -76,30 +75,14 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
   const [chatStarted, setChatStarted] = useState(initialMessages.length > 0);
   const [streamingTool, setStreamingTool] = useState<{ name: string; args: Record<string, unknown> } | null>(null);
   const [agentRunning, setAgentRunning] = useState(false);
+  const [messages, setMessages] = useState<Message[]>(initialMessages);
+  const [input, setInput] = useState('');
   const agentAbort = useRef<AbortController | null>(null);
 
   const { showChat } = useStore(chatStore);
 
   const [animationScope, animate] = useAnimate();
 
-  const { messages, isLoading, input, handleInputChange, setInput, setMessages, reload, stop } = useChat({
-    api: '/api/chat',
-    onError: (error) => {
-      logger.error('Request failed\n\n', error);
-
-      if (chatStore.get().aborted) {
-        // User pressed stop — not an error worth a toast.
-        return;
-      }
-
-      toast.error(friendlyChatErrorMessage(error), { autoClose: 8000 });
-    },
-    onFinish: () => {
-      logger.debug('Finished streaming');
-      setStreamingTool(null);
-    },
-    initialMessages,
-  });
 
   const { enhancingPrompt, promptEnhanced, enhancePrompt, resetEnhancer } = usePromptEnhancer();
 
@@ -175,12 +158,12 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
   }, []);
 
   useEffect(() => {
-    parseMessages(messages, isLoading);
+    parseMessages(messages, agentRunning);
 
     if (messages.length > 0) {
       storeMessageHistory(messages).catch((error) => toast.error(error.message));
     }
-  }, [messages, isLoading, parseMessages]);
+  }, [messages, agentRunning, parseMessages]);
 
   const scrollTextArea = () => {
     const textarea = textareaRef.current;
@@ -192,7 +175,6 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
 
   const abort = () => {
     agentAbort.current?.abort();
-    stop();
     chatStore.setKey('aborted', true);
     workbenchStore.abortAllActions();
   };
@@ -245,8 +227,14 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
         }
         if (event.type === 'error') throw new Error(event.message);
       }
+    } catch (error) {
+      if (!controller.signal.aborted && !chatStore.get().aborted) {
+        logger.error('Request failed\n\n', error);
+        toast.error(friendlyChatErrorMessage(error), { autoClose: 8000 });
+      }
     } finally {
       agentAbort.current = null;
+      setStreamingTool(null);
       setAgentRunning(false);
     }
   };
@@ -254,7 +242,7 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
   const sendMessage = async (_event: React.UIEvent, messageInput?: string) => {
     const _input = messageInput || input;
 
-    if (_input.length === 0 || isLoading || agentRunning) {
+    if (_input.length === 0 || agentRunning) {
       return;
     }
 
@@ -307,8 +295,10 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
   };
 
   const resendMessage = (index: number) => {
+    const message = messages[index];
+    if (message?.role !== 'user' || agentRunning) return;
     setMessages(messages.slice(0, index));
-    window.setTimeout(() => void reload(), 0);
+    void runCustomTurn(message.content, '');
   };
 
   const [messageRef, scrollRef] = useSnapScroll();
@@ -320,7 +310,7 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
       input={input}
       showChat={showChat}
       chatStarted={chatStarted}
-      isStreaming={isLoading || agentRunning}
+      isStreaming={agentRunning}
       jobEvents={jobEvents}
       streamingTool={streamingTool}
       enhancingPrompt={enhancingPrompt}
@@ -328,7 +318,7 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
       sendMessage={sendMessage}
       messageRef={messageRef}
       scrollRef={scrollRef}
-      handleInputChange={handleInputChange}
+      handleInputChange={(event) => setInput(event.target.value)}
       handleStop={abort}
       messages={messages.map((message, i) => {
         if (message.role === 'user') {
