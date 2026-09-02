@@ -5,6 +5,7 @@ import { memo, useEffect, useRef, useState } from 'react';
 import { cssTransition, toast, ToastContainer } from 'react-toastify';
 import { useMessageParser, usePromptEnhancer, useShortcuts, useSnapScroll } from '~/lib/hooks';
 import { runAgentTurn } from '~/lib/runtime/agent-controller';
+import type { AgentEvent } from '~/lib/runtime/galileo-stream';
 import { useChatHistory } from '~/lib/persistence';
 import { chatStore } from '~/lib/stores/chat';
 import { workbenchStore } from '~/lib/stores/workbench';
@@ -74,6 +75,7 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
 
   const [chatStarted, setChatStarted] = useState(initialMessages.length > 0);
   const [streamingTool, setStreamingTool] = useState<{ name: string; args: Record<string, unknown> } | null>(null);
+  const [activityEvents, setActivityEvents] = useState<AgentEvent[]>([]);
   const [agentRunning, setAgentRunning] = useState(false);
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [input, setInput] = useState('');
@@ -182,12 +184,14 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
     const controller = new AbortController();
     agentAbort.current = controller;
     setAgentRunning(true);
+    setActivityEvents([]);
     const userMessage = { id: crypto.randomUUID(), role: 'user' as const, content };
     let assistant = { id: crypto.randomUUID(), role: 'assistant' as const, content: '' };
     const conversation = [...messages, userMessage, assistant];
     setMessages(conversation);
     try {
       for await (const event of runAgentTurn([...messages, userMessage], { projectContext: context, signal: controller.signal })) {
+        setActivityEvents((current) => [...current, event]);
         if (event.type === 'tool.start') setStreamingTool({ name: event.name, args: {} });
         if (event.type === 'tool.arguments' && typeof event.arguments === 'object' && event.arguments !== null) setStreamingTool((current) => current ? { ...current, args: event.arguments as Record<string, unknown> } : current);
         if (event.type === 'tool.result') setStreamingTool(null);
@@ -283,6 +287,7 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
       chatStarted={chatStarted}
       isStreaming={agentRunning}
       streamingTool={streamingTool}
+      activityEvents={activityEvents}
       enhancingPrompt={enhancingPrompt}
       promptEnhanced={promptEnhanced}
       sendMessage={sendMessage}

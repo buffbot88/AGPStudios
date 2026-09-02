@@ -1,4 +1,5 @@
 import type { Message } from 'ai';
+import type { AgentEvent } from '~/lib/runtime/galileo-stream';
 import React, { type RefCallback } from 'react';
 import { ClientOnly } from 'remix-utils/client-only';
 import { Menu } from '~/components/sidebar/Menu.client';
@@ -29,6 +30,7 @@ interface BaseChatProps {
   enhancePrompt?: () => void;
   jobEvents?: string[];
   streamingTool?: { name: string; args: Record<string, unknown> } | null;
+  activityEvents?: AgentEvent[];
 }
 
 const EXAMPLE_PROMPTS = [
@@ -62,6 +64,7 @@ export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
       handleStop,
       jobEvents = [],
       streamingTool = null,
+      activityEvents = [],
     },
     ref,
   ) => {
@@ -106,6 +109,7 @@ export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
                       onResend={onResend}
                       jobEvents={jobEvents}
                       streamingTool={streamingTool}
+                      activityEvents={activityEvents}
                     />
                   ) : null;
                 }}
