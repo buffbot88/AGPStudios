@@ -235,14 +235,15 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
     setMessages(conversation);
     try {
       for await (const event of runAgentTurn([...messages, userMessage], { projectContext: context, signal: controller.signal })) {
-        if (event.type === 'tool.start') setStreamingTool({ name: event.name, args: event.args || {} });
+        if (event.type === 'tool.start') setStreamingTool({ name: event.name, args: {} });
+        if (event.type === 'tool.arguments' && typeof event.arguments === 'object' && event.arguments !== null) setStreamingTool((current) => current ? { ...current, args: event.arguments as Record<string, unknown> } : current);
         if (event.type === 'tool.result') setStreamingTool(null);
         if (event.type === 'text.delta') {
           assistant = { ...assistant, content: assistant.content + event.delta };
           conversation[conversation.length - 1] = assistant;
           setMessages([...conversation]);
         }
-        if (event.type === 'response.error') throw new Error(event.error);
+        if (event.type === 'error') throw new Error(event.message);
       }
     } finally {
       agentAbort.current = null;

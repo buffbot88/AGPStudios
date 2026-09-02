@@ -63,7 +63,7 @@ export async function streamText(messages: Messages, mode: 'chat' | 'build' = 'c
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
     const reader = response.body.getReader();
-    const messageId = crypto.randomUUID();
+    const responseId = crypto.randomUUID();
     let started = false;
     let eventText = '';
     let buffer = '';
@@ -77,15 +77,17 @@ export async function streamText(messages: Messages, mode: 'chat' | 'build' = 'c
               const tool = request.tool;
               if (tool && typeof tool.name === 'string' && ['list', 'read', 'search', 'refresh_context'].includes(tool.name)) {
                 const args = Object.fromEntries(Object.entries(tool).filter(([key, value]) => key !== 'name' && typeof value === 'string'));
-                streamController.enqueue(encoder.encode(encodeGalileoEvent({ type: 'tool.start', toolCallId: crypto.randomUUID(), name: tool.name, args })));
+                const toolCallId = crypto.randomUUID();
+                streamController.enqueue(encoder.encode(encodeGalileoEvent({ type: 'tool.start', id: toolCallId, name: tool.name })));
+                streamController.enqueue(encoder.encode(encodeGalileoEvent({ type: 'tool.arguments', id: toolCallId, arguments: args })));
               } else {
-                streamController.enqueue(encoder.encode(encodeGalileoEvent({ type: 'text.delta', messageId, delta: eventText })));
+                streamController.enqueue(encoder.encode(encodeGalileoEvent({ type: 'text.delta', delta: eventText })));
               }
             } catch {
-              streamController.enqueue(encoder.encode(encodeGalileoEvent({ type: 'text.delta', messageId, delta: eventText })));
+              streamController.enqueue(encoder.encode(encodeGalileoEvent({ type: 'text.delta', delta: eventText })));
             }
           }
-          if (events) streamController.enqueue(encoder.encode(encodeGalileoEvent({ type: 'response.complete', messageId })));
+          if (events) streamController.enqueue(encoder.encode(encodeGalileoEvent({ type: 'response.complete' })));
           else streamController.enqueue(encoder.encode(`d:${JSON.stringify({ finishReason: 'stop' })}\n`));
           streamController.close();
           clearTimeout(timeout);
@@ -102,10 +104,10 @@ export async function streamText(messages: Messages, mode: 'chat' | 'build' = 'c
             if (typeof content === 'string' && content) {
               if (!started && events) {
                 started = true;
-                streamController.enqueue(encoder.encode(encodeGalileoEvent({ type: 'response.start', messageId })));
+                streamController.enqueue(encoder.encode(encodeGalileoEvent({ type: 'response.start', response_id: responseId })));
               }
               if (events && (eventText || content.trimStart().startsWith('{'))) eventText += content;
-              else streamController.enqueue(encoder.encode(events ? encodeGalileoEvent({ type: 'text.delta', messageId, delta: content }) : `0:${JSON.stringify(content)}\n`));
+              else streamController.enqueue(encoder.encode(events ? encodeGalileoEvent({ type: 'text.delta', delta: content }) : `0:${JSON.stringify(content)}\n`));
             }
           } catch {
             // Ignore malformed or incomplete SSE records.

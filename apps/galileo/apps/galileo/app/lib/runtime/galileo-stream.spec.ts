@@ -3,7 +3,7 @@ import { decodeGalileoEvents, encodeGalileoEvent } from './galileo-stream';
 
 describe('Galileo stream', () => {
   it('decodes fragmented SSE records', async () => {
-    const event = encodeGalileoEvent({ type: 'text.delta', messageId: 'm1', delta: 'hello' });
+    const event = encodeGalileoEvent({ type: 'text.delta', delta: 'hello' });
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         const bytes = new TextEncoder().encode(event);
@@ -14,14 +14,14 @@ describe('Galileo stream', () => {
     });
     const events = [];
     for await (const value of decodeGalileoEvents(stream)) events.push(value);
-    expect(events).toEqual([{ type: 'text.delta', messageId: 'm1', delta: 'hello' }]);
+    expect(events).toEqual([{ type: 'text.delta', delta: 'hello' }]);
   });
 
   it('ignores malformed records and preserves valid events', async () => {
-    const input = new TextEncoder().encode('data: nope\n\nevent: x\ndata: {"type":"response.complete","messageId":"m1"}\n\n');
+    const input = new TextEncoder().encode('data: nope\n\nevent: x\ndata: {"type":"response.complete"}\n\n');
     const stream = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(input); controller.close(); } });
     const events = [];
     for await (const value of decodeGalileoEvents(stream)) events.push(value);
-    expect(events).toEqual([{ type: 'response.complete', messageId: 'm1' }]);
+    expect(events).toEqual([{ type: 'response.complete' }]);
   });
 });
