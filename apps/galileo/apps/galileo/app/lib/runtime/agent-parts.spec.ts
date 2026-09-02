@@ -7,7 +7,7 @@ describe('agent parts normalization', () => {
   it('normalizes ordinary user and assistant messages', () => {
     const messages = normalizeChatMessages([
       { id: 'u1', role: 'user', content: 'Inspect the app' },
-      { id: 'a1', role: 'assistant', content: 'I will inspect it.<!-- GALILEO_BUILD_READY -->' },
+      { id: 'a1', role: 'assistant', content: 'I will inspect it.' },
     ] as Message[]);
 
     expect(messages[0].parts).toEqual([{ type: 'text', text: 'Inspect the app' }]);

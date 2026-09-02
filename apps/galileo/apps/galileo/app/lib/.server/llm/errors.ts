@@ -6,7 +6,7 @@ export type GatewayErrorCode = 'gateway_unreachable' | 'queue_full' | 'agent_tim
  * Maps gateway/provider failures to a stable JSON error envelope that the
  * client turns into friendly toasts.
  */
-export function gatewayErrorResponse(error: unknown, requestId?: string, mode: 'chat' | 'build' = 'chat') {
+export function gatewayErrorResponse(error: unknown, requestId?: string) {
   const statusCode = (error as { statusCode?: number } | null)?.statusCode;
   const text = error instanceof Error ? `${error.name} ${error.message}` : String(error);
 
@@ -23,7 +23,7 @@ export function gatewayErrorResponse(error: unknown, requestId?: string, mode: '
   }
 
   if (statusCode === 502 || statusCode === 503) {
-    return envelope(502, 'inference_failed', mode === 'build' ? 'Inference failed on the Omega/Beta/Delta agent pool.' : 'Local 350M chat inference failed.', requestId);
+    return envelope(502, 'inference_failed', 'Inference failed on the Ashat agent pool.', requestId);
   }
 
   return envelope(500, 'inference_failed', 'Chat inference failed.', requestId);

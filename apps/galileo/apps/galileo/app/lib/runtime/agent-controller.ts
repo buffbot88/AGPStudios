@@ -4,7 +4,6 @@ import { executeReadOnlyTool } from './tool-executor';
 
 interface AgentControllerOptions {
   api?: string;
-  mode?: 'chat' | 'build';
   projectContext?: string;
   signal?: AbortSignal;
 }
@@ -31,7 +30,7 @@ export async function* runAgentTurn(messages: Message[], options: AgentControlle
     const response = await fetch(options.api || '/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream', 'X-Galileo-Protocol': 'events' },
-      body: JSON.stringify({ messages: conversation, mode: options.mode || 'chat', projectContext: options.projectContext || '', tools }),
+      body: JSON.stringify({ messages: conversation, projectContext: options.projectContext || '', tools }),
       signal: options.signal,
     });
     if (!response.ok || !response.body) throw new Error(`Galileo returned HTTP ${response.status}`);

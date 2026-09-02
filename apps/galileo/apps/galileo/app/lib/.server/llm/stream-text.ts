@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { getAPIKey, getGatewayURL } from '~/lib/.server/config';
 import { GATEWAY_TIMEOUT_MS, MAX_TOKENS } from './constants';
-import { BUILD_READY_MARKER, CHAT_READINESS_PROMPT, getSystemPrompt } from './prompts';
+import { getSystemPrompt } from './prompts';
 import { encodeGalileoEvent } from '~/lib/runtime/galileo-stream';
 
 interface Message {
@@ -12,8 +12,8 @@ interface Message {
 export type ToolDefinition = { type: 'function'; function: { name: string; description?: string; parameters: Record<string, unknown> } };
 export type Messages = Message[];
 
-export async function completeText(messages: Messages, mode: 'chat' | 'build' = 'chat', projectContext = '', sessionCookie = '') {
-  const response = await streamText(messages, mode, projectContext, sessionCookie);
+export async function completeText(messages: Messages, projectContext = '', sessionCookie = '') {
+  const response = await streamText(messages, projectContext, sessionCookie);
   if (!response.body) throw new Error('Alpha returned an empty stream');
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -26,10 +26,10 @@ export async function completeText(messages: Messages, mode: 'chat' | 'build' = 
       try { text += JSON.parse(line.slice(2)) as string; } catch { /* Ignore incomplete data frames. */ }
     }
   }
-  return { text: text.replace(/(?:<!--\s*)?GALILEO_BUILD_READY(?:\s*-->)?/g, BUILD_READY_MARKER), usage: {} };
+  return { text, usage: {} };
 }
 
-export async function streamText(messages: Messages, mode: 'chat' | 'build' = 'chat', projectContext = '', sessionCookie = '', events = false, tools: ToolDefinition[] = []) {
+export async function streamText(messages: Messages, projectContext = '', sessionCookie = '', events = false, tools: ToolDefinition[] = []) {
   const base = getGatewayURL().trim().replace(/\/+$/, '');
   const endpoint = `${base.endsWith('/v1') ? base : `${base}/v1`}/chat/completions`;
   const controller = new AbortController();
@@ -41,13 +41,12 @@ export async function streamText(messages: Messages, mode: 'chat' | 'build' = 'c
       headers: {
         'Content-Type': 'application/json',
         ...(getAPIKey() ? { Authorization: `Bearer ${getAPIKey()}` } : {}),
-        'x-ashat-mode': mode,
         'x-ashat-account': createHash('sha256').update(sessionCookie).digest('hex'),
         ...(events ? { 'X-Galileo-Protocol': 'events' } : {}),
       },
       body: JSON.stringify({
         model: 'ashat',
-        messages: [{ role: 'system', content: `${mode === 'build' ? getSystemPrompt() : CHAT_READINESS_PROMPT}${projectContext ? `\n\n<project_context>\n${projectContext}\n</project_context>` : ''}` }, ...messages],
+        messages: [{ role: 'system', content: `${getSystemPrompt()}${projectContext ? `\n\n<project_context>\n${projectContext}\n</project_context>` : ''}` }, ...messages],
         max_tokens: MAX_TOKENS,
         temperature: 0,
         stream: true,

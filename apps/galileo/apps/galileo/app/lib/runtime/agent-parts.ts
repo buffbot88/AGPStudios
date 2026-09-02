@@ -68,7 +68,7 @@ export function normalizeChatMessage(message: Message, index = 0): AgentMessage 
     };
   }
 
-  return { id, role: 'assistant', parts: [{ type: 'text', text: stripBuildMarker(content) }] };
+  return { id, role: 'assistant', parts: [{ type: 'text', text: content }] };
 }
 
 export function normalizeChatMessages(messages: Message[]): AgentMessage[] {
@@ -157,10 +157,6 @@ function parseToolResult(content: string): Extract<AgentPart, { type: 'tool-resu
 
 function agentForTool(tool: string): AgentName {
   return tool === 'refresh_context' ? 'Oracle' : 'Galileo';
-}
-
-function stripBuildMarker(content: string) {
-  return content.replace('<!-- GALILEO_BUILD_READY -->', '').trim();
 }
 
 function formatBuildEvent(kind: string) {
