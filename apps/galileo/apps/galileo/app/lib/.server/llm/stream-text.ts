@@ -42,6 +42,7 @@ export async function streamText(messages: Messages, mode: 'chat' | 'build' = 'c
         ...(getAPIKey() ? { Authorization: `Bearer ${getAPIKey()}` } : {}),
         'x-ashat-mode': mode,
         'x-ashat-account': createHash('sha256').update(sessionCookie).digest('hex'),
+        ...(events ? { 'X-Galileo-Protocol': 'events' } : {}),
       },
       body: JSON.stringify({
         model: 'ashat',
@@ -59,6 +60,7 @@ export async function streamText(messages: Messages, mode: 'chat' | 'build' = 'c
       throw error;
     }
     if (!response.body) throw new Error('Alpha returned an empty stream');
+    if (events) return response;
 
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
