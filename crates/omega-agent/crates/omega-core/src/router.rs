@@ -124,14 +124,9 @@ impl RowRouter {
         };
 
         if healthy.is_empty() {
-            // Last-resort: any enabled backend, even if its /health is
-            // returning bad. Keeps service-up under transient outages.
-            return self
-                .backends
-                .iter()
-                .find(|b| b.enabled)
-                .cloned()
-                .ok_or(RouterError::ChainExhausted);
+            // Never route new work to a backend marked unhealthy. Recovery
+            // probes are the only traffic allowed while every peer is down.
+            return Err(RouterError::ChainExhausted);
         }
 
         Ok(self.select_weighted(&healthy))
