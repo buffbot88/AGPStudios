@@ -1,10 +1,8 @@
-//! Advanced Coding Agent loop (Phase 6).
+//! Coding execution loop.
 //!
-//! When the VL-450M intent router classifies a request as `code`, this
-//! module drives one 1.2B coding-agent slot through a ReAct-style loop: the model
-//! emits a JSON action (`{"tool": "...", "args": {...}}`) or a final answer
-//! (`{"answer": "..."}`); tools run inside the agent's workspace; observations
-//! are fed back; iteration stops on an answer or when the budget is spent.
+//! This compatibility loop is retained for legacy OpenAI requests. Native
+//! structured execution is authoritative; legacy JSON action parsing is
+//! deprecated and will be removed after all peers use the execution contract.
 //!
 //! On finish, the **Script Validation Engine** sweeps every file written during
 //! the run (syntax-checking Python / JS / shell / JSON) and attaches the report
@@ -340,13 +338,7 @@ impl RunState {
              {{\"tool\": \"git_status\"}} — show working tree status\n\
              {{\"tool\": \"git_diff\", \"args\": {{\"path\": \"file\", \"staged\": false, \"base\": \"HEAD\"}}}}\n\
              \n\
-             TIER 3 — Web tools:\n\
-             {{\"tool\": \"read_url\", \"args\": {{\"url\": \"https://...\", \"max_chars\": 20000}}}}\n\
-             {{\"tool\": \"web_search\", \"args\": {{\"query\": \"search terms\", \"depth\": \"standard\"}}}}\n\
-             \n\
-             Legacy tools:\n\
-             {{\"tool\": \"validate\", \"args\": {{\"path\": \"relative/path\"}}}}\n\
-             {{\"tool\": \"skill\", \"args\": {{\"name\": \"skill-name\"}}}}\n\
+             Validation is automatic after execution; do not call validation, web, or skill tools.\n\
              \n\
              When the task is complete, reply with EXACTLY one JSON object:\n\
              {{\"answer\": \"your final response to the user\"}}\n\
@@ -611,7 +603,7 @@ async fn execute_tool(
             let base = args.get("base").and_then(Value::as_str).unwrap_or("");
             git_diff(&dir, path, staged, base, cfg).await
         }
-        // ── Tier 3: web content fetching ──────────────────────────
+        // DEPRECATE: web capabilities belong to Alpha/Galileo.
         "read_url" | "read-url" => {
             let url = args.get("url").and_then(Value::as_str).unwrap_or("");
             let max_chars = args
@@ -620,13 +612,13 @@ async fn execute_tool(
                 .unwrap_or(20000) as usize;
             read_url(url, max_chars).await
         }
-        // ── Tier 3: web search ────────────────────────────────────
+        // DEPRECATE: web capabilities belong to Alpha/Galileo.
         "web_search" | "web-search" => {
             let query = args.get("query").and_then(Value::as_str).unwrap_or("");
             let depth = args.get("depth").and_then(Value::as_str).unwrap_or("standard");
             web_search(query, depth, &cfg.serper_api_key).await
         }
-        // ── legacy tools ──────────────────────────────────────────
+        // DEPRECATE: retained only for old clients until native execution is universal.
         "validate" => match safe_join(&dir, path_arg) {
             Ok(joined) => validate_file_abs(&joined, cfg).await,
             Err(e) => Err(e),
