@@ -1,6 +1,6 @@
 import { type ActionFunctionArgs } from '@remix-run/node';
 import { gatewayErrorResponse } from '~/lib/.server/llm/errors';
-import { streamText, type Messages } from '~/lib/.server/llm/stream-text';
+import { streamText, type Messages, type ToolDefinition } from '~/lib/.server/llm/stream-text';
 import { authenticated } from '~/lib/.server/auth';
 import { BUILD_READY_MARKER } from '~/lib/.server/llm/prompts';
 
@@ -12,7 +12,7 @@ async function chatAction({ request }: ActionFunctionArgs) {
   const requestId = crypto.randomUUID();
   const started = Date.now();
   if (!(await authenticated(request))) return new Response('Unauthorized', { status: 401, headers: { 'X-Request-Id': requestId } });
-  const { messages, mode, projectContext } = (await request.json()) as { messages: Messages; mode?: 'chat' | 'build'; projectContext?: string };
+  const { messages, mode, projectContext, tools } = (await request.json()) as { messages: Messages; mode?: 'chat' | 'build'; projectContext?: string; tools?: ToolDefinition[] };
   console.info(JSON.stringify({ event: 'chat.start', request_id: requestId, mode: mode ?? 'chat', message_count: messages.length, project_context_chars: projectContext?.length ?? 0 }));
 
   if (mode === 'build' && !messages.some((message) => message.role === 'assistant' && typeof message.content === 'string' && message.content.includes(BUILD_READY_MARKER))) {
@@ -20,7 +20,7 @@ async function chatAction({ request }: ActionFunctionArgs) {
   }
 
   try {
-    const response = await streamText(messages, mode, projectContext, request.headers.get('cookie') || '', request.headers.get('x-galileo-protocol') === 'events');
+    const response = await streamText(messages, mode, projectContext, request.headers.get('cookie') || '', request.headers.get('x-galileo-protocol') === 'events', tools);
     console.info(JSON.stringify({ event: 'chat.success', request_id: requestId, duration_ms: Date.now() - started }));
     response.headers.set('X-Request-Id', requestId);
     return response;

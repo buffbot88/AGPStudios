@@ -9,6 +9,7 @@ interface Message {
   content: unknown;
 }
 
+export type ToolDefinition = { type: 'function'; function: { name: string; description?: string; parameters: Record<string, unknown> } };
 export type Messages = Message[];
 
 export async function completeText(messages: Messages, mode: 'chat' | 'build' = 'chat', projectContext = '', sessionCookie = '') {
@@ -28,7 +29,7 @@ export async function completeText(messages: Messages, mode: 'chat' | 'build' = 
   return { text: text.replace(/(?:<!--\s*)?GALILEO_BUILD_READY(?:\s*-->)?/g, BUILD_READY_MARKER), usage: {} };
 }
 
-export async function streamText(messages: Messages, mode: 'chat' | 'build' = 'chat', projectContext = '', sessionCookie = '', events = false) {
+export async function streamText(messages: Messages, mode: 'chat' | 'build' = 'chat', projectContext = '', sessionCookie = '', events = false, tools: ToolDefinition[] = []) {
   const base = getGatewayURL().trim().replace(/\/+$/, '');
   const endpoint = `${base.endsWith('/v1') ? base : `${base}/v1`}/chat/completions`;
   const controller = new AbortController();
@@ -50,6 +51,7 @@ export async function streamText(messages: Messages, mode: 'chat' | 'build' = 'c
         max_tokens: MAX_TOKENS,
         temperature: 0,
         stream: true,
+        ...(tools.length ? { tools, tool_choice: 'auto' } : {}),
       }),
       signal: controller.signal,
     });
@@ -67,28 +69,11 @@ export async function streamText(messages: Messages, mode: 'chat' | 'build' = 'c
     const reader = response.body.getReader();
     const responseId = crypto.randomUUID();
     let started = false;
-    let eventText = '';
     let buffer = '';
     const stream = new ReadableStream<Uint8Array>({
       async pull(streamController) {
         const next = await reader.read();
         if (next.done) {
-          if (events && eventText.trimStart().startsWith('{')) {
-            try {
-              const request = JSON.parse(eventText) as { tool?: { name?: string; path?: string; query?: string } };
-              const tool = request.tool;
-              if (tool && typeof tool.name === 'string' && ['list', 'read', 'search', 'refresh_context'].includes(tool.name)) {
-                const args = Object.fromEntries(Object.entries(tool).filter(([key, value]) => key !== 'name' && typeof value === 'string'));
-                const toolCallId = crypto.randomUUID();
-                streamController.enqueue(encoder.encode(encodeGalileoEvent({ type: 'tool.start', id: toolCallId, name: tool.name })));
-                streamController.enqueue(encoder.encode(encodeGalileoEvent({ type: 'tool.arguments', id: toolCallId, arguments: args })));
-              } else {
-                streamController.enqueue(encoder.encode(encodeGalileoEvent({ type: 'text.delta', delta: eventText })));
-              }
-            } catch {
-              streamController.enqueue(encoder.encode(encodeGalileoEvent({ type: 'text.delta', delta: eventText })));
-            }
-          }
           if (events) streamController.enqueue(encoder.encode(encodeGalileoEvent({ type: 'response.complete' })));
           else streamController.enqueue(encoder.encode(`d:${JSON.stringify({ finishReason: 'stop' })}\n`));
           streamController.close();
@@ -108,8 +93,7 @@ export async function streamText(messages: Messages, mode: 'chat' | 'build' = 'c
                 started = true;
                 streamController.enqueue(encoder.encode(encodeGalileoEvent({ type: 'response.start', response_id: responseId })));
               }
-              if (events && (eventText || content.trimStart().startsWith('{'))) eventText += content;
-              else streamController.enqueue(encoder.encode(events ? encodeGalileoEvent({ type: 'text.delta', delta: content }) : `0:${JSON.stringify(content)}\n`));
+              streamController.enqueue(encoder.encode(events ? encodeGalileoEvent({ type: 'text.delta', delta: content }) : `0:${JSON.stringify(content)}\n`));
             }
           } catch {
             // Ignore malformed or incomplete SSE records.

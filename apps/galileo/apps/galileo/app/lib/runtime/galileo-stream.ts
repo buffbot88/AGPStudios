@@ -19,7 +19,7 @@ export type AgentEvent =
   | { type: 'text.delta'; delta: string }
   | { type: 'tool.start'; id: string; name: string }
   | { type: 'tool.arguments'; id: string; arguments: unknown }
-  | { type: 'tool.result'; id: string; ok: boolean; result?: unknown; error?: string }
+  | { type: 'tool.result'; id: string; ok: boolean; result?: unknown; error?: { code: string; message: string } }
   | { type: 'status'; state: 'inspecting' | 'working' | 'executing' | 'verifying'; message?: string }
   | { type: 'error'; code: string; message: string; retryable: boolean }
   | { type: 'response.complete' };
