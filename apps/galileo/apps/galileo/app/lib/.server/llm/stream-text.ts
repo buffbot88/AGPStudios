@@ -35,7 +35,6 @@ export async function streamText(messages: Messages, mode: 'chat' | 'build' = 'c
   const timeout = setTimeout(() => controller.abort(), GATEWAY_TIMEOUT_MS);
 
   try {
-    const hasToolResult = messages.some((message) => typeof message.content === 'string' && message.content.includes('tool_result'));
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
@@ -46,7 +45,7 @@ export async function streamText(messages: Messages, mode: 'chat' | 'build' = 'c
       },
       body: JSON.stringify({
         model: 'ashat',
-        messages: [{ role: 'system', content: `${mode === 'build' ? getSystemPrompt() : CHAT_READINESS_PROMPT}${projectContext ? `\n\n<project_context>\n${projectContext}\n</project_context>` : mode === 'chat' && !hasToolResult ? '\n\n<workspace_context>\nempty\n</workspace_context>\nThe workspace context is empty. Before answering any question about the existing project, you MUST request the read-only list tool as strict JSON: {"tool":{"name":"list","path":"."}}. Do not explain that files are unavailable and do not answer from assumptions.' : ''}` }, ...messages],
+        messages: [{ role: 'system', content: `${mode === 'build' ? getSystemPrompt() : CHAT_READINESS_PROMPT}${projectContext ? `\n\n<project_context>\n${projectContext}\n</project_context>` : ''}` }, ...messages],
         max_tokens: MAX_TOKENS,
         temperature: 0,
         stream: true,
