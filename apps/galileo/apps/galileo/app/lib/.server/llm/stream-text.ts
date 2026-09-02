@@ -46,7 +46,7 @@ export async function streamText(messages: Messages, projectContext = '', sessio
       },
       body: JSON.stringify({
         model: 'ashat',
-        messages: [{ role: 'system', content: `${getSystemPrompt()}${projectContext ? `\n\n<project_context>\n${projectContext}\n</project_context>` : ''}` }, ...messages],
+        messages: [{ role: 'system', content: `${getSystemPrompt()}${projectContext ? `\n\n<bootstrap_context>\n${projectContext.slice(0, 15000)}\n</bootstrap_context>` : ''}` }, ...messages],
         max_tokens: MAX_TOKENS,
         temperature: 0,
         stream: true,
