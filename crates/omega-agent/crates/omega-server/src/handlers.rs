@@ -25,7 +25,6 @@ use omega_common::types::{
     QueueStatus,
 };
 use omega_core::demand::DemandPool;
-use omega_core::orchestrator::Orchestrator;
 use omega_core::proxy::{CodingAgentProxy, CrossServerProxy};
 use omega_core::router::RowRouter;
 use omega_core::tool_loop::ToolLoop;
@@ -40,10 +39,8 @@ pub struct AppState {
     /// frontend shows real slave lanes instead of offline placeholders.
     pub peer_telemetry: Arc<PeerTelemetry>,
     pub router: RowRouter,
-    pub orchestrator: Orchestrator,
     pub coding_agent: CodingAgentProxy,
     pub coding_agent_pool: Arc<DemandPool>,
-    pub orchestrator_pool: Arc<DemandPool>,
     /// Advanced coding agent (Phase 6): drives a held 1.2B slot through the
     /// tool loop when the orchestrator classifies intent as `code`.
     pub tool_loop: ToolLoop,
@@ -81,7 +78,7 @@ background:#1f1f25;color:#ff7a45;font:11px ui-monospace}</style></head>\
 }
 
 pub async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
-    let orchestrator_ready = state.orchestrator_pool.baseline_alive().await;
+    let orchestrator_ready = state.coding_agent_pool.baseline_alive().await;
     let snapshot = state.coding_agent_pool.snapshot().await;
     let metrics = state.metrics.summary(state.started.elapsed().as_secs_f64());
     Json(HealthResponse {
@@ -120,11 +117,11 @@ pub async fn public_status(State(state): State<Arc<AppState>>) -> Json<PublicSta
 
 /// Snapshot shared by `/api/public_status` and the Alpha reporter's hub posts.
 pub(crate) async fn status_snapshot(state: &Arc<AppState>) -> PublicStatus {
-    let orchestrator_snap = state.orchestrator_pool.snapshot().await;
+    let orchestrator_snap = state.coding_agent_pool.snapshot().await;
     let coding_snap = state.coding_agent_pool.snapshot().await;
     let metrics = state.metrics.summary(state.started.elapsed().as_secs_f64());
     let peer_snap = state.peer_telemetry.snapshot().await;
-    let lane_omega = if state.orchestrator_pool.baseline_alive().await {
+    let lane_omega = if state.coding_agent_pool.baseline_alive().await {
         let mut summary = metrics.summaries.omega.clone();
         // The Omega lane in 3-lane shape reflects the Coding Agent's 1.2B
         // model (which actually serves requests routed through the row
@@ -161,7 +158,7 @@ pub(crate) async fn status_snapshot(state: &Arc<AppState>) -> PublicStatus {
     };
     PublicStatus {
         uptime_seconds: state.started.elapsed().as_secs_f64(),
-        llama_server_available: state.orchestrator_pool.baseline_alive().await,
+        llama_server_available: state.coding_agent_pool.baseline_alive().await,
         degraded: !orchestrator_snap.baseline_alive,
         queue: QueueStatus {
             depth: coding_snap.queue_depth,
@@ -579,12 +576,12 @@ fn truncate_tail(s: &str, max: usize) -> String {
 
 pub async fn list_models(State(state): State<Arc<AppState>>) -> Json<Value> {
     let orchestrator_label = state
-        .orchestrator_pool
+        .coding_agent_pool
         .spec
         .model
         .file_name()
         .and_then(|s| s.to_str())
-        .unwrap_or("orchestrator");
+        .unwrap_or("execution");
     let coding_label = state
         .coding_agent_pool
         .spec

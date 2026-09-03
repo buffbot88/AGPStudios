@@ -1,7 +1,5 @@
-//! Omega server: entry point. Loads config, boots the always-on intent
-//! router baseline (LFM2.5-VL-450M), binds the spawn-on-demand pools, then
-//! opens the public axum listener. Failure to boot the baseline is fatal:
-//! the public listener never binds if the orchestrator isn't healthy.
+//! Omega server: entry point. Loads config, starts the 1.2B execution pool,
+//! and opens the public axum listener.
 
 mod alpha_status;
 mod auth;
@@ -15,18 +13,16 @@ use axum::{
 };
 use std::{sync::Arc, time::Duration};
 use tokio::signal;
-use tracing::{error, info};
+use tracing::info;
 
 use omega_common::config::AppConfig;
 use omega_common::metrics::MetricsStore;
 use omega_common::types::{BackendServer, Pool};
 use omega_common::workspace::AgentWorkspace;
 use omega_core::demand::{DemandPool, DemandSpec};
-use omega_core::orchestrator::Orchestrator;
 use omega_core::proxy::{CodingAgentProxy, CrossServerProxy};
 use omega_core::router::RowRouter;
 use omega_core::skill_db::SkillDb;
-use omega_core::supervision::Supervisor;
 use omega_core::tool_loop::{ToolLoop, ToolLoopConfig};
 use peer_telemetry::PeerTelemetry;
 
@@ -39,25 +35,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cfg = AppConfig::load();
     info!(
         bind = %cfg.bind,
-        orchestrator_path = %cfg.orchestrator_model.display(),
         inference_path = %cfg.inference_model.display(),
         "Omega starting up"
     );
 
     let metrics = Arc::new(MetricsStore::open(&cfg.metrics_path));
 
-    // Build the two demand pools. Both share the same llama-server binary
-    // resolution but carry different GGUF paths.
-    let orchestrator_spec = DemandSpec {
-        binary: cfg.llama_binary.clone(),
-        model: cfg.orchestrator_model.clone(),
-        ctx: cfg.inference.context,
-        threads: cfg.inference.llama_threads,
-        gpu_layers: cfg.inference.llama_gpu_layers,
-        host: "127.0.0.1".to_string(),
-        mlock: cfg.inference.llama_mlock,
-        always_alive: true,
-    };
     let coding_spec = DemandSpec {
         binary: cfg.llama_binary.clone(),
         model: cfg.inference_model.clone(),
@@ -69,23 +52,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         always_alive: false,
     };
 
-    // Build the Orchestrator pool port list by concatenating `ports_baseline`
-    // and `ports_extra` straight from config. The total is whatever the config
-    // dictates; today's spec is 1 baseline + 2 extras (3x VL-450M peak) but
-    // the source treats the list as data.
-    let orchestrator_ports: Vec<u16> = cfg
-        .orchestrator_pool
-        .ports_baseline
-        .iter()
-        .chain(cfg.orchestrator_pool.ports_extra.iter())
-        .copied()
-        .collect();
-    let orchestrator_pool = Arc::new(
-        DemandPool::builder(Pool::Orchestrator, orchestrator_spec)
-            .queue_max(cfg.orchestrator_pool.queue_max)
-            .spawn_attempts_before_503(cfg.orchestrator_pool.spawn_attempts_before_503)
-            .build(&orchestrator_ports),
-    );
     let coding_agent_pool = Arc::new(
         DemandPool::builder(Pool::CodingAgent, coding_spec)
             .queue_max(cfg.coding_agent_pool.queue_max)
@@ -99,22 +65,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Duration::from_secs(30),
     );
 
-    // Seed the intent-router baseline (350M). If this fails: log
-    // loudly and exit without binding the public listener — Omega does NOT
-    // serve unauthenticated traffic while the orchestrator is dead.
-    if let Err(err) = orchestrator_pool.seed_baseline(&metrics).await {
-        error!(
-            error = %err,
-            "intent-router baseline failed to start. Refusing to bind public listener."
-        );
-        return Err(Box::new(err) as Box<dyn std::error::Error>);
-    }
-    info!("intent-router baseline healthy; orchestrator ready");
-
-    let orchestrator = Orchestrator::new(
-        Arc::clone(&orchestrator_pool),
-        Duration::from_secs(cfg.inference.timeout_seconds),
-    );
     let agent_workspace = AgentWorkspace::new(cfg.workspace_dir.clone());
     let coding_agent = CodingAgentProxy::new(
         Arc::clone(&coding_agent_pool),
@@ -156,19 +106,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         metrics: Arc::clone(&metrics),
         peer_telemetry: Arc::clone(&peer_telemetry),
         router,
-        orchestrator,
         coding_agent,
         coding_agent_pool: Arc::clone(&coding_agent_pool),
-        orchestrator_pool: Arc::clone(&orchestrator_pool),
         tool_loop,
         cross_server,
         update_lock: tokio::sync::Mutex::new(()),
     });
-
-    // Spawn supervisor. It will respawn the baseline orchestrator on death
-    // and emit metrics events.
-    Supervisor::new(Arc::clone(&orchestrator_pool), Duration::from_secs(30))
-        .spawn(Arc::clone(&metrics));
 
     // Alpha status channel: reports the master snapshot to the Ashat Hub.
     // Inert unless `hub.enabled` is true in server-config.json.
@@ -219,16 +162,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!(bind = %cfg.bind, "Omega listening (public + internal surfaces)");
 
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal(
-            Arc::clone(&coding_agent_pool),
-            Arc::clone(&orchestrator_pool),
-        ))
+        .with_graceful_shutdown(shutdown_signal(Arc::clone(&coding_agent_pool)))
         .await?;
 
     Ok(())
 }
 
-async fn shutdown_signal(coding_pool: Arc<DemandPool>, orchestrator_pool: Arc<DemandPool>) {
+async fn shutdown_signal(coding_pool: Arc<DemandPool>) {
     let ctrl_c = async {
         let _ = signal::ctrl_c().await;
     };
@@ -250,7 +190,4 @@ async fn shutdown_signal(coding_pool: Arc<DemandPool>, orchestrator_pool: Arc<De
 
     info!("killing active children; bringing Omega down");
     coding_pool.kill_active().await;
-    // Don't bring the orchestrator baseline down — it'd prevent any future
-    // automated restart. Leave it to the supervisor / manual cleanup.
-    let _ = Arc::clone(&orchestrator_pool);
 }
