@@ -108,29 +108,16 @@ else
         "models/" "$HOST:$INSTALL/models/"
 fi
 
-# --- 4. resolve model hints from what the slave actually has ------------------
-# Router: use the 350M text model; slaves do not need the VL model.
-ORCH_HINT="$(ssh "${SSH_OPTS[@]}" "$HOST" \
-    "ls '$INSTALL/models/' | grep -i '350M' | grep -iE 'Q4' | head -1" | tr -d '\r')"
-[ -n "$ORCH_HINT" ] || { echo "no 350M model present on slave; aborting"; exit 1; }
-log "orchestrator hint: $ORCH_HINT"
-
-# Remove the retired VL router from slave hosts; Omega retains its source copy.
-ssh "${SSH_OPTS[@]}" "$HOST" "rm -f '$INSTALL/models/'LFM2.5-VL-450M*"
+# --- 4. resolve the execution model from what the slave has ------------------
 INF_HINT="$(ssh "${SSH_OPTS[@]}" "$HOST" \
-    "ls '$INSTALL/models/' | grep -iE '1\\.2B.*Instruct' | grep -iE 'Q4' | head -1" | tr -d '\r')"
-if [ -z "$INF_HINT" ]; then
-    INF_HINT="$(ssh "${SSH_OPTS[@]}" "$HOST" \
-        "ls '$INSTALL/models/' | grep -iE '1\\.2B.*Instruct' | head -1" | tr -d '\r')"
-fi
+    "ls '$INSTALL/models/' | grep -iE '1\\.2B.*Instruct' | head -1" | tr -d '\r')"
 [ -n "$INF_HINT" ] || { echo "no 1.2B-Instruct model present on slave; aborting"; exit 1; }
-log "orchestrator hint: $ORCH_HINT"
-log "inference hint:    $INF_HINT"
+log "execution model: $INF_HINT"
 
 # --- 5. generate the slave server-config.json ---------------------------------
 ASHAT_KEY="$(python3 -c 'import json;print(json.load(open("server-config.json"))["ASHAT_KEY"])')"
 TMPCFG="$(mktemp)"
-SEED_PORT="$PORT" SEED_KEY="$ASHAT_KEY" SEED_ORCH="$ORCH_HINT" SEED_INF="$INF_HINT" \
+SEED_PORT="$PORT" SEED_KEY="$ASHAT_KEY" SEED_INF="$INF_HINT" \
 python3 - "$TMPCFG" <<'PYEOF'
 import json, os, sys
 port = int(os.environ["SEED_PORT"])
@@ -139,12 +126,9 @@ cfg = {
     "ASHAT_KEY": os.environ["SEED_KEY"],
     "server": {
         "bind": f"127.0.0.1:{internal_port}",
-        "orchestrator_port": 18079,
-        "orchestrator_binary_default": "llama-server",
     },
     "models": {
         "dir": "models",
-        "orchestrator_hint": os.environ["SEED_ORCH"],
         "inference_hint": os.environ["SEED_INF"],
     },
     "inference": {
@@ -153,12 +137,6 @@ cfg = {
         "timeout_seconds": 180,
         "llama_threads": 2,
         "llama_gpu_layers": 0,
-    },
-    "orchestrator_pool": {
-        "ports_baseline": [18079],
-        "ports_extra":    [18078, 18077],
-        "queue_max": 32,
-        "spawn_attempts_before_503": 3,
     },
     "coding_agent_pool": {
         "ports": ([18180, 18181, 18182] if port == 8082 else [18080, 18081, 18082]),
@@ -174,8 +152,6 @@ cfg = {
     "hub": {"enabled": False, "url": ""},
     "workspace": {"dir": "workspaces"},
     "tool_loop": {"max_iterations": 5, "command_timeout_seconds": 10, "output_max_chars": 4000},
-    "skills_db": {"enabled": False, "host": "127.0.0.1", "port": 3306,
-                  "database": "", "user": "", "password": ""},
 }
 with open(sys.argv[1], "w") as f:
     json.dump(cfg, f, indent=2)
