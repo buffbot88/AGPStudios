@@ -248,14 +248,12 @@ fn default_backend_weight() -> u32 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Pool {
-    Orchestrator,
     CodingAgent,
 }
 
 impl Pool {
     pub fn as_str(self) -> &'static str {
         match self {
-            Pool::Orchestrator => "orchestrator",
             Pool::CodingAgent => "coding_agent",
         }
     }

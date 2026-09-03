@@ -317,8 +317,7 @@ mod tests {
               "server": {{"bind": "0.0.0.0:8080"}},
               "models": {{"dir": "models"}},
               "inference": {{"context": 4096, "timeout_seconds": 120}},
-              "orchestrator_pool": {{"ports_baseline": [18079]}},
-              "coding_agent_pool": {{"ports": [18080]}},
+                  "coding_agent_pool": {{"ports": [18080]}},
               "row_chain": [{{"id": "omega", "host": "127.0.0.1", "port": 8080, "enabled": true}}],
               "metrics": {{"persist_path": "logs/metrics.jsonl"}}"#
         ) + extra
@@ -350,7 +349,6 @@ mod tests {
           "server": {"bind": "0.0.0.0:8080"},
           "models": {"dir": "models"},
           "inference": {"context": 4096, "timeout_seconds": 120, "llama_mlock": true},
-          "orchestrator_pool": {"ports_baseline": [18079]},
           "coding_agent_pool": {"ports": [18080]},
           "row_chain": [],
           "metrics": {"persist_path": "logs/metrics.jsonl"},
@@ -401,7 +399,6 @@ mod tests {
           "server": {"bind": "0.0.0.0:8080"},
           "models": {"dir": "models"},
           "inference": {"context": 4096, "timeout_seconds": 120},
-          "orchestrator_pool": {"ports_baseline": [18079]},
           "coding_agent_pool": {"ports": [18080]},
           "row_chain": [
             {"id": "omega", "host": "127.0.0.1", "port": 8080, "enabled": true, "weight": 2},

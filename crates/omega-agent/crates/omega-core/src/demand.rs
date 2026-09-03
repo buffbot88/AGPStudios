@@ -602,35 +602,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn builder_sets_baseline_port_for_always_alive() {
-        let pool = DemandPool::builder(
-            Pool::Orchestrator,
-            spec(true, PathBuf::from("/nonexistent/model.gguf")),
-        )
-        .build(&[18079, 18078, 18077]);
-        assert_eq!(pool.baseline_port, Some(18079));
-        assert!(pool.spec.always_alive);
-    }
-
-    #[tokio::test]
-    async fn acquire_on_unseeded_baseline_returns_baseline_guard() {
-        let pool = Arc::new(
-            DemandPool::builder(
-                Pool::Orchestrator,
-                spec(true, PathBuf::from("/nonexistent/model.gguf")),
-            )
-            .build(&[18079]),
-        );
-        let guard = pool
-            .clone()
-            .acquire(&metrics("baseline"), Duration::from_secs(1))
-            .await
-            .expect("baseline fast path");
-        assert!(guard.is_baseline());
-        assert_eq!(guard.port(), 18079);
-    }
-
-    #[tokio::test]
     async fn coding_pool_with_bad_model_ages_out_queue() {
         let pool = Arc::new(
             DemandPool::builder(
