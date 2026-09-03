@@ -22,7 +22,6 @@ use omega_common::workspace::AgentWorkspace;
 use omega_core::demand::{DemandPool, DemandSpec};
 use omega_core::proxy::{CodingAgentProxy, CrossServerProxy};
 use omega_core::router::RowRouter;
-use omega_core::skill_db::SkillDb;
 use omega_core::tool_loop::{ToolLoop, ToolLoopConfig};
 use peer_telemetry::PeerTelemetry;
 
@@ -97,7 +96,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             cfg.inference.max_tokens,
             cfg.inference.timeout_seconds,
         ),
-        SkillDb::from_config(&cfg.skills_db),
     );
 
     let state = Arc::new(AppState {

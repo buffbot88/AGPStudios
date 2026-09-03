@@ -9,5 +9,4 @@ pub mod demand;
 pub mod proxy;
 pub mod queue;
 pub mod router;
-pub mod skill_db;
 pub mod tool_loop;

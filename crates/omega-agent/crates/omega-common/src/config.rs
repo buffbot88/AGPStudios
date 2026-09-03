@@ -114,10 +114,6 @@ pub struct ToolLoopSection {
     pub command_timeout_seconds: u64,
     #[serde(default = "default_tool_output_chars")]
     pub output_max_chars: usize,
-    /// Serper API key for the `web_search` tool. When empty or absent,
-    /// falls back to the `SERPER_API_KEY` env var, then to DDG Lite.
-    #[serde(default)]
-    pub serper_api_key: String,
 }
 
 impl Default for ToolLoopSection {
@@ -126,7 +122,6 @@ impl Default for ToolLoopSection {
             max_iterations: default_tool_max_iterations(),
             command_timeout_seconds: default_tool_command_timeout(),
             output_max_chars: default_tool_output_chars(),
-            serper_api_key: String::new(),
         }
     }
 }
@@ -188,45 +183,6 @@ fn default_update_port() -> u16 {
     8082
 }
 
-/// Ashat's MySQL skills database. Implemented but inert until connection
-/// details are provided (`skills_db.enabled` is `false` by default).
-#[derive(Debug, Clone, Deserialize)]
-pub struct SkillsSection {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default = "default_skills_host")]
-    pub host: String,
-    #[serde(default = "default_skills_port")]
-    pub port: u16,
-    #[serde(default)]
-    pub database: String,
-    #[serde(default)]
-    pub user: String,
-    #[serde(default)]
-    pub password: String,
-}
-
-impl Default for SkillsSection {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            host: default_skills_host(),
-            port: default_skills_port(),
-            database: String::new(),
-            user: String::new(),
-            password: String::new(),
-        }
-    }
-}
-
-fn default_skills_host() -> String {
-    "127.0.0.1".to_owned()
-}
-
-fn default_skills_port() -> u16 {
-    3306
-}
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct FileConfig {
     #[serde(rename = "ASHAT_KEY")]
@@ -248,8 +204,6 @@ pub struct FileConfig {
     pub workspace: WorkspaceSection,
     #[serde(default)]
     pub tool_loop: ToolLoopSection,
-    #[serde(default)]
-    pub skills_db: SkillsSection,
     #[serde(default)]
     pub update: UpdateSection,
 }
@@ -278,8 +232,6 @@ pub struct AppConfig {
     pub workspace_dir: PathBuf,
     /// Advanced coding-agent loop limits (Phase 6).
     pub tool_loop: ToolLoopSection,
-    /// Ashat's MySQL skills database connection (disabled until populated).
-    pub skills_db: SkillsSection,
     /// Admin update propagation peers (`POST /api/admin/update`).
     pub update: UpdateSection,
     /// Absolute project root (script paths for admin actions resolve against it).
@@ -325,7 +277,6 @@ impl AppConfig {
             hub: file.hub,
             workspace_dir: project_root.join(&file.workspace.dir),
             tool_loop: file.tool_loop,
-            skills_db: file.skills_db,
             update: file.update,
             project_root,
         }
@@ -389,28 +340,7 @@ mod tests {
         assert_eq!(cfg.tool_loop.max_iterations, 5);
         assert_eq!(cfg.tool_loop.command_timeout_seconds, 10);
         assert_eq!(cfg.tool_loop.output_max_chars, 4000);
-        assert!(cfg.tool_loop.serper_api_key.is_empty());
-        assert!(!cfg.skills_db.enabled);
-        assert_eq!(cfg.skills_db.host, "127.0.0.1");
-        assert_eq!(cfg.skills_db.port, 3306);
         assert!(!cfg.inference.llama_mlock);
-    }
-
-    #[test]
-    fn serper_api_key_parses_when_present() {
-        let json = r#"{
-          "ASHAT_KEY": "k",
-          "server": {"bind": "0.0.0.0:8080"},
-          "models": {"dir": "models"},
-          "inference": {"context": 4096, "timeout_seconds": 120},
-          "orchestrator_pool": {"ports_baseline": [18079]},
-          "coding_agent_pool": {"ports": [18080]},
-          "row_chain": [],
-          "metrics": {"persist_path": "logs/metrics.jsonl"},
-          "tool_loop": {"serper_api_key": "sk-test-123"}
-        }"#;
-        let cfg: FileConfig = serde_json::from_str(json).expect("parse");
-        assert_eq!(cfg.tool_loop.serper_api_key, "sk-test-123");
     }
 
     #[test]
@@ -430,8 +360,6 @@ mod tests {
         let cfg: FileConfig = serde_json::from_str(json).expect("parse");
         assert_eq!(cfg.tool_loop.max_iterations, 8);
         assert_eq!(cfg.tool_loop.command_timeout_seconds, 20);
-        assert!(cfg.skills_db.enabled);
-        assert_eq!(cfg.skills_db.host, "db.ashat.example");
         assert!(cfg.inference.llama_mlock);
     }
 

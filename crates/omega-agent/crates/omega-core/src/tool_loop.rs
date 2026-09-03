@@ -9,7 +9,6 @@
 //! to the response so Ashat Hub receives debugged artifacts.
 
 use crate::demand::{DemandPool, InstanceGuard};
-use crate::skill_db::SkillDb;
 use chrono::Utc;
 use omega_common::config::ToolLoopSection;
 use omega_common::metrics::MetricsStore;
@@ -35,8 +34,6 @@ pub struct ToolLoopConfig {
     pub output_max_chars: usize,
     pub max_tokens: u32,
     pub acquire_timeout: Duration,
-    /// Serper API key: config value → env `SERPER_API_KEY` → empty (DDG fallback).
-    pub serper_api_key: String,
 }
 
 impl ToolLoopConfig {
@@ -45,19 +42,12 @@ impl ToolLoopConfig {
         inference_max_tokens: u32,
         inference_timeout_seconds: u64,
     ) -> Self {
-        // Priority: config value → env var → empty
-        let serper_api_key = if !tl.serper_api_key.is_empty() {
-            tl.serper_api_key.clone()
-        } else {
-            std::env::var("SERPER_API_KEY").unwrap_or_default()
-        };
         Self {
             max_iterations: tl.max_iterations,
             command_timeout: Duration::from_secs(tl.command_timeout_seconds),
             output_max_chars: tl.output_max_chars,
             max_tokens: inference_max_tokens,
             acquire_timeout: Duration::from_secs(inference_timeout_seconds),
-            serper_api_key,
         }
     }
 }
@@ -78,7 +68,6 @@ pub struct ToolLoop {
     pool: Arc<DemandPool>,
     workspace: AgentWorkspace,
     cfg: ToolLoopConfig,
-    skill_db: SkillDb,
     sender: Sender,
 }
 
@@ -87,13 +76,11 @@ impl ToolLoop {
         pool: Arc<DemandPool>,
         workspace: AgentWorkspace,
         cfg: ToolLoopConfig,
-        skill_db: SkillDb,
-    ) -> Self {
+        ) -> Self {
         Self {
             pool,
             workspace,
             cfg,
-            skill_db,
             sender: Arc::new(|guard, request| {
                 let host = guard.pool().spec.host.clone();
                 let port = guard.port();
@@ -108,14 +95,12 @@ impl ToolLoop {
         pool: Arc<DemandPool>,
         workspace: AgentWorkspace,
         cfg: ToolLoopConfig,
-        skill_db: SkillDb,
-        sender: Sender,
+            sender: Sender,
     ) -> Self {
         Self {
             pool,
             workspace,
             cfg,
-            skill_db,
             sender,
         }
     }
@@ -173,7 +158,6 @@ impl ToolLoop {
                             &self.workspace,
                             port,
                             &self.cfg,
-                            &self.skill_db,
                         )
                         .await;
                         if let Some(written) = outcome.written {
@@ -498,7 +482,6 @@ async fn execute_tool(
     workspace: &AgentWorkspace,
     port: u16,
     cfg: &ToolLoopConfig,
-    _skill_db: &SkillDb,
 ) -> ToolOutcome {
     let dir = match workspace.ensure_agent_dir(port) {
         Ok(d) => d,
@@ -1448,7 +1431,6 @@ mod tests {
             output_max_chars: 4000,
             max_tokens: 128,
             acquire_timeout: Duration::from_secs(2),
-            serper_api_key: String::new(),
         }
     }
 
@@ -1557,7 +1539,6 @@ mod tests {
             &ws,
             18080,
             &cfg(),
-            &SkillDb::disabled(),
         )
         .await;
         assert!(out.written.is_some());
@@ -1567,7 +1548,6 @@ mod tests {
             &ws,
             18080,
             &cfg(),
-            &SkillDb::disabled(),
         )
         .await;
         assert_eq!(out2.output, "hi");
@@ -1577,7 +1557,6 @@ mod tests {
             &ws,
             18080,
             &cfg(),
-            &SkillDb::disabled(),
         )
         .await;
         assert!(escaped.output.contains("escapes"));
@@ -1596,7 +1575,6 @@ mod tests {
             &ws,
             18080,
             &cfg(),
-            &SkillDb::disabled(),
         )
         .await;
         assert!(out.output.contains("marker.txt"));
@@ -1614,7 +1592,6 @@ mod tests {
             &ws,
             18080,
             &cfg(),
-            &SkillDb::disabled(),
         )
         .await;
         execute_tool(
@@ -1623,7 +1600,6 @@ mod tests {
             &ws,
             18080,
             &cfg(),
-            &SkillDb::disabled(),
         )
         .await;
         execute_tool(
@@ -1632,7 +1608,6 @@ mod tests {
             &ws,
             18080,
             &cfg(),
-            &SkillDb::disabled(),
         )
         .await;
         let good = execute_tool(
@@ -1641,7 +1616,6 @@ mod tests {
             &ws,
             18080,
             &cfg(),
-            &SkillDb::disabled(),
         )
         .await;
         let bad = execute_tool(
@@ -1650,7 +1624,6 @@ mod tests {
             &ws,
             18080,
             &cfg(),
-            &SkillDb::disabled(),
         )
         .await;
         let json_ok = execute_tool(
@@ -1659,7 +1632,6 @@ mod tests {
             &ws,
             18080,
             &cfg(),
-            &SkillDb::disabled(),
         )
         .await;
         assert!(
@@ -1692,7 +1664,6 @@ mod tests {
             &ws,
             18080,
             &cfg(),
-            &SkillDb::disabled(),
         )
         .await;
         assert!(out.output.contains("replaced 1"), "{}", out.output);
@@ -1712,7 +1683,6 @@ mod tests {
             &ws,
             18080,
             &cfg(),
-            &SkillDb::disabled(),
         )
         .await;
         assert!(out.output.contains("found 3 times"), "{}", out.output);
@@ -1730,7 +1700,6 @@ mod tests {
             &ws,
             18080,
             &cfg(),
-            &SkillDb::disabled(),
         )
         .await;
         assert!(out.output.contains("replaced 3"), "{}", out.output);
@@ -1750,7 +1719,6 @@ mod tests {
             &ws,
             18080,
             &cfg(),
-            &SkillDb::disabled(),
         )
         .await;
         assert!(out.output.contains("replaced 1"), "{}", out.output);
@@ -1770,7 +1738,6 @@ mod tests {
             &ws,
             18080,
             &cfg(),
-            &SkillDb::disabled(),
         )
         .await;
         assert!(out.output.contains("replaced 2"), "{}", out.output);
@@ -1790,7 +1757,6 @@ mod tests {
             &ws,
             18080,
             &cfg(),
-            &SkillDb::disabled(),
         )
         .await;
         assert!(out.output.contains("replaced 3"), "{}", out.output);
@@ -1810,7 +1776,6 @@ mod tests {
             &ws,
             18080,
             &cfg(),
-            &SkillDb::disabled(),
         )
         .await;
         assert!(out.output.contains("not found"), "{}", out.output);
@@ -1831,7 +1796,6 @@ mod tests {
             &ws,
             18080,
             &cfg(),
-            &SkillDb::disabled(),
         )
         .await;
         assert!(out.output.contains("invalid regex"), "{}", out.output);
@@ -1961,7 +1925,6 @@ mod tests {
             &ws,
             18080,
             &cfg(),
-            &SkillDb::disabled(),
         )
         .await;
         assert!(out.output.contains("a.txt"), "{}", out.output);
@@ -1986,7 +1949,6 @@ mod tests {
             &ws,
             18080,
             &cfg(),
-            &SkillDb::disabled(),
         )
         .await;
         assert!(out.output.contains("created new.txt"), "{}", out.output);
@@ -2015,7 +1977,6 @@ mod tests {
             &ws,
             18080,
             &cfg(),
-            &SkillDb::disabled(),
         )
         .await;
         assert!(out.output.contains("patched test.txt"), "{}", out.output);
@@ -2039,7 +2000,6 @@ mod tests {
             &ws,
             18080,
             &cfg(),
-            &SkillDb::disabled(),
         )
         .await;
         assert!(out.output.contains("deleted obsolete.txt"), "{}", out.output);
@@ -2224,7 +2184,7 @@ mod tests {
             };
             Box::pin(async move { Ok::<Value, ProxyError>(v) })
         });
-        let tl = ToolLoop::with_sender(pool, ws, cfg(), SkillDb::disabled(), sender);
+        let tl = ToolLoop::with_sender(pool, ws, cfg(), sender);
         let metrics = Arc::new(MetricsStore::open(&std::env::temp_dir().join(format!(
             "omega-tool-loop-metrics-{}.jsonl",
             std::process::id()
@@ -2264,7 +2224,7 @@ mod tests {
                 "{\"tool\":\"write_file\",\"args\":{\"path\":\"hello.py\",\"content\":\"print(1)\"}} {\"answer\":\"file created and executed: Hello, Ashat\"}"}}]});
             Box::pin(async move { Ok::<Value, ProxyError>(v) })
         });
-        let tl = ToolLoop::with_sender(pool, ws, cfg(), SkillDb::disabled(), sender);
+        let tl = ToolLoop::with_sender(pool, ws, cfg(), sender);
         let metrics = Arc::new(MetricsStore::open(&std::env::temp_dir().join(format!(
             "omega-tool-loop-metrics-concat-{}.jsonl",
             std::process::id()
