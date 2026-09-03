@@ -7,6 +7,65 @@
 @import './components/editor.scss';
 @import './components/toast.scss';
 
+:root {
+  --galileo-bg-void: #050505;
+  --galileo-bg-base: #080808;
+  --galileo-bg-panel: rgba(18, 18, 18, 0.76);
+  --galileo-accent: #ff7a1a;
+  --galileo-accent-soft: #ffb26b;
+  --galileo-text: #f7f7f7;
+  --galileo-text-muted: #777;
+  --galileo-border: rgba(255, 255, 255, 0.08);
+  --galileo-success: #47d18c;
+  --galileo-error: #f06464;
+}
+
+html,
+body {
+  background: var(--galileo-bg-void);
+  color: var(--galileo-text);
+}
+
+header {
+  background: rgba(8, 8, 8, 0.82) !important;
+  border-color: var(--galileo-border) !important;
+  backdrop-filter: blur(18px) saturate(120%);
+  box-shadow: inset 0 -1px 0 rgba(255, 122, 26, 0.08);
+}
+
+[data-chat-visible='true'] {
+  background:
+    radial-gradient(circle at 50% -20%, rgba(255, 122, 26, 0.07), transparent 42%),
+    var(--galileo-bg-void) !important;
+}
+
+textarea {
+  background: linear-gradient(180deg, rgba(255, 122, 26, 0.035), rgba(12, 12, 12, 0.72)) !important;
+  border: 1px solid var(--galileo-border);
+  border-radius: 14px;
+  backdrop-filter: blur(18px) saturate(120%);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
+textarea:focus {
+  border-color: rgba(255, 122, 26, 0.42);
+  box-shadow: 0 0 0 1px rgba(255, 122, 26, 0.08), 0 0 30px rgba(255, 122, 26, 0.07);
+}
+
+#intro h1 {
+  color: var(--galileo-text) !important;
+  letter-spacing: -0.04em;
+}
+
+#intro p,
+#examples button {
+  color: var(--galileo-text-muted) !important;
+}
+
+#examples button:hover {
+  color: var(--galileo-accent-soft) !important;
+}
+
 html,
 body {
   height: 100%;
