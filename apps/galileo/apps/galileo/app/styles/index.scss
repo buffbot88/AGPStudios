@@ -125,6 +125,32 @@ kbd.kdb {
   }
 }
 
+.galileo-message {
+  border: 1px solid transparent;
+}
+
+.galileo-user-message {
+  margin-left: auto;
+  max-width: 78%;
+  background: rgba(24, 24, 24, 0.72) !important;
+  border-color: var(--galileo-border);
+}
+
+.galileo-assistant-message {
+  background: transparent !important;
+}
+
+.galileo-assistant-message > div:last-child {
+  max-width: 980px;
+}
+
+.galileo-verification-card {
+  background: linear-gradient(135deg, rgba(255, 122, 26, 0.06), rgba(12, 12, 12, 0.76));
+  border-color: var(--galileo-border) !important;
+  border-left: 2px solid var(--galileo-accent) !important;
+  backdrop-filter: blur(14px);
+}
+
 html,
 body {
   height: 100%;

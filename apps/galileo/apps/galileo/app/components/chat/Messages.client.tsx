@@ -35,11 +35,13 @@ export const Messages = React.forwardRef<HTMLDivElement, MessagesProps>((props: 
             return (
               <div
                 key={index}
-                className={classNames('flex gap-4 p-6 w-full rounded-[calc(0.75rem-1px)]', {
+                className={classNames('galileo-message flex gap-4 p-6 w-full rounded-[calc(0.75rem-1px)]', {
                   'bg-bolt-elements-messages-background': isUserMessage || !isStreaming || (isStreaming && !isLast),
                   'bg-gradient-to-b from-bolt-elements-messages-background from-30% to-transparent':
                     isStreaming && isLast,
                   'mt-4': !isFirst,
+                  'galileo-user-message': isUserMessage,
+                  'galileo-assistant-message': !isUserMessage,
                 })}
               >
                 {isUserMessage && (
@@ -59,7 +61,7 @@ export const Messages = React.forwardRef<HTMLDivElement, MessagesProps>((props: 
           })
         : null}
       {jobEvents.length > 0 && (
-        <details open className="mt-4 rounded border border-bolt-elements-borderColor p-4 text-sm">
+        <details open className="galileo-verification-card mt-4 rounded border border-bolt-elements-borderColor p-4 text-sm">
           <summary className="cursor-pointer">Agent activity ({jobEvents.length})</summary>
           <div className="mt-2 space-y-1">{jobEvents.map((event, index) => <AgentPart key={`${event}-${index}`} part={normalizeBuildEvent(event, index)} />)}</div>
         </details>
