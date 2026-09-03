@@ -155,6 +155,8 @@ pub struct ChatRequest {
     /// Declares the operation so routing never infers intent from user text.
     #[serde(default)]
     pub operation: Option<AgentOperation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<Value>>,
 }
 
 /// Omega v6 model variant: uses ollama.cpp as the inference backend.

@@ -86,6 +86,7 @@ mod tests {
             top_p: None,
             stream: None,
             operation: None,
+            tools: None,
         }
     }
 

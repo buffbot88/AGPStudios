@@ -137,20 +137,17 @@ impl ToolLoop {
                     top_p: None,
                     stream: Some(false),
                     operation: None,
+                    tools: Some(tool_definitions()),
                 };
                 let value = (self.sender)(&guard, &model_req).await?;
                 let text = extract_content(&value).unwrap_or_default();
                 state.last_text = text.clone();
-                match parse_action(&text) {
+                match parse_response(&value) {
                     Action::Answer(answer) => {
                         info!(port, iterations = state.iterations, "tool loop answered");
                         state.answered = Some(answer);
                     }
-                    Action::Tool {
-                        name,
-                        args,
-                        final_answer,
-                    } => {
+                    Action::Tool { name, args } => {
                         state.iterations += 1;
                         let outcome = execute_tool(
                             &name,
@@ -169,20 +166,9 @@ impl ToolLoop {
                             content: text,
                         });
                         state.messages.push(ChatMessage {
-                            role: "user".to_owned(),
-                            content: format!("[tool {name} result]\n{}", outcome.output),
+                            role: "tool".to_owned(),
+                            content: outcome.output,
                         });
-                        // Small models often emit `{"tool": ...} {"answer": ...}`
-                        // concatenated: the tool already ran (real side effect);
-                        // finish the loop with the co-present answer.
-                        if let Some(answer) = final_answer {
-                            info!(
-                                port,
-                                iterations = state.iterations,
-                                "tool loop answered (trailing answer block)"
-                            );
-                            state.answered = Some(answer);
-                        }
                     }
                     Action::None => {
                         state.messages.push(ChatMessage {
@@ -191,10 +177,7 @@ impl ToolLoop {
                         });
                         state.messages.push(ChatMessage {
                             role: "user".to_owned(),
-                            content: "Your last response was not a valid action. Emit exactly \
-                                     one JSON object: {\"tool\":\"<name>\",\"args\":{...}} to call \
-                                     a tool, or {\"answer\":\"<final response>\"} to finish. No \
-                                     prose around it."
+                            content: "Your last response contained neither text nor a tool call. Return a final answer or use one of the declared tools."
                                 .to_owned(),
                         });
                     }
@@ -305,7 +288,7 @@ impl RunState {
         let dir = workspace.ensure_agent_dir(port).unwrap_or_default();
         let system = format!(
             "You are Ashat's advanced coding agent. You work in the workspace directory {}.\n\
-             You may call tools by replying with EXACTLY one JSON object and nothing else:\n\
+             You may call tools using the native tool interface. Tool arguments are schema-validated:\n\
              \n\
              TIER 1 — File system tools:\n\
              {{\"tool\": \"read_file\", \"args\": {{\"path\": \"relative/path\"}}}}\n\
@@ -356,9 +339,6 @@ enum Action {
     Tool {
         name: String,
         args: Value,
-        /// Set when the reply also contained an `answer`/`finish` block: the
-        /// tool still executes (side effect), then the loop finishes with this.
-        final_answer: Option<String>,
     },
     None,
 }
@@ -370,23 +350,28 @@ fn extract_content(value: &Value) -> Option<String> {
         .map(|s| s.to_owned())
 }
 
-/// Interpret only a complete JSON action response. Prose is never inspected
-/// for tool calls; native structured tool transport is the migration target.
-fn parse_action(text: &str) -> Action {
-    let Ok(value) = serde_json::from_str::<Value>(text.trim()) else {
-        return Action::None;
-    };
-    if let Some(answer) = value.get("answer").and_then(Value::as_str) {
-        return Action::Answer(answer.trim().to_owned());
+/// Interpret the model's native OpenAI-compatible response.
+fn parse_response(value: &Value) -> Action {
+    let message = value.get("choices").and_then(Value::as_array)
+        .and_then(|choices| choices.first()).and_then(|choice| choice.get("message"));
+    if let Some(call) = message.and_then(|m| m.get("tool_calls")).and_then(Value::as_array).and_then(|calls| calls.first()) {
+        let function = call.get("function").cloned().unwrap_or_else(|| json!({}));
+        let name = function.get("name").and_then(Value::as_str).unwrap_or("").trim().to_lowercase();
+        let raw_args = function.get("arguments").and_then(Value::as_str).unwrap_or("{}");
+        let args = serde_json::from_str(raw_args).unwrap_or_else(|_| json!({}));
+        return Action::Tool { name, args };
     }
-    if let Some(answer) = value.get("finish").and_then(Value::as_str) {
-        return Action::Answer(answer.trim().to_owned());
+    match message.and_then(|m| m.get("content")).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()) {
+        Some(text) => Action::Answer(text.to_owned()),
+        None => Action::None,
     }
-    value.get("tool").and_then(Value::as_str).map_or(Action::None, |name| Action::Tool {
-        name: name.trim().to_lowercase(),
-        args: value.get("args").cloned().unwrap_or_else(|| json!({})),
-        final_answer: None,
-    })
+}
+
+fn tool_definitions() -> Vec<Value> {
+    ["read_file", "write_file", "str_replace", "sed_replace", "list_dir", "tree", "glob", "code_search", "run_command", "apply_patch", "git_status", "git_diff", "validate"]
+        .into_iter()
+        .map(|name| json!({"type":"function","function":{"name":name,"parameters":{"type":"object"}}}))
+        .collect()
 }
 
 async fn execute_tool(
@@ -1370,17 +1355,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_action_detects_answer_and_tool() {
-        assert!(matches!(parse_action("{\"answer\":\"done\"}"), Action::Answer(a) if a == "done"));
-        assert!(matches!(parse_action("{\"finish\":\"ok\"}"), Action::Answer(a) if a == "ok"));
-        assert!(matches!(
-            parse_action("{\"tool\":\"list_dir\",\"args\":{}}"),
-            Action::Tool { name, .. } if name == "list_dir"
-        ));
-        assert!(matches!(parse_action("nothing useful"), Action::None));
-    }
-
-    #[test]
     fn safe_join_rejects_escapes() {
         let (ws, root) = temp_workspace("join");
         let dir = ws.ensure_agent_dir(18080).expect("agent dir");
@@ -2041,9 +2015,9 @@ mod tests {
         let sender: Sender = Arc::new(move |_guard, _req| {
             let n = calls2.fetch_add(1, Ordering::SeqCst);
             let v = if n == 0 {
-                json!({"choices": [{"message": {"content": "{\"tool\":\"write_file\",\"args\":{\"path\":\"hello.py\",\"content\":\"print(1)\"}}"}}]})
+                json!({"choices": [{"message": {"content": null, "tool_calls": [{"id":"call-1","type":"function","function":{"name":"write_file","arguments":"{\"path\":\"hello.py\",\"content\":\"print(1)\"}"}}]}}]})
             } else {
-                json!({"choices": [{"message": {"content": "{\"answer\":\"done\"}"}}]})
+                json!({"choices": [{"message": {"content": "done"}}]})
             };
             Box::pin(async move { Ok::<Value, ProxyError>(v) })
         });
@@ -2063,6 +2037,7 @@ mod tests {
             top_p: None,
             stream: None,
             operation: None,
+            tools: None,
         };
         let resp = tl.run(&req, &metrics).await.expect("loop ok");
         assert_eq!(resp.choices[0].message.content, "done");
