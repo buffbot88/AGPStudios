@@ -1,9 +1,6 @@
 //! Loads `server-config.json` and overlays environment variables.
 //!
-//! Resolves the `llama-server` binary location in priority order:
-//! 1. `server.orchestrator_binary_default` in `server-config.json`
-//! 2. `ASHAT_LLAMA_BIN` environment variable
-//! 3. Plain `PATH` lookup
+//! Resolves the `llama-server` binary location from the environment or PATH.
 
 use crate::models::ResolvedModels;
 use crate::types::BackendServer;
@@ -13,8 +10,6 @@ use std::{env, path::PathBuf};
 #[derive(Debug, Clone, Deserialize)]
 pub struct ServerSection {
     pub bind: String,
-    #[serde(default = "default_binary")]
-    pub orchestrator_binary_default: String,
 }
 
 fn default_binary() -> String {
@@ -25,8 +20,6 @@ fn default_binary() -> String {
 pub struct ModelsSection {
     #[serde(default = "default_models_dir")]
     pub dir: String,
-    #[serde(default)]
-    pub orchestrator_hint: Option<String>,
     #[serde(default)]
     pub inference_hint: Option<String>,
 }
@@ -58,17 +51,6 @@ fn default_max_tokens() -> u32 {
 
 fn default_threads() -> u32 {
     2
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct OrchestratorPoolSection {
-    pub ports_baseline: Vec<u16>,
-    #[serde(default)]
-    pub ports_extra: Vec<u16>,
-    #[serde(default = "default_queue_max")]
-    pub queue_max: usize,
-    #[serde(default = "default_spawn_attempts")]
-    pub spawn_attempts_before_503: u32,
 }
 
 fn default_queue_max() -> usize {
@@ -257,7 +239,6 @@ pub struct FileConfig {
     pub server: ServerSection,
     pub models: ModelsSection,
     pub inference: InferenceSection,
-    pub orchestrator_pool: OrchestratorPoolSection,
     pub coding_agent_pool: CodingAgentPoolSection,
     pub row_chain: Vec<BackendServer>,
     pub metrics: MetricsSection,
@@ -285,12 +266,9 @@ pub struct AppConfig {
     pub admin_key: Option<String>,
     /// Resolved path to the `llama-server` binary.
     pub llama_binary: PathBuf,
-    /// Resolved orchestrator GGUF file path.
-    pub orchestrator_model: PathBuf,
     /// Resolved 1.2B GGUF file path.
     pub inference_model: PathBuf,
     pub inference: InferenceSection,
-    pub orchestrator_pool: OrchestratorPoolSection,
     pub coding_agent_pool: CodingAgentPoolSection,
     pub backends: Vec<BackendServer>,
     pub metrics_path: PathBuf,
@@ -318,13 +296,13 @@ impl AppConfig {
 
         let resolved = ResolvedModels::discover(
             &models_dir,
-            file.models.orchestrator_hint.as_deref(),
+            None,
             file.models.inference_hint.as_deref(),
         );
 
         let llama_name = env::var("ASHAT_LLAMA_BIN")
             .ok()
-            .unwrap_or_else(|| file.server.orchestrator_binary_default.clone());
+            .unwrap_or_else(default_binary);
         let llama_binary = resolve_llama_binary(&llama_name);
 
         let bind = env::var("OMEGA_BIND").unwrap_or_else(|_| file.server.bind.clone());
@@ -343,10 +321,8 @@ impl AppConfig {
             ash_key: file.ash_key,
             admin_key,
             llama_binary,
-            orchestrator_model: resolved.orchestrator_path,
             inference_model: resolved.inference_path,
             inference: file.inference,
-            orchestrator_pool: file.orchestrator_pool,
             coding_agent_pool: file.coding_agent_pool,
             backends: file.row_chain,
             metrics_path,
@@ -409,7 +385,6 @@ mod tests {
         assert_eq!(cfg.hub.url, "");
         assert_eq!(cfg.workspace.dir, "workspaces");
         assert_eq!(cfg.server.bind, "0.0.0.0:8080");
-        assert_eq!(cfg.orchestrator_pool.ports_baseline, vec![18079]);
     }
 
     #[test]

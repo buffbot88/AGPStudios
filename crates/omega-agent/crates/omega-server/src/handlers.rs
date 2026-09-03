@@ -598,7 +598,7 @@ pub async fn list_models(State(state): State<Arc<AppState>>) -> Json<Value> {
             "purpose": "intent-classification",
             "model": "Omega v6",
             "engine": "ollama.cpp",
-            "model_path": public_model_name(&state.config.orchestrator_model),
+            "model_path": public_model_name(&state.config.inference_model),
         }),
         json!({
             "id": coding_label,
@@ -615,7 +615,7 @@ pub async fn list_models(State(state): State<Arc<AppState>>) -> Json<Value> {
         name: "Omega-v6".to_string(),
         version: "6.0.0".to_string(),
         engine: "ollama.cpp".to_string(),
-        model_path: public_model_name(&state.config.orchestrator_model),
+        model_path: public_model_name(&state.config.inference_model),
         description: "Omega v6 model optimized for ollama.cpp inference".to_string(),
     };
     models.push(json!(omega_v6));
