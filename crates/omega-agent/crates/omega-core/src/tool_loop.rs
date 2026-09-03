@@ -604,30 +604,11 @@ async fn execute_tool(
             let base = args.get("base").and_then(Value::as_str).unwrap_or("");
             git_diff(&dir, path, staged, base, cfg).await
         }
-        // DEPRECATE: web capabilities belong to Alpha/Galileo.
-        "read_url" | "read-url" => {
-            let url = args.get("url").and_then(Value::as_str).unwrap_or("");
-            let max_chars = args
-                .get("max_chars")
-                .and_then(Value::as_u64)
-                .unwrap_or(20000) as usize;
-            read_url(url, max_chars).await
-        }
-        // DEPRECATE: web capabilities belong to Alpha/Galileo.
-        "web_search" | "web-search" => {
-            let query = args.get("query").and_then(Value::as_str).unwrap_or("");
-            let depth = args.get("depth").and_then(Value::as_str).unwrap_or("standard");
-            web_search(query, depth, &cfg.serper_api_key).await
-        }
         // DEPRECATE: retained only for old clients until native execution is universal.
         "validate" => match safe_join(&dir, path_arg) {
             Ok(joined) => validate_file_abs(&joined, cfg).await,
             Err(e) => Err(e),
         },
-        "skill" => {
-            let skill = args.get("name").and_then(Value::as_str).unwrap_or("");
-            skill_lookup(skill_db, skill).await
-        }
         other => Err(format!("unknown tool: {other}")),
     };
     ToolOutcome {
@@ -2033,22 +2014,6 @@ mod tests {
         );
         let _ = dir;
         std::fs::remove_dir_all(&root).ok();
-    }
-
-    #[test]
-    fn skill_tool_reports_disabled() {
-        let (ws, _root) = temp_workspace("skill");
-        let out = tokio::runtime::Runtime::new()
-            .unwrap()
-            .block_on(execute_tool(
-                "skill",
-                &json!({"name": "rust-borrowing"}),
-                &ws,
-                18080,
-                &cfg(),
-                &SkillDb::disabled(),
-            ));
-        assert!(out.output.contains("disabled"), "{}", out.output);
     }
 
     #[tokio::test]
