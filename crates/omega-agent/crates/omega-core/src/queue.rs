@@ -10,7 +10,7 @@ use tokio::sync::{Mutex, Notify};
 #[derive(Debug, Clone, Copy)]
 struct Ticket;
 
-/// Bounded FIFO shared between the Orchestrator pool and the Coding Agent pool.
+/// Bounded FIFO shared between the execution pool.
 #[derive(Debug, Clone)]
 pub struct WaitQueue {
     inner: Arc<Inner>,

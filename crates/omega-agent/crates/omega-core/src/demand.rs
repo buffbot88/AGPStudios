@@ -1,7 +1,7 @@
 //! Generic spawn-on-demand pool of `llama-server` children.
 //!
 //! Spawn-on-demand pool of `llama-server` children used by both the intent
-//! router / Orchestrator (18079 baseline + 18078/18077 extras) and the
+//! execution lanes and the
 //! 1.2B Coding
 //! Agent (18080/18081/18082); callers `acquire()` a slot and the guard reclaims
 //! it on drop.

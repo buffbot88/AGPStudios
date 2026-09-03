@@ -208,7 +208,7 @@ pub struct ChatUsage {
 pub struct HealthResponse {
     pub status: &'static str,
     pub uptime_seconds: f64,
-    pub orchestrator_ready: bool,
+    pub execution_ready: bool,
     pub coding_agent_capacity: CodingCapacitySnapshot,
 }
 
@@ -353,7 +353,7 @@ pub struct PublicStatus {
     pub queue: QueueStatus,
     pub lanes: Lanes,
     pub all_ready: bool,
-    pub orchestrator_pool: PoolSnapshot,
+    pub execution_pool: PoolSnapshot,
     pub coding_agent_pool: PoolSnapshot,
     /// How many 1.2B Coding Agent lanes are currently alive right now.
     #[serde(default)]

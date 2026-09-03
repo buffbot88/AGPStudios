@@ -42,7 +42,7 @@ pub struct AppState {
     pub coding_agent: CodingAgentProxy,
     pub coding_agent_pool: Arc<DemandPool>,
     /// Advanced coding agent (Phase 6): drives a held 1.2B slot through the
-    /// tool loop when the orchestrator classifies intent as `code`.
+    /// tool loop when the execution classifies intent as `code`.
     pub tool_loop: ToolLoop,
     /// Cross-server proxy used when the row chain picks a non-`omega`
     /// backend (Beta, Delta, ...). Inactive while all non-`omega`
@@ -78,13 +78,13 @@ background:#1f1f25;color:#ff7a45;font:11px ui-monospace}</style></head>\
 }
 
 pub async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
-    let orchestrator_ready = state.coding_agent_pool.baseline_alive().await;
+    let execution_ready = state.coding_agent_pool.snapshot().await.ports_total > 0;
     let snapshot = state.coding_agent_pool.snapshot().await;
     let metrics = state.metrics.summary(state.started.elapsed().as_secs_f64());
     Json(HealthResponse {
         status: "ok",
         uptime_seconds: state.started.elapsed().as_secs_f64(),
-        orchestrator_ready,
+        execution_ready,
         coding_agent_capacity: CodingCapacitySnapshot {
             ports_total: snapshot.ports_total,
             ports_active: snapshot.ports_active,
@@ -117,7 +117,7 @@ pub async fn public_status(State(state): State<Arc<AppState>>) -> Json<PublicSta
 
 /// Snapshot shared by `/api/public_status` and the Alpha reporter's hub posts.
 pub(crate) async fn status_snapshot(state: &Arc<AppState>) -> PublicStatus {
-    let orchestrator_snap = state.coding_agent_pool.snapshot().await;
+    let execution_snap = state.coding_agent_pool.snapshot().await;
     let coding_snap = state.coding_agent_pool.snapshot().await;
     let metrics = state.metrics.summary(state.started.elapsed().as_secs_f64());
     let peer_snap = state.peer_telemetry.snapshot().await;
@@ -145,7 +145,7 @@ pub(crate) async fn status_snapshot(state: &Arc<AppState>) -> PublicStatus {
     // them, offline placeholders otherwise.
     let lane_beta = peer_lane(&peer_snap, "beta", "Beta");
     let lane_delta = peer_lane(&peer_snap, "delta", "Delta");
-    let all_ready = orchestrator_snap.baseline_alive && coding_snap.ports_total > 0;
+    let all_ready = coding_snap.ports_total > 0;
     let coding_agent_pool_snapshot = PoolSnapshot {
         ports_total: coding_snap.ports_total,
         ports_active: coding_snap.ports_active,
@@ -159,7 +159,7 @@ pub(crate) async fn status_snapshot(state: &Arc<AppState>) -> PublicStatus {
     PublicStatus {
         uptime_seconds: state.started.elapsed().as_secs_f64(),
         llama_server_available: state.coding_agent_pool.baseline_alive().await,
-        degraded: !orchestrator_snap.baseline_alive,
+        degraded: coding_snap.ports_total == 0,
         queue: QueueStatus {
             depth: coding_snap.queue_depth,
             limit: coding_snap.queue_limit,
@@ -170,15 +170,15 @@ pub(crate) async fn status_snapshot(state: &Arc<AppState>) -> PublicStatus {
             delta: lane_delta,
         },
         all_ready,
-        orchestrator_pool: PoolSnapshot {
-            ports_total: orchestrator_snap.ports_total,
-            ports_active: orchestrator_snap.ports_active,
-            baseline_alive: orchestrator_snap.baseline_alive,
-            extras_active: orchestrator_snap.extras_active.clone(),
-            free_ports: orchestrator_snap.free_ports.clone(),
-            queue_depth: orchestrator_snap.queue_depth,
-            queue_limit: orchestrator_snap.queue_limit,
-            last_failure_reason: orchestrator_snap.last_failure_reason.clone(),
+        execution_pool: PoolSnapshot {
+            ports_total: execution_snap.ports_total,
+            ports_active: execution_snap.ports_active,
+            baseline_alive: execution_snap.baseline_alive,
+            extras_active: execution_snap.extras_active.clone(),
+            free_ports: execution_snap.free_ports.clone(),
+            queue_depth: execution_snap.queue_depth,
+            queue_limit: execution_snap.queue_limit,
+            last_failure_reason: execution_snap.last_failure_reason.clone(),
         },
         coding_agent_pool: coding_agent_pool_snapshot,
         lanes_in_use: coding_snap.ports_active as u32,
@@ -280,7 +280,7 @@ fn peer_lane(peers: &HashMap<String, PeerSnapshot>, id: &str, label: &str) -> La
             // The slave's own lane reads `offline` until its first request
             // (metrics placeholder), but a reachable peer with a live
             // baseline is genuinely online — surface that instead.
-            if lane.total_requests == 0 && status.orchestrator_pool.baseline_alive {
+            if lane.total_requests == 0 && status.execution_pool.baseline_alive {
                 lane.lane_state = "online".to_owned();
                 lane.ready = true;
                 lane.available = true;
@@ -575,7 +575,7 @@ fn truncate_tail(s: &str, max: usize) -> String {
 }
 
 pub async fn list_models(State(state): State<Arc<AppState>>) -> Json<Value> {
-    let orchestrator_label = state
+    let execution_label = state
         .coding_agent_pool
         .spec
         .model
@@ -593,8 +593,8 @@ pub async fn list_models(State(state): State<Arc<AppState>>) -> Json<Value> {
     // Build the model list with Omega v6 support.
     let mut models = vec![
         json!({
-            "id": orchestrator_label,
-            "owned_by": "ashat-350m-router",
+            "id": execution_label,
+            "owned_by": "ashat-1.2b-execution",
             "purpose": "intent-classification",
             "model": "Omega v6",
             "engine": "ollama.cpp",
