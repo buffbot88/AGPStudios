@@ -7,7 +7,6 @@ use axum::{
     response::{Html, IntoResponse, Response},
     Json,
 };
-use chrono::Utc;
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
@@ -21,8 +20,8 @@ use crate::peer_telemetry::{PeerSnapshot, PeerTelemetry};
 use omega_common::config::{AppConfig, UpdatePeer};
 use omega_common::metrics::MetricsStore;
 use omega_common::types::{
-    public_model_name, sanitize_model_name, ChatRequest, CodingCapacitySnapshot, HealthResponse,
-    Intent, LaneStatus, MetricRecord, OmegaModelConfig, Pool, PoolSnapshot, PublicStatus,
+    public_model_name, sanitize_model_name, AgentOperation, ChatRequest, CodingCapacitySnapshot,
+    HealthResponse, Intent, LaneStatus, OmegaModelConfig, PoolSnapshot, PublicStatus,
     QueueStatus,
 };
 use omega_core::demand::DemandPool;
@@ -668,7 +667,6 @@ pub async fn chat(State(state): State<Arc<AppState>>, request: Request<Body>) ->
             .into_response();
     }
 
-    let started = Instant::now();
     let stream_mode = parsed.stream.unwrap_or(false);
 
     // Walk the row chain first; we want to reject early if the routing layer
@@ -686,29 +684,14 @@ pub async fn chat(State(state): State<Arc<AppState>>, request: Request<Body>) ->
         }
     };
 
-    let (intent, orchestrator_guard) = state
-        .orchestrator
-        .classify(&parsed.messages, &state.metrics)
-        .await;
-    drop(orchestrator_guard);
-
+    // Operation is declared by the caller; routing never infers intent from prose.
+    let intent = match parsed.operation {
+        Some(AgentOperation::Agent) => Intent::Code,
+        Some(AgentOperation::Chat) | Some(AgentOperation::Vision) | None => Intent::Chat,
+    };
     let intent_label = intent.as_str();
-    state.metrics.record(MetricRecord {
-        timestamp: Utc::now().to_rfc3339(),
-        pool: Pool::Orchestrator,
-        intent: intent_label,
-        target_port: 0,
-        success: true,
-        latency_ms: started.elapsed().as_secs_f64() * 1000.0,
-        queue_wait_ms: 0.0,
-        prompt_tokens: 0,
-        completion_tokens: 0,
-        time_to_first_token_ms: None,
-        error_category: None,
-    });
 
-    // Advanced coding agent: `code` intent on the local lane runs the tool
-    // loop; the other intents use the plain proxy paths below.
+    // Agent operations use the local coding lane's structured tool loop.
     if backend.id == "omega" && intent == Intent::Code {
         return forward_tool_loop(&state, &parsed, stream_mode).await;
     }

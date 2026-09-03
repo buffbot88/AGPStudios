@@ -85,6 +85,7 @@ mod tests {
             temperature: None,
             top_p: None,
             stream: None,
+            operation: None,
         }
     }
 

@@ -151,6 +151,7 @@ impl ToolLoop {
                     temperature: Some(0.0),
                     top_p: None,
                     stream: Some(false),
+                    operation: None,
                 };
                 let value = (self.sender)(&guard, &model_req).await?;
                 let text = extract_content(&value).unwrap_or_default();
@@ -2634,6 +2635,7 @@ mod tests {
             temperature: None,
             top_p: None,
             stream: None,
+            operation: None,
         };
         let resp = tl.run(&req, &metrics).await.expect("loop ok");
         assert_eq!(resp.choices[0].message.content, "done");
@@ -2673,6 +2675,7 @@ mod tests {
             temperature: None,
             top_p: None,
             stream: None,
+            operation: None,
         };
         let resp = tl.run(&req, &metrics).await.expect("loop ok");
         assert!(resp.choices[0].message.content.contains("Hello, Ashat"));

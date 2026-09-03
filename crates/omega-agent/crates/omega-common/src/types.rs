@@ -152,6 +152,9 @@ pub struct ChatRequest {
     pub top_p: Option<f32>,
     #[serde(default)]
     pub stream: Option<bool>,
+    /// Declares the operation so routing never infers intent from user text.
+    #[serde(default)]
+    pub operation: Option<AgentOperation>,
 }
 
 /// Omega v6 model variant: uses ollama.cpp as the inference backend.
