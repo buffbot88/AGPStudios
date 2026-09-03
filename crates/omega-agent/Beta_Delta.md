@@ -1,3 +1,5 @@
+> ARCHIVED — historical migration document; see README.md for the supported topology.
+
 # Beta / Delta peer access + seeding
 
 ## SSH access (uses ./oraclehost_id_rsa, chmod 600)

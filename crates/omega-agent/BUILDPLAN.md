@@ -1,3 +1,5 @@
+> ARCHIVED — historical migration document; see README.md for the supported topology.
+
 # Build Plan — Ashat Master Coding Agent (Omega)
 
 > **Current-source note (v8):** This document preserves the historical implementation plan. The current source uses the 350M text model as the always-on intent router and ships as a server/API tree. For current behavior, use `README.md`, `CONTRIBUTING.md`, and `ROADMAP.md`.
