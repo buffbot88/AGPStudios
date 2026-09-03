@@ -88,7 +88,6 @@ mod tests {
     #[test]
     fn execution_fallback_selects_12b_instruct_model() {
         with_model_dir(|dir| {
-            touch(dir, "LFM2.5-350M-Q4_K_M.gguf");
             touch(dir, "LFM2.5-1.2B-Instruct-Q4_K_M.gguf");
             let set = ResolvedModels::discover(dir, None);
             assert!(set.inference_label.contains("1.2B-Instruct"));
