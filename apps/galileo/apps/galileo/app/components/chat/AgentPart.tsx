@@ -35,7 +35,7 @@ function ToolCallPart({ part }: { part: Extract<AgentPartData, { type: 'tool-cal
   const summary = getToolSummary(part.tool, part.args);
 
   return (
-    <div className="my-2 rounded-md border border-bolt-elements-borderColor text-xs">
+    <div className="galileo-activity-card my-2 rounded-md border border-bolt-elements-borderColor text-xs">
       <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-bolt-elements-item-backgroundActive" onClick={() => setOpen((value) => !value)}>
         <StatusIcon status={part.status} />
         <span className="flex-1 text-bolt-elements-textSecondary"><strong className="mr-1 text-bolt-elements-textPrimary">{part.agent}</strong>{summary}</span>
@@ -52,7 +52,7 @@ function ToolResultPart({ part }: { part: Extract<AgentPartData, { type: 'tool-r
   const value = failed ? part.error : typeof part.result === 'string' ? part.result : JSON.stringify(part.result, null, 2);
 
   return (
-    <div className={classNames('my-2 rounded-md border text-xs', failed ? 'border-bolt-elements-icon-error' : 'border-bolt-elements-borderColor')}>
+    <div className={classNames('galileo-activity-card my-2 rounded-md border text-xs', failed ? 'border-bolt-elements-icon-error' : 'border-bolt-elements-borderColor')}>
       <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-bolt-elements-item-backgroundActive" onClick={() => setOpen((current) => !current)}>
         <StatusIcon status={failed ? 'failed' : 'complete'} />
         <span className="flex-1 text-bolt-elements-textSecondary">{failed ? 'Tool failed' : 'Tool result'}</span>
@@ -67,7 +67,7 @@ function CommandPart({ part }: { part: Extract<AgentPartData, { type: 'command' 
   const [open, setOpen] = useState(part.status === 'running' || part.status === 'failed');
 
   return (
-    <div className="my-2 rounded-md border border-bolt-elements-borderColor text-xs">
+    <div className="galileo-activity-card my-2 rounded-md border border-bolt-elements-borderColor text-xs">
       <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-bolt-elements-item-backgroundActive" onClick={() => setOpen((value) => !value)}>
         <StatusIcon status={part.status} />
         <strong className="text-bolt-elements-textPrimary">Builder</strong><code className="flex-1 truncate text-bolt-elements-textSecondary">{part.command}</code>
@@ -83,7 +83,7 @@ export function StreamingAgentStatus() {
 }
 
 function ActivityRow({ icon, label, status, agent }: { icon: string; label: string; status: string; agent: string }) {
-  return <div className="my-2 flex items-center gap-2 text-xs text-bolt-elements-textSecondary"><StatusIcon status={status} fallbackIcon={icon} /><strong className="text-bolt-elements-textPrimary">{agent}</strong><span>{label}</span></div>;
+  return <div className="galileo-activity-row my-2 flex items-center gap-2 text-xs text-bolt-elements-textSecondary"><StatusIcon status={status} fallbackIcon={icon} /><strong className="text-bolt-elements-textPrimary">{agent}</strong><span>{label}</span></div>;
 }
 
 function StatusIcon({ status, fallbackIcon }: { status: string; fallbackIcon?: string }) {

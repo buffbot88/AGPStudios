@@ -66,6 +66,38 @@ textarea:focus {
   color: var(--galileo-accent-soft) !important;
 }
 
+.side-menu {
+  background: rgba(8, 8, 8, 0.9) !important;
+  border-color: var(--galileo-border) !important;
+  border-radius: 0 18px 18px 0 !important;
+  backdrop-filter: blur(22px) saturate(120%);
+  box-shadow: 12px 0 40px rgba(0, 0, 0, 0.38);
+}
+
+.galileo-activity-card {
+  background: linear-gradient(135deg, rgba(255, 122, 26, 0.055), rgba(12, 12, 12, 0.72));
+  border-color: var(--galileo-border) !important;
+  border-left-color: rgba(255, 122, 26, 0.42) !important;
+  border-radius: 12px;
+  backdrop-filter: blur(14px);
+}
+
+.galileo-activity-card button:hover {
+  background: rgba(255, 122, 26, 0.08);
+}
+
+.galileo-activity-row {
+  padding: 5px 9px;
+  border-left: 2px solid rgba(255, 122, 26, 0.3);
+}
+
+kbd.kdb {
+  border: 1px solid var(--galileo-border);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 1px 5px;
+}
+
 html,
 body {
   height: 100%;
