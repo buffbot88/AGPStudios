@@ -98,6 +98,33 @@ kbd.kdb {
   padding: 1px 5px;
 }
 
+.galileo-project-selector {
+  color: var(--galileo-accent-soft) !important;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.galileo-workbench {
+  background: var(--galileo-bg-panel) !important;
+  border-color: var(--galileo-border) !important;
+  border-radius: 14px !important;
+  backdrop-filter: blur(18px) saturate(120%);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
+.galileo-workbench > div:first-child {
+  border-color: var(--galileo-border) !important;
+  background: rgba(255, 122, 26, 0.035);
+}
+
+@media (max-width: 900px) {
+  .galileo-workbench {
+    position: fixed;
+    inset: calc(var(--header-height) + 0.5rem) 0.5rem 0.5rem !important;
+    width: auto !important;
+  }
+}
+
 html,
 body {
   height: 100%;
