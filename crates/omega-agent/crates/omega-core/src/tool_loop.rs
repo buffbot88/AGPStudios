@@ -370,110 +370,23 @@ fn extract_content(value: &Value) -> Option<String> {
         .map(|s| s.to_owned())
 }
 
-/// Interpret the model's reply as a final answer, a tool call, or nothing.
-///
-/// Scans *all* balanced JSON blocks in the reply (small models often emit
-/// `{"tool": ...} {"answer": ...}` concatenated or wrap actions in prose).
-/// If a tool block is present it is returned even when an answer block is
-/// also present — the caller executes the tool (side effect) and then uses
-/// the co-present answer as the final text. Without a tool block, a lone
-/// answer/finish block wins.
+/// Interpret only a complete JSON action response. Prose is never inspected
+/// for tool calls; native structured tool transport is the migration target.
 fn parse_action(text: &str) -> Action {
-    let blocks = json_blocks(text);
-    let mut answer: Option<(usize, String)> = None;
-    for (i, v) in blocks.iter().enumerate() {
-        if let Some(a) = v.get("answer").and_then(Value::as_str) {
-            answer = Some((i, a.trim().to_owned()));
-            break;
-        }
-        if let Some(f) = v.get("finish").and_then(Value::as_str) {
-            answer = Some((i, f.trim().to_owned()));
-            break;
-        }
+    let Ok(value) = serde_json::from_str::<Value>(text.trim()) else {
+        return Action::None;
+    };
+    if let Some(answer) = value.get("answer").and_then(Value::as_str) {
+        return Action::Answer(answer.trim().to_owned());
     }
-    let mut tool: Option<(usize, String, Value)> = None;
-    for (i, v) in blocks.iter().enumerate() {
-        if let Some(t) = v.get("tool").and_then(Value::as_str) {
-            tool = Some((
-                i,
-                t.trim().to_lowercase(),
-                v.get("args").cloned().unwrap_or_else(|| json!({})),
-            ));
-            break;
-        }
+    if let Some(answer) = value.get("finish").and_then(Value::as_str) {
+        return Action::Answer(answer.trim().to_owned());
     }
-    match (tool, answer) {
-        // Tool block precedes the answer: run the tool (side effect), then
-        // finish with the co-present answer.
-        (Some((ti, name, args)), Some((ai, a))) if ti < ai => Action::Tool {
-            name,
-            args,
-            final_answer: Some(a),
-        },
-        // Plain tool call with no answer.
-        (Some((_, name, args)), None) => Action::Tool {
-            name,
-            args,
-            final_answer: None,
-        },
-        // Answer first (or same block): the model declared itself done — a
-        // trailing/stray tool block must NOT execute.
-        (Some(_), Some((_, a))) => Action::Answer(a),
-        (None, Some((_, a))) => Action::Answer(a),
-        (None, None) => Action::None,
-    }
-}
-
-/// Parse the whole text as JSON, else find every balanced `{...}` block (so
-/// prose-wrapped and concatenated actions still work).
-fn json_blocks(text: &str) -> Vec<Value> {
-    let mut out = Vec::new();
-    if let Ok(v) = serde_json::from_str::<Value>(text) {
-        out.push(v);
-        return out;
-    }
-    let mut search_from = 0;
-    while let Some(start) = text[search_from..].find('{') {
-        let start = search_from + start;
-        let mut depth = 0i32;
-        let mut in_string = false;
-        let mut escaped = false;
-        let mut end = None;
-        for (i, ch) in text[start..].char_indices() {
-            if in_string {
-                if escaped {
-                    escaped = false;
-                } else if ch == '\\' {
-                    escaped = true;
-                } else if ch == '"' {
-                    in_string = false;
-                }
-                continue;
-            }
-            match ch {
-                '"' => in_string = true,
-                '{' => depth += 1,
-                '}' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        end = Some(start + i + 1);
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
-        match end {
-            Some(end) => {
-                if let Ok(v) = serde_json::from_str(&text[start..end]) {
-                    out.push(v);
-                }
-                search_from = end;
-            }
-            None => break,
-        }
-    }
-    out
+    value.get("tool").and_then(Value::as_str).map_or(Action::None, |name| Action::Tool {
+        name: name.trim().to_lowercase(),
+        args: value.get("args").cloned().unwrap_or_else(|| json!({})),
+        final_answer: None,
+    })
 }
 
 async fn execute_tool(
@@ -1464,57 +1377,7 @@ mod tests {
             parse_action("{\"tool\":\"list_dir\",\"args\":{}}"),
             Action::Tool { name, .. } if name == "list_dir"
         ));
-        assert!(matches!(
-            parse_action("Here is my plan:\n{\"tool\": \"read_file\", \"args\": {\"path\": \"a.py\"}}\nthanks"),
-            Action::Tool { name, .. } if name == "read_file"
-        ));
         assert!(matches!(parse_action("nothing useful"), Action::None));
-    }
-
-    #[test]
-    fn parse_action_carries_answer_into_concatenated_tool() {
-        // Small models often emit `{"tool": ...} {"answer": ...}` together:
-        // the tool must still execute, with the answer carried as final.
-        let combined = "{\"tool\": \"run_command\", \"args\": {\"command\": \"echo hi\"}}  \
-                        {\"answer\": \"Hello, Ashat\"}";
-        match parse_action(combined) {
-            Action::Tool {
-                name, final_answer, ..
-            } => {
-                assert_eq!(name, "run_command");
-                assert_eq!(final_answer.as_deref(), Some("Hello, Ashat"));
-            }
-            other => panic!("expected Tool with final_answer, got {other:?}"),
-        }
-        // Prose-wrapped concatenated actions still carry the answer block.
-        let wrapped =
-            "Sure!\n{\"tool\":\"list_dir\"}\n{\"answer\":\"done\"}\nlet me know if you need more";
-        match parse_action(wrapped) {
-            Action::Tool {
-                name, final_answer, ..
-            } => {
-                assert_eq!(name, "list_dir");
-                assert_eq!(final_answer.as_deref(), Some("done"));
-            }
-            other => panic!("expected Tool with final_answer, got {other:?}"),
-        }
-        // Tool block with no answer stays a plain tool call.
-        assert!(matches!(
-            parse_action("{\"tool\":\"list_dir\"} whatever"),
-            Action::Tool {
-                final_answer: None,
-                ..
-            }
-        )); // A lone answer (no tool) still finishes directly.
-        assert!(
-            matches!(parse_action("done\n{\"answer\":\"ok\"}"), Action::Answer(a) if a == "ok")
-        );
-        // Reversed order — answer first, then a stray tool block: the model
-        // declared itself done, so the trailing tool must NOT execute.
-        assert!(matches!(
-            parse_action("{\"answer\":\"done\"} {\"tool\":\"run_command\",\"args\":{\"command\":\"rm -rf /\"}}"),
-            Action::Answer(a) if a == "done"
-        ));
     }
 
     #[test]
@@ -2212,41 +2075,5 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
-    #[tokio::test]
-    async fn concatenated_tool_and_answer_executes_then_finishes() {
-        // Real-world shape from the live smoke: the 1.2B emits
-        // `{"tool": write_file} {"answer": ...}` in ONE reply. The file must
-        // actually be written (side effect) and the answer must be final.
-        let (ws, root) = temp_workspace("concat");
-        let pool = Arc::new(DemandPool::builder(Pool::CodingAgent, spec(true)).build(&[18079]));
-        let sender: Sender = Arc::new(|_guard, _req| {
-            let v = json!({"choices": [{"message": {"content":
-                "{\"tool\":\"write_file\",\"args\":{\"path\":\"hello.py\",\"content\":\"print(1)\"}} {\"answer\":\"file created and executed: Hello, Ashat\"}"}}]});
-            Box::pin(async move { Ok::<Value, ProxyError>(v) })
-        });
-        let tl = ToolLoop::with_sender(pool, ws, cfg(), sender);
-        let metrics = Arc::new(MetricsStore::open(&std::env::temp_dir().join(format!(
-            "omega-tool-loop-metrics-concat-{}.jsonl",
-            std::process::id()
-        ))));
-        let req = ChatRequest {
-            model: None,
-            messages: vec![CM {
-                role: "user".to_owned(),
-                content: "write hello.py and run it".to_owned(),
-            }],
-            max_tokens: Some(64),
-            temperature: None,
-            top_p: None,
-            stream: None,
-            operation: None,
-        };
-        let resp = tl.run(&req, &metrics).await.expect("loop ok");
-        assert!(resp.choices[0].message.content.contains("Hello, Ashat"));
-        // The tool really ran: the file exists and validation saw it.
-        assert!(root.join("agent-18079/hello.py").exists());
-        let validation = resp.validation.expect("validation report");
-        assert_eq!(validation["files"].as_array().map(|a| a.len()), Some(1));
-        std::fs::remove_dir_all(&root).ok();
-    }
+
 }
