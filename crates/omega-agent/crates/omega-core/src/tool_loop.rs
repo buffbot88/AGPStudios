@@ -147,7 +147,7 @@ impl ToolLoop {
                         info!(port, iterations = state.iterations, "tool loop answered");
                         state.answered = Some(answer);
                     }
-                    Action::Tool { name, args } => {
+                    Action::Tool { id, name, args } => {
                         state.iterations += 1;
                         let outcome = execute_tool(
                             &name,
@@ -164,21 +164,25 @@ impl ToolLoop {
                         state.messages.push(ChatMessage {
                             role: "assistant".to_owned(),
                             content: text,
+                            tool_call_id: None,
                         });
                         state.messages.push(ChatMessage {
                             role: "tool".to_owned(),
                             content: outcome.output,
+                            tool_call_id: Some(id),
                         });
                     }
                     Action::None => {
                         state.messages.push(ChatMessage {
                             role: "assistant".to_owned(),
                             content: text,
+                            tool_call_id: None,
                         });
                         state.messages.push(ChatMessage {
                             role: "user".to_owned(),
                             content: "Your last response contained neither text nor a tool call. Return a final answer or use one of the declared tools."
                                 .to_owned(),
+                            tool_call_id: None,
                         });
                     }
                 }
@@ -260,6 +264,7 @@ impl ToolLoop {
                 message: ChatMessage {
                     role: "assistant".to_owned(),
                     content: final_text,
+                    tool_call_id: None,
                 },
                 finish_reason: "stop".to_owned(),
             }],
@@ -316,6 +321,7 @@ impl RunState {
         let mut messages = vec![ChatMessage {
             role: "system".to_owned(),
             content: system,
+            tool_call_id: None,
         }];
         messages.extend(request.messages.clone());
         Self {
@@ -337,6 +343,7 @@ struct ToolOutcome {
 enum Action {
     Answer(String),
     Tool {
+        id: String,
         name: String,
         args: Value,
     },
@@ -359,7 +366,11 @@ fn parse_response(value: &Value) -> Action {
         let name = function.get("name").and_then(Value::as_str).unwrap_or("").trim().to_lowercase();
         let raw_args = function.get("arguments").and_then(Value::as_str).unwrap_or("{}");
         let args = serde_json::from_str(raw_args).unwrap_or_else(|_| json!({}));
-        return Action::Tool { name, args };
+        return Action::Tool {
+            id: call.get("id").and_then(Value::as_str).unwrap_or("tool-call").to_owned(),
+            name,
+            args,
+        };
     }
     match message.and_then(|m| m.get("content")).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()) {
         Some(text) => Action::Answer(text.to_owned()),
@@ -2031,6 +2042,7 @@ mod tests {
             messages: vec![CM {
                 role: "user".to_owned(),
                 content: "write hello.py and run it".to_owned(),
+                tool_call_id: None,
             }],
             max_tokens: Some(64),
             temperature: None,

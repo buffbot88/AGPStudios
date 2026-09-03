@@ -80,6 +80,7 @@ mod tests {
             messages: vec![ChatMessage {
                 role: "user".to_owned(),
                 content: "hi".to_owned(),
+                tool_call_id: None,
             }],
             max_tokens: Some(16),
             temperature: None,
