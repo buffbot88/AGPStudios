@@ -294,11 +294,7 @@ impl AppConfig {
             .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
         let models_dir = project_root.join(&file.models.dir);
 
-        let resolved = ResolvedModels::discover(
-            &models_dir,
-            None,
-            file.models.inference_hint.as_deref(),
-        );
+        let resolved = ResolvedModels::discover(&models_dir, file.models.inference_hint.as_deref());
 
         let llama_name = env::var("ASHAT_LLAMA_BIN")
             .ok()
