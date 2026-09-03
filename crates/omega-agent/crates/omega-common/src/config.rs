@@ -61,6 +61,10 @@ fn default_spawn_attempts() -> u32 {
     3
 }
 
+fn default_admission_timeout() -> u64 {
+    15
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct CodingAgentPoolSection {
     pub ports: Vec<u16>,
@@ -68,6 +72,8 @@ pub struct CodingAgentPoolSection {
     pub queue_max: usize,
     #[serde(default = "default_spawn_attempts")]
     pub spawn_attempts_before_503: u32,
+    #[serde(default = "default_admission_timeout")]
+    pub admission_timeout_seconds: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]

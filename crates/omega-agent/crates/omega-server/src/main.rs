@@ -68,6 +68,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let coding_agent = CodingAgentProxy::new(
         Arc::clone(&coding_agent_pool),
         Duration::from_secs(cfg.inference.timeout_seconds),
+        Duration::from_secs(cfg.coding_agent_pool.admission_timeout_seconds),
         agent_workspace,
     );
     let cross_server = CrossServerProxy::new(Duration::from_secs(cfg.inference.timeout_seconds));
@@ -94,7 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ToolLoopConfig::from_sections(
             &cfg.tool_loop,
             cfg.inference.max_tokens,
-            cfg.inference.timeout_seconds,
+            cfg.coding_agent_pool.admission_timeout_seconds,
         ),
     );
 

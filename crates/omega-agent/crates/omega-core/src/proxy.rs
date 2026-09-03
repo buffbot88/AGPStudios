@@ -40,6 +40,7 @@ impl Drop for RequestActivity {
 pub struct CodingAgentProxy {
     pool: Arc<crate::demand::DemandPool>,
     timeout: Duration,
+    admission_timeout: Duration,
     workspace: AgentWorkspace,
 }
 
@@ -47,11 +48,13 @@ impl CodingAgentProxy {
     pub fn new(
         pool: Arc<crate::demand::DemandPool>,
         timeout: Duration,
+        admission_timeout: Duration,
         workspace: AgentWorkspace,
     ) -> Self {
         Self {
             pool,
             timeout,
+            admission_timeout,
             workspace,
         }
     }
@@ -69,7 +72,7 @@ impl CodingAgentProxy {
         let pool = Arc::clone(&self.pool);
         let guard = pool
             .clone()
-            .acquire(metrics, self.timeout)
+            .acquire(metrics, self.admission_timeout)
             .await
             .map_err(|_| ProxyError::NoneAvailable)?; // Best-effort workspace session log; never blocks the proxy path.
         let ws = self.workspace.clone();
@@ -143,7 +146,7 @@ impl CodingAgentProxy {
         let pool = Arc::clone(&self.pool);
         let guard = pool
             .clone()
-            .acquire(metrics, self.timeout)
+            .acquire(metrics, self.admission_timeout)
             .await
             .map_err(|_| ProxyError::NoneAvailable)?; // Best-effort workspace session log; never blocks the proxy path.
         let ws = self.workspace.clone();
