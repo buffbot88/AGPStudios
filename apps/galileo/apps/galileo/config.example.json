@@ -2,10 +2,5 @@
   "gateway": {
     "url": "http://127.0.0.1:3000",
     "api_key": ""
-  },
-  "agents": [
-    { "id": "omega", "url": "https://omega.example.invalid" },
-    { "id": "beta", "url": "https://beta.example.invalid" },
-    { "id": "delta", "url": "https://delta.example.invalid" }
-  ]
+  }
 }

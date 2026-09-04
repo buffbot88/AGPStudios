@@ -8,8 +8,8 @@ export interface GatewayErrorEnvelope {
 const FRIENDLY_MESSAGES: Record<string, string> = {
   gateway_unreachable: "Can't reach the Ashat gateway. Make sure alpha-server is running on Alpha (port 3000), then try again.",
   queue_full: 'Ashat is busy right now — the inference queue is full. Try again in a few seconds.',
-  agent_timeout: 'The coding agent took too long to respond. Try again, or simplify the request.',
-  inference_failed: 'Inference failed on the Omega/Beta/Delta agent pool. Please try again.',
+  agent_timeout: 'Galileo took too long to respond. Try again, or simplify the request.',
+  inference_failed: 'Inference failed on the Liquid backend. Please try again.',
 };
 
 /**

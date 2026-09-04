@@ -1,6 +1,6 @@
 # Canonical agent contract
 
-Galileo, Alpha, Omega, Beta, and Delta migrate toward one agent request and event stream. Chat/Plan/Build modes are not part of this contract.
+Galileo and Alpha exchange one agent request and event stream over the Ashat Hub Alpha gateway. Chat/Plan/Build modes are not part of this contract.
 
 ## Request
 
@@ -31,4 +31,4 @@ error            { code, message, retryable }
 response.complete {}
 ```
 
-This file freezes the wire shape. Compatibility adapters may remain until every runtime uses it.
+This file freezes the wire shape.

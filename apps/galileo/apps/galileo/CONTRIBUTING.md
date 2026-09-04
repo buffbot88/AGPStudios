@@ -12,7 +12,7 @@ The [WebContainer API](https://webcontainers.io) is free for personal and open s
 
 Galileo is built with [Remix](https://remix.run/) and UnoCSS, and runs on Cloudflare Pages.
 
-Galileo uses the [AI SDK](https://sdk.vercel.ai/) to integrate with AI models. All inference is routed through the **Ashat Hub Alpha gateway** (`crates/alpha-server` in the AshatHub repository) — an OpenAI-compatible `/v1/chat/completions` endpoint that classifies each request and routes it to the **Omega/Beta/Delta** coding agent pool or Ashat's local workers. No model provider is called directly.
+Galileo uses the [AI SDK](https://sdk.vercel.ai/) to integrate with AI models. All inference is routed through the **Ashat Hub Alpha gateway** (`crates/alpha-server` in the AshatHub repository) — an OpenAI-compatible `/v1/chat/completions` endpoint that routes text requests to the **Liquid** 1.2B worker and image requests to the on-demand **450M VL** worker. No model provider is called directly.
 
 The gateway location is configured with environment variables (see the [README](./README.md) table):
 

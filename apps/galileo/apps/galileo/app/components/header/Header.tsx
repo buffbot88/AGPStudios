@@ -11,7 +11,7 @@ export function Header() {
 
   return (
     <>
-    <header
+      <header
       className={classNames(
         'galileo-command-bar flex items-center bg-bolt-elements-background-depth-1 p-5 border-b h-[var(--header-height)]',
         {
@@ -38,8 +38,8 @@ export function Header() {
           )}
         </ClientOnly>
       )}
-    </header>
-    <ClientOnly>{() => <StatusStrip />}</ClientOnly>
+      </header>
+      <ClientOnly>{() => <StatusStrip />}</ClientOnly>
     </>
   );
 }

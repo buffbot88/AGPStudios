@@ -4,19 +4,17 @@ Galileo is an AI-powered web development agent that allows you to prompt, run, e
 
 ## Ashat Hub communication
 
-Galileo does not call any model provider or coding agent directly. All AI operations go to the **Ashat Hub Alpha gateway** (`crates/alpha-server` in the AshatHub repository), an OpenAI-compatible `/v1/chat/completions` endpoint. Alpha owns mode routing, local worker selection, agent dispatch, retries, capacity, and agent health.
+Galileo does not call any model provider or coding agent directly. All AI operations go to the **Ashat Hub Alpha gateway** (`crates/alpha-server` in the AshatHub repository), an OpenAI-compatible `/v1/chat/completions` endpoint. Alpha owns intent routing, local worker management, retries, capacity, and health.
 
-The target operation paths are:
+The operation paths are:
 
 ```text
-Chat / Plan → Alpha → local 350M
-Vision      → Alpha → local 450M VL
-Build       → Alpha → Omega/Beta/Delta job
-Debug       → Alpha → Omega/Beta/Delta validation job
-Deploy      → Galileo deployment boundary → AshatHub snapshot
+Chat   → Alpha → Liquid (local 1.2B text worker)
+Vision → Alpha → local 450M VL (on demand)
+Deploy → Galileo deployment boundary → AshatHub snapshot
 ```
 
-Galileo knows operation state and structured results, not individual model instances, agent selection, retry policy, or agent telemetry internals. Per-agent telemetry is owned by AshatHub.
+Galileo knows operation state and structured results, not individual model instances, retry policy, or telemetry internals. Peer telemetry is owned by AshatHub.
 
 ## Configuration
 
@@ -38,7 +36,7 @@ Galileo must not contain Omega/Beta/Delta endpoint configuration. Missing keys�
 
 Galileo is designed to run on the Alpha host itself. Only off-host deployments need the public proxy—see [`docs/ashat-gateway-apache-proxy.md`](./docs/ashat-gateway-apache-proxy.md).
 
-`GET /api/status` reports Alpha reachability, queue capacity, local worker health, and Alpha-managed coding capacity. AshatHub remains the source for per-agent telemetry.
+`GET /api/status` reports Alpha reachability, queue capacity, Liquid backend health, and Alpha-managed Liquid capacity. AshatHub remains the source for per-peer telemetry.
 
 ## What Makes Galileo Different
 
@@ -49,7 +47,7 @@ Galileo is designed to run on the Alpha host itself. Only off-host deployments n
   - Deploy to production from chat
   - Share your work via a URL
 
-- **AI with Environment Control**: Galileo provides the live WebContainer workspace, filesystem, node server, package manager, terminal, and browser console. Alpha and its coding-agent pool provide software-engineering operations; explicit deployment creates the durable AshatHub snapshot.
+- **AI with Environment Control**: Galileo provides the live WebContainer workspace, filesystem, node server, package manager, terminal, and browser console. Alpha supplies the Liquid (text) and on-demand 450M VL (image) inference lanes that drive Galileo's agent loop; explicit deployment creates the durable AshatHub snapshot.
 
 ## Tips and Tricks
 

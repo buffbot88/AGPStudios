@@ -3,8 +3,8 @@ import { useEffect, useState } from 'react';
 type Status = {
   ok: boolean;
   gateway?: { reachable: boolean; latency_ms: number };
-  workers?: { vision_worker_active: boolean; text_worker_healthy: boolean };
-  pool?: { available_agent_slots: number | null };
+  workers?: { vision_worker_active: boolean; liquid_backend_healthy: boolean };
+  pool?: { available_liquid_slots: number | null };
 };
 
 export function StatusStrip() {
@@ -20,9 +20,9 @@ export function StatusStrip() {
     return () => { active = false; window.clearInterval(timer); };
   }, []);
 
-  const gateway = Boolean(status?.gateway?.reachable);
+  const gateway = Boolean(status?.workers?.liquid_backend_healthy && status?.gateway?.reachable);
   const vision = Boolean(status?.workers?.vision_worker_active);
-  const peers = status?.pool?.available_agent_slots;
+  const peers = status?.pool?.available_liquid_slots;
 
   return (
     <div className="galileo-status-strip" aria-label="System status">

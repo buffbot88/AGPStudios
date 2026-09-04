@@ -12,13 +12,12 @@ interface GatewayStatus {
   queued_requests: number;
   max_queue: number;
   active_requests: number;
-  available_text_slots: number;
-  available_agent_slots: number;
+  available_liquid_slots: number;
   available_vision_slots: number;
 }
 
 interface GatewayWorkers {
-  text_worker_healthy: boolean;
+  liquid_backend_healthy: boolean;
   vision_worker_active: boolean;
 }
 
@@ -54,8 +53,8 @@ async function probe<T>(url: string, headers?: HeadersInit): Promise<ProbeResult
 }
 
 /**
- * Reports gateway reachability, queue capacity, local worker health, and
- * Alpha-managed coding capacity. Agent telemetry remains owned by AshatHub.
+ * Reports gateway reachability, queue capacity, Liquid backend health, and
+ * Alpha-managed capacity. Peer telemetry remains owned by AshatHub.
  */
 export async function loader() {
   const gatewayURL = getGatewayURL().replace(/\/+$/, '');
@@ -83,7 +82,7 @@ export async function loader() {
       workers: workers.data ?? null,
       pool: {
         managed_by: 'alpha',
-        available_agent_slots: status.data?.available_agent_slots ?? null,
+        available_liquid_slots: status.data?.available_liquid_slots ?? null,
       },
       updated_at: new Date().toISOString(),
     },

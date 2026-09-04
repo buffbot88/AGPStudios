@@ -70,7 +70,7 @@ export async function* runAgentTurn(messages: Message[], options: AgentControlle
         yield { type: 'error', code: 'tool_loop_timeout', message: 'Tool loop timed out', retryable: false };
         return;
       }
-      const result = await executeReadOnlyTool(call.name, call.arguments);
+      const result = await executeReadOnlyTool(call.name, call.arguments, options.signal);
       const output = result.ok && typeof result.result === 'string' ? result.result.slice(0, maxToolOutput) : result.result;
       yield {
         type: 'tool.result',

@@ -21,7 +21,7 @@ Restart alpha-server after the change.
 In the `agpstudios.org` vhost, next to the existing `/api` proxy block, add:
 
 ```apache
-# Ashat Alpha inference gateway (Omega/Beta/Delta routing)
+# Ashat Alpha inference gateway (Liquid / Vision intent routing)
 ProxyPreserveHost Off
 ProxyPass        /v1/ http://127.0.0.1:3000/v1/ timeout=600
 ProxyPassReverse /v1/ http://127.0.0.1:3000/v1/
@@ -53,10 +53,10 @@ curl -s https://agpstudios.org/v1/../health
 # or directly:
 curl -s https://agpstudios.org/health   # existing ashat-hub liveness, unchanged
 
-# Round-trip inference (local text worker, no tokens of consequence)
+# Round-trip inference through Liquid (short reply)
 curl -s -X POST https://agpstudios.org/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model":"local","messages":[{"role":"user","content":"hi"}],"max_tokens":8,"stream":false}'
+  -d '{"model":"liquid","messages":[{"role":"user","content":"hi"}],"max_tokens":8,"stream":false}'
 ```
 
 The `/v1/models` response must be JSON, not the AGP Studios SPA HTML. If you still get HTML, the vhost edit did not land on the active site config (`apachectl -S` to check which file is live).
@@ -65,4 +65,4 @@ The `/v1/models` response must be JSON, not the AGP Studios SPA HTML. If you sti
 
 No code change is required: set `gateway.url` to `https://agpstudios.org` in `config.json` and the app appends `/v1`. On Alpha itself the loopback default (`http://127.0.0.1:3000`) applies and no proxy is needed — this runbook is only for off-host deployments.
 
-Optional hardening later: front `/v1` with the same `X-Ashat-Key` auth alpha-server already uses for its Omega/Beta/Delta agents, then set `gateway.api_key` in `config.json` to match.
+Optional hardening later: front `/v1` with a shared `X-Ashat-Key` bearer key, then set `gateway.api_key` in `config.json` to match.
