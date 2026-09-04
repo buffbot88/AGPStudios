@@ -104,6 +104,39 @@ kbd.kdb {
   font-weight: 600;
 }
 
+.galileo-status-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 16px;
+  background: rgba(8, 8, 8, 0.88);
+  border-bottom: 1px solid var(--galileo-border);
+  color: var(--galileo-text-muted);
+  font-size: 11px;
+  backdrop-filter: blur(14px);
+}
+
+.galileo-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border: 1px solid var(--galileo-border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.galileo-status-pill i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--galileo-text-muted);
+}
+
+.galileo-status-pill.is-healthy i { background: var(--galileo-success); box-shadow: 0 0 8px var(--galileo-success); }
+.galileo-status-pill small { color: var(--galileo-text-muted); }
+
 .galileo-workbench {
   background: var(--galileo-bg-panel) !important;
   border-color: var(--galileo-border) !important;

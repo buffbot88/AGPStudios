@@ -4,11 +4,13 @@ import { chatStore } from '~/lib/stores/chat';
 import { classNames } from '~/utils/classNames';
 import { HeaderActionButtons } from './HeaderActionButtons.client';
 import { ChatDescription } from '~/lib/persistence/ChatDescription.client';
+import { StatusStrip } from './StatusStrip.client';
 
 export function Header() {
   const chat = useStore(chatStore);
 
   return (
+    <>
     <header
       className={classNames(
         'galileo-command-bar flex items-center bg-bolt-elements-background-depth-1 p-5 border-b h-[var(--header-height)]',
@@ -37,5 +39,7 @@ export function Header() {
         </ClientOnly>
       )}
     </header>
+    <ClientOnly>{() => <StatusStrip />}</ClientOnly>
+    </>
   );
 }
