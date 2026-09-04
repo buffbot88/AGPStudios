@@ -12,7 +12,7 @@ Two-piece local LLM server:
 
 Both pools share the same `DemandPool` mechanism. Requests come into `:8080`, are classified by the retired model text execution lane, dispatched to a free 1.2B Coding Agent slot, streamed back to the caller, and the 1.2B instance is killed when the response lands.
 
-`beta` (`150.136.208.93:8082`) and `delta` (`129.213.147.225:8088`) row-chain targets are wired in `server-config.json` and **enabled**. Backends are chosen by weighted round-robin (omega 2 / beta 1 / delta 1) with concurrent health probes — a dead backend loses its share until it recovers. See `Beta_Delta.md` for peer access, seeding, and routing semantics.
+`beta` (`150.136.208.93:8082`) and `delta` (`129.213.147.225:8088`) row-chain targets are wired in `server-config.json` and **enabled**. Backends are chosen by weighted round-robin (omega 2 / beta 1 / delta 1) with concurrent health probes — a dead backend loses its share until it recovers.
 
 ## Public surface
 
@@ -88,9 +88,7 @@ cargo build --release
 
 ## Files of interest
 
-- `BUILDPLAN.md` — implementation order, validation, risks
 - `ROADMAP.md` — high-level product phases
-- `Beta_Delta.md` — Beta/Delta peer access, seeding, routing semantics, GitHub sync
 - `CONTRIBUTING.md` — contribution rules + workflow
 - `VOWS.md` — protected project guidance (do not modify)
 - `server-config.example.json` — tracked config template (no secrets; copy → `server-config.json`)

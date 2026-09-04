@@ -11,8 +11,6 @@ chain to the Beta / Delta slave hosts, and verified GitHub sync.
 | ---- | ---------- |
 | `README.md` | Host setup, public surface, config keys, validation commands |
 | `ROADMAP.md` | High-level product phases and their status |
-| `BUILDPLAN.md` | Implementation order, locked decisions, risks, validation path |
-| `Beta_Delta.md` | Peer (Beta/Delta) access, seeding, routing semantics, GitHub sync |
 | `VOWS.md` | **Rules of engagement — protected. Read it first; do not modify it.** |
 
 ## Rules of engagement
@@ -41,8 +39,7 @@ day-to-day:
    `cargo clippy --all-targets -- -D warnings`, `cargo test`,
    npm run build`.
 4. Update the affected docs in the same change: `README.md` for surface /
-   config changes, `ROADMAP.md` for phase status, `BUILDPLAN.md` for locked
-   decisions / risks, `Beta_Delta.md` for peer / routing changes.
+   config changes, `ROADMAP.md` for phase status.
 5. Push with `./scripts/github_sync.sh push` (uses the `~/.ssh/ashat_github`
    deploy key), or via `POST /api/admin/github_sync` with `{"mode": "push"}`.
 
@@ -53,9 +50,8 @@ day-to-day:
   `api_key`s), `oraclehost_id_rsa`, `*.key` / `*.pem`, `models/`, `target/`,
   `logs/`, and `workspaces/` are gitignored and guard-checked by
   `github_sync.sh` before every stage. Commit config changes to
-  `server-config.example.json` with placeholders only.
-- The legacy `ASHAT_KEY` from the pre-tooling history is still live — see the
-  warning in `Beta_Delta.md`; rotating it touches all three hosts.
+  `server-config.example.json` with placeholders only.- The legacy `ASHAT_KEY` from the pre-tooling history is still live —
+  rotating it touches all three hosts.
 - Commit messages follow the repo's existing style: a short subject line, a
   `docs:` prefix for doc-only changes, and descriptive bodies
   ("Add X", "Fix Y", "vN.M ...").
@@ -87,5 +83,5 @@ Models live in `models/` (auto-discovered) and `bin/llama-server` is bundled.
   `crates/omega-server/src/handlers.rs` and `main.rs`, then update the
   public-surface table in `README.md`.
 - **Change routing / add a backend** — `crates/omega-core/src/router.rs` +
-  the `row_chain` config; document in `Beta_Delta.md`.
+  the `row_chain` config.
 - **Change a phase status** — update the build-phases table in `ROADMAP.md`.

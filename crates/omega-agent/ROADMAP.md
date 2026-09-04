@@ -3,7 +3,6 @@
 **Server instance name:** Omega
 **Project name:** Ashat Master Coding Agent
 **Repo path:** `/home/opc/Projects/ashat-master-coding-agent`
-**Build details:** see `BUILDPLAN.md`
 **Rules of engagement:** `VOWS.md` (protected)
 **Contributing:** `CONTRIBUTING.md`
 
@@ -11,7 +10,7 @@
 
 ## Goal
 
-A universal-source Rust + Axum server with an always-on **LFM2.5-retired model text intent router** (replaced the original retired model — see BUILDPLAN), a spawn-on-demand pool of up to three 1.2B **Coding Agent** instances. The source must run identically on the public dev server and on the developer's local machine. The master is a git repo on GitHub (see the Git constraint below); `server-config.json`, `models/`, `target/`, `logs/`, and `workspaces/` stay untracked.
+A universal-source Rust + Axum server with an always-on **LFM2.5-retired model text intent router** (replaced the original retired model), a spawn-on-demand pool of up to three 1.2B **Coding Agent** instances. The source must run identically on the public dev server and on the developer's local machine. The master is a git repo on GitHub (see the Git constraint below); `server-config.json`, `models/`, `target/`, `logs/`, and `workspaces/` stay untracked.
 
 ## Components (Phase 1 — this build)
 
@@ -50,8 +49,7 @@ workspace of three crates under `crates/`:
 - `omega-core` — inference engine (`demand`, `queue`, `execution lane`, `proxy`, `router`, `supervision`)
 - `omega-server` — axum binary `ashat-master-coding-agent` (`main`, `handlers`, `auth`, `alpha_status`)
 
-Binary name and public surface are unchanged. See `BUILDPLAN.md` → "Workspace
-migration (v2)" for the locked decisions.
+Binary name and public surface are unchanged.
 
 ## Deferred hooks (remaining — Phase 6 / Phase 9 seams now implemented)
 
@@ -64,12 +62,12 @@ migration (v2)" for the locked decisions.
 ## Constraints / known trade-offs
 
 - **Quantization.** GGUF Q4_K_M for both models (faster, less precise than the archived Q8_K). One-word intent-classifier output is robust at Q4_K_M but the precision delta is observable.
-- **Intent router model.** The retired model text router replaced the original retired model after live probing showed the retired model could not follow the single-word classification instruction (always said `chat`). See BUILDPLAN for the probe matrix.
+- **Intent router model.** The retired model text router replaced the original retired model after live probing showed the retired model could not follow the single-word classification instruction (always said `chat`).
 - **Cold-start latency.** Every 1.2B spawn pays multi-second `llama-server` boot + 730 MB GGUF load; on a loaded 1-core host the health check window is 30 s and a failed spawn re-notifies waiters so the pump retries instead of stalling. Surfaced through `/api/public_metrics`.
 - **Hard cap.** Spec ceiling is 3 concurrent 1.2B instances. The 4th concurrent caller queues, not rejects.
 - **Baseline-resilience.** Baseline router respawn is critical-path: Omega's `8080` does not bind until the baseline reports `/health` ok. Spec-intent: never serve traffic if execution lane is down.
 - **Universal source.** `server-config.example.json` (the tracked template) holds no host paths or secrets; your local `server-config.json` is gitignored. Models auto-discover from `models/*.gguf`. `llama-server` is configurable (config → env → PATH).
-- **Git.** The master is a git repo (branch `main`, origin `buffbot88/ashatnueralhost`) since 2026-08-09. `server-config.json`, `oraclehost_id_rsa`, `models/`, `target/`, `logs/`, `workspaces/` are ignored/untracked; `server-config.example.json` is the tracked template. The legacy `ASHAT_KEY` copy in the public repo history remains live until rotated (see Beta_Delta.md).
+- **Git.** The master is a git repo (branch `main`, origin `buffbot88/ashatnueralhost`) since 2026-08-09. `server-config.json`, `oraclehost_id_rsa`, `models/`, `target/`, `logs/`, `workspaces/` are ignored/untracked; `server-config.example.json` is the tracked template. The legacy `ASHAT_KEY` copy in the public repo history remains live until rotated.
 - **`ASHAT_KEY` continuity.** Carried over verbatim from the archived project so existing clients remain keyed without re-issuance.
 - **`VOWS.md` integrity.** Protected by Vow 9 of `VOWS.md` itself. This build does not modify, rename, or delete `VOWS.md` at any point.
 
@@ -82,4 +80,4 @@ migration (v2)" for the locked decisions.
 
 ## Validation surface
 
-See `BUILDPLAN.md` "Validation" for the command-by-command verification path used at the end of this build.
+Validation commands for the current build live in `README.md` ("Validation commands").

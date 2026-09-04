@@ -15,7 +15,7 @@
 #   scripts/seed_slave.sh opc@129.213.147.225 /var/oled/data/AshatCodingAgent 8083
 #   UPDATE_MODELS=1 scripts/seed_slave.sh opc@150.136.208.93   # also refresh models
 #
-# Connection details live in Beta_Delta.md; auth uses ./oraclehost_id_rsa.
+# Auth uses ./oraclehost_id_rsa.
 # The slave is a headless inference server: frontend/, logs/, workspaces/ and
 # the master's private key are never synced. Models are additive by default
 # (files already on the slave are never overwritten); set UPDATE_MODELS=1 to
@@ -82,7 +82,6 @@ rsync -az -e "ssh ${SSH_OPTS[*]}" \
     --exclude 'logs' \
     --exclude 'workspaces' \
     --exclude 'oraclehost_id_rsa' \
-    --exclude 'Beta_Delta.md' \
     --exclude 'server-config.json' \
     --exclude '.git' \
     "$MASTER/" "$HOST:$INSTALL/"
