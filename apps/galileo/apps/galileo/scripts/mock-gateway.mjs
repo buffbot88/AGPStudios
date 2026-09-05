@@ -38,6 +38,38 @@ const ARTIFACT = [
 ].join('\\n');
 
 const server = createServer((request, response) => {
+  // Alpha-compatible probes consumed by GET /api/status.
+  if (request.method === 'GET' && request.url.startsWith('/health')) {
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({ status: 'ok', version: 'mock-alpha' }));
+
+    return;
+  }
+
+  if (request.method === 'GET' && request.url.startsWith('/status')) {
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(
+      JSON.stringify({
+        queued_requests: 0,
+        max_queue: 8,
+        active_requests: 0,
+        available_liquid_slots: 1,
+        available_vision_slots: 0,
+      }),
+    );
+
+    return;
+  }
+
+  if (request.method === 'GET' && request.url.startsWith('/workers')) {
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(
+      JSON.stringify({ liquid_backend_configured: true, liquid_backend_healthy: true, vision_worker_active: false }),
+    );
+
+    return;
+  }
+
   if (request.method !== 'POST' || !request.url.includes('/v1/chat/completions')) {
     response.writeHead(404).end();
     return;
@@ -55,7 +87,12 @@ const server = createServer((request, response) => {
     })();
     const events = request.headers['x-galileo-protocol'] === 'events';
 
-    response.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+    response.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    });
+
     const controller = response;
 
     if (!events) {
@@ -66,6 +103,7 @@ const server = createServer((request, response) => {
       }
       controller.write('data: [DONE]\n\n');
       controller.end();
+
       return;
     }
 
@@ -81,12 +119,18 @@ const server = createServer((request, response) => {
       await delay(30);
       sse(controller, { type: 'response.complete' });
       controller.end();
+
       return;
     }
 
     // Second turn: stream the final answer with a workbench artifact.
     sse(controller, { type: 'response.start', response_id: 'mock-response-2' });
-    for (const piece of ['The project is ready. Here is a hello page:\\n\\n', ARTIFACT, '\\n\\nOpen the workbench to see the file and shell action run.']) {
+
+    for (const piece of [
+      'The project is ready. Here is a hello page:\\n\\n',
+      ARTIFACT,
+      '\\n\\nOpen the workbench to see the file and shell action run.',
+    ]) {
       sse(controller, { type: 'text.delta', delta: piece });
       await delay(50);
     }
