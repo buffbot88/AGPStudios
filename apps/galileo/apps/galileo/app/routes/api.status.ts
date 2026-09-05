@@ -57,7 +57,7 @@ async function probe<T>(url: string, headers?: HeadersInit): Promise<ProbeResult
  * Reports gateway reachability, queue capacity, Liquid backend health, and
  * Alpha-managed capacity. Peer telemetry remains owned by AshatHub.
  */
-export async function loader() {
+export async function collectStatus() {
   const gatewayURL = getGatewayURL().replace(/\/+$/, '');
   const baseURL = gatewayURL.endsWith('/v1') ? gatewayURL.slice(0, -3) : gatewayURL;
 
@@ -69,24 +69,25 @@ export async function loader() {
 
   const reachable = health.ok && health.data?.status === 'ok';
 
-  return json(
-    {
-      ok: reachable,
-      gateway: {
-        url: gatewayURL,
-        reachable,
-        version: health.data?.version ?? null,
-        error: health.error ?? null,
-        latency_ms: health.latency_ms,
-      },
-      queue: status.data ?? null,
-      workers: workers.data ?? null,
-      pool: {
-        managed_by: 'alpha',
-        available_liquid_slots: status.data?.available_liquid_slots ?? null,
-      },
-      updated_at: new Date().toISOString(),
+  return {
+    ok: reachable,
+    gateway: {
+      url: gatewayURL,
+      reachable,
+      version: health.data?.version ?? null,
+      error: health.error ?? null,
+      latency_ms: health.latency_ms,
     },
-    { headers: { 'cache-control': 'no-store' } },
-  );
+    queue: status.data ?? null,
+    workers: workers.data ?? null,
+    pool: {
+      managed_by: 'alpha',
+      available_liquid_slots: status.data?.available_liquid_slots ?? null,
+    },
+    updated_at: new Date().toISOString(),
+  };
+}
+
+export async function loader() {
+  return json(await collectStatus(), { headers: { 'cache-control': 'no-store' } });
 }
