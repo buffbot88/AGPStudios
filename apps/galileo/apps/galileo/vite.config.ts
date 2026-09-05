@@ -10,10 +10,51 @@ export default defineConfig((config) => {
     build: {
       target: 'esnext',
     },
+    optimizeDeps: {
+      esbuildOptions: {
+        // Dependency pre-bundling (client) needs the same `path` ->
+        // path-browserify mapping the plugin below provides for source
+        // imports; without it, optimized deps importing `node:path` (e.g.
+        // istextorbinary) are served as browser-externals and crash at runtime.
+        alias: {
+          path: 'path-browserify',
+          'node:path': 'path-browserify',
+        },
+      },
+    },
+    server: {
+      proxy: {
+        // GitHub App endpoints live on the auth backend behind the production
+        // edge; route them there during development as well.
+        '/api/github': {
+          target: 'https://agpstudios.org',
+          changeOrigin: true,
+        },
+      },
+    },
     plugins: [
       nodePolyfills({
-        include: ['path', 'buffer'],
+        // `path` is polyfilled by the plugin below (client-only) instead of here:
+        // the plugin's global `path` -> `path-browserify` alias also applies during
+        // Vite dev SSR, where the CommonJS polyfill fails with "module is not
+        // defined". Server code must keep the real node:path.
+        include: ['buffer'],
       }),
+      {
+        name: 'client-only-path-polyfill',
+        enforce: 'pre',
+        resolveId(source, importer, options) {
+          if (options?.ssr) {
+            return null;
+          }
+
+          if (source === 'path' || source === 'node:path') {
+            return this.resolve('path-browserify', importer, { skipSelf: true });
+          }
+
+          return null;
+        },
+      },
       remixVitePlugin({
         future: {
           v3_fetcherPersist: true,

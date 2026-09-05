@@ -1,17 +1,10 @@
 import { json, type ActionFunctionArgs, type LoaderFunctionArgs } from '@remix-run/node';
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { authenticated } from '~/lib/.server/auth';
+import { authenticated, getUser } from '~/lib/.server/auth';
 
 const ROOT = '/var/oled/data/users_projects';
 const LIMIT = 200 * 1024 * 1024;
-async function user(request: Request): Promise<{ username: string; githubLinked: boolean; csrf: string }> {
-  const fallback = { username: '', githubLinked: false, csrf: '' }; 
-  const response = await fetch('https://agpstudios.org/api/auth/session', { headers: { cookie: request.headers.get('cookie') || '' } });
-  if (!response.ok) return fallback;
-  const data = (await response.json()) as { authenticated?: boolean; user?: { username?: string }; github_linked?: boolean; csrf?: string };
-  return data.authenticated && data.user?.username ? { username: data.user.username, githubLinked: data.github_linked === true, csrf: data.csrf || '' } : fallback;
-}
 
 function safe(value: string) {
   return value.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80) || 'default';
@@ -31,8 +24,8 @@ async function collect(directory: string, prefix = ''): Promise<Record<string, s
 
 export async function loader({ request }: LoaderFunctionArgs) {
   if (!(await authenticated(request))) return json({ error: 'unauthenticated' }, { status: 401 });
-  const account = await user(request);
-  if (!account.username) return json({ error: 'unauthenticated' }, { status: 401 });
+  const account = await getUser(request);
+  if (!account) return json({ error: 'unauthenticated' }, { status: 401 });
   const username = account.username;
   const params = new URL(request.url).searchParams;
   if (params.get('list') === '1') {
@@ -51,8 +44,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
 export async function action({ request }: ActionFunctionArgs) {
   if (!(await authenticated(request))) return json({ error: 'unauthenticated' }, { status: 401 });
-  const account = await user(request);
-  if (!account.username) return json({ error: 'unauthenticated' }, { status: 401 });
+  const account = await getUser(request);
+  if (!account) return json({ error: 'unauthenticated' }, { status: 401 });
   const username = account.username;
   const body = (await request.json()) as { action?: string; name?: string; repository?: string; project_id?: string; files?: Record<string, string> };
   if (body.action === 'create' || body.action === 'import') {

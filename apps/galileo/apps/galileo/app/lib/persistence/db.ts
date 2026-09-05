@@ -23,6 +23,12 @@ function saveLocalChats(chats: ChatHistoryItem[]) {
 
 // this is used at the top level and never rejects
 export async function openDatabase(): Promise<IDBDatabase | undefined> {
+  // SSR (and any non-browser environment) has no indexedDB; resolve undefined so
+  // the persistence helpers fall back to the localStorage/memory paths.
+  if (typeof indexedDB === 'undefined') {
+    return undefined;
+  }
+
   return new Promise((resolve) => {
     const request = indexedDB.open('boltHistory', 1);
 
