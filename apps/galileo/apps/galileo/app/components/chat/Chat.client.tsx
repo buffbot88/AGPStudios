@@ -111,7 +111,10 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
           try {
             const scripts = (JSON.parse(packageJson) as { scripts?: Record<string, string> }).scripts || {};
             const script = scripts.dev ? 'dev' : scripts.start ? 'start' : undefined;
-            if (script) void container.spawn('jsh', ['-c', `npm run ${script} -- --host 0.0.0.0`]);
+            if (script) {
+              const install = await container.spawn('npm', ['install']);
+              if (await install.exit) void container.spawn('jsh', ['-c', `npm run ${script} -- --host 0.0.0.0`]);
+            }
           } catch {
             // Invalid package manifests are left for the user to fix in the workspace.
           }
