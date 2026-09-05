@@ -104,6 +104,35 @@ describe('gateway stream translation', () => {
     expect(events.filter((event) => event.type === 'response.complete')).toHaveLength(1);
   });
 
+  it('translates OpenAI chunks from a gateway that ignores the events protocol', async () => {
+    stubGateway(
+      [
+        'data: {"choices":[{"delta":{"content":"legacy "}}]}\n\n',
+        'data: {"choices":[{"delta":{"content":"gateway"}}]}\n\n',
+        'data: [DONE]\n\n',
+      ],
+      true,
+    );
+
+    const response = await streamText([{ role: 'user', content: 'hi' }], '', '', true);
+    expect(response.headers.get('Content-Type')).toContain('text/event-stream');
+
+    const events = [];
+
+    for await (const event of decodeGalileoEvents(response.body!)) {
+      events.push(event);
+    }
+    expect(events.map((event) => event.type)).toEqual([
+      'response.start',
+      'text.delta',
+      'text.delta',
+      'response.complete',
+    ]);
+
+    const deltas = events.filter((event) => event.type === 'text.delta');
+    expect(deltas.map((event) => (event as { delta: string }).delta).join('')).toBe('legacy gateway');
+  });
+
   it('synthesizes exactly one response.complete when the gateway closes without one', async () => {
     stubGateway(
       [

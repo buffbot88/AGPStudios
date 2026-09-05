@@ -102,6 +102,8 @@ export async function streamText(
     const reader = response.body.getReader();
     let buffer = '';
     let sawComplete = false;
+    let started = false;
+    const responseId = crypto.randomUUID();
     const stream = new ReadableStream<Uint8Array>({
       /**
        * Keep reading upstream until at least one byte is enqueued or the
@@ -135,9 +137,12 @@ export async function streamText(
 
           if (events) {
             /**
-             * Alpha's `X-Galileo-Protocol: events` lane already speaks the
-             * canonical Galileo event dialect (`event: <type>` + `data:` JSON
-             * per record); pass records through untouched.
+             * Preferred lane: Alpha (`X-Galileo-Protocol: events`) speaks the
+             * canonical Galileo dialect (`event: <type>` + `data:` JSON per
+             * record) and records pass through untouched. Gateways that predate
+             * canonical-events support answer with OpenAI `data:` chunks even
+             * in events mode; sniff each record and translate those to
+             * canonical events so Chat never freezes on version skew.
              */
             buffer += decoder.decode(next.value, { stream: true });
 
@@ -156,13 +161,32 @@ export async function streamText(
               }
 
               try {
-                const event = JSON.parse(data) as { type?: string };
+                const parsed = JSON.parse(data) as {
+                  type?: string;
+                  choices?: { delta?: { content?: unknown } }[];
+                };
 
-                if (event.type === 'response.complete') {
-                  sawComplete = true;
+                if (typeof parsed.type === 'string') {
+                  if (parsed.type === 'response.complete') {
+                    sawComplete = true;
+                  }
+
+                  streamController.enqueue(encoder.encode(`${record.trimEnd()}\n\n`));
+                  continue;
                 }
 
-                streamController.enqueue(encoder.encode(`${record.trimEnd()}\n\n`));
+                const content = parsed.choices?.[0]?.delta?.content;
+
+                if (typeof content === 'string' && content) {
+                  if (!started) {
+                    started = true;
+                    streamController.enqueue(
+                      encoder.encode(encodeGalileoEvent({ type: 'response.start', response_id: responseId })),
+                    );
+                  }
+
+                  streamController.enqueue(encoder.encode(encodeGalileoEvent({ type: 'text.delta', delta: content })));
+                }
               } catch {
                 // ignore malformed event records
               }
