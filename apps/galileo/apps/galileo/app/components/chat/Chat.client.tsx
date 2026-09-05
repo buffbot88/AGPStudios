@@ -4,11 +4,13 @@ import { useAnimate } from 'framer-motion';
 import { memo, useEffect, useRef, useState } from 'react';
 import { cssTransition, toast, ToastContainer } from 'react-toastify';
 import { useMessageParser, usePromptEnhancer, useShortcuts, useSnapScroll } from '~/lib/hooks';
+import { enhanceText } from '~/lib/hooks/usePromptEnhancer';
 import { runAgentTurn } from '~/lib/runtime/agent-controller';
 import type { AgentEvent } from '~/lib/runtime/galileo-stream';
 import { useChatHistory } from '~/lib/persistence';
 import { chatStore } from '~/lib/stores/chat';
 import { workbenchStore } from '~/lib/stores/workbench';
+import { autoEnhance } from '~/lib/stores/ui';
 import { webcontainer } from '~/lib/webcontainer';
 import { fileModificationsToHTML } from '~/utils/diff';
 import { cubicEasingFn } from '~/utils/easings';
@@ -76,6 +78,7 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
   const [chatStarted, setChatStarted] = useState(initialMessages.length > 0);
   const [streamingTool, setStreamingTool] = useState<{ name: string; args: Record<string, unknown> } | null>(null);
   const [activityEvents, setActivityEvents] = useState<AgentEvent[]>([]);
+  const [activityStartedAt, setActivityStartedAt] = useState<number | null>(null);
   const [agentRunning, setAgentRunning] = useState(false);
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [input, setInput] = useState('');
@@ -185,8 +188,10 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
     agentAbort.current = controller;
     setAgentRunning(true);
     setActivityEvents([]);
-    const userMessage = { id: crypto.randomUUID(), role: 'user' as const, content };
-    let assistant = { id: crypto.randomUUID(), role: 'assistant' as const, content: '' };
+    setActivityStartedAt(Date.now());
+    const now = Date.now();
+    const userMessage = { id: crypto.randomUUID(), role: 'user' as const, content, createdAt: new Date(now) };
+    let assistant = { id: crypto.randomUUID(), role: 'assistant' as const, content: '', createdAt: new Date(now) };
     const conversation = [...messages, userMessage, assistant];
     setMessages(conversation);
     try {
@@ -221,6 +226,17 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
       return;
     }
 
+    let turnInput = _input;
+
+    // Auto-enhance rewrites the prompt through the enhancer before the turn runs.
+    if (autoEnhance.get().enabled) {
+      const enhanced = await enhanceText(_input);
+
+      if (enhanced !== null) {
+        turnInput = enhanced;
+      }
+    }
+
     /**
      * @note (delm) Usually saving files shouldn't take long but it may take longer if there
      * many unsaved files. In that case we need to block user input and show an indicator
@@ -245,7 +261,7 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
        * manually reset the input and we'd have to manually pass in file attachments. However, those
        * aren't relevant here.
        */
-      await runCustomTurn(`${diff}\n\n${_input}`, '');
+      await runCustomTurn(`${diff}\n\n${turnInput}`, '');
 
       /**
        * After sending a new message we reset all modifications since the model
@@ -253,7 +269,7 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
        */
       workbenchStore.resetAllFileModifications();
     } else {
-      await runCustomTurn(_input, '');
+      await runCustomTurn(turnInput, '');
     }
 
     setInput('');
@@ -288,6 +304,7 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
       isStreaming={agentRunning}
       streamingTool={streamingTool}
       activityEvents={activityEvents}
+      activityStartedAt={activityStartedAt}
       enhancingPrompt={enhancingPrompt}
       promptEnhanced={promptEnhanced}
       sendMessage={sendMessage}
@@ -308,8 +325,8 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
       onEdit={(index, content) => editMessage(index, content)}
       onResend={resendMessage}
       enhancePrompt={() => {
-        enhancePrompt(input, (input) => {
-          setInput(input);
+        enhancePrompt(input, (value) => {
+          setInput(value);
           scrollTextArea();
         });
       }}

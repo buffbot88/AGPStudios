@@ -2,7 +2,7 @@ import type { Message } from 'ai';
 import React from 'react';
 import { normalizeBuildEvent } from '~/lib/runtime/agent-parts';
 import { AgentPart, StreamingAgentStatus } from './AgentPart';
-import { AgentActivity } from './AgentActivity';
+import { AgentPipeline } from './AgentPipeline';
 import type { AgentEvent } from '~/lib/runtime/galileo-stream';
 import { classNames } from '~/utils/classNames';
 import { AssistantMessage } from './AssistantMessage';
@@ -18,10 +18,11 @@ interface MessagesProps {
   jobEvents?: string[];
   streamingTool?: { name: string; args: Record<string, unknown> } | null;
   activityEvents?: AgentEvent[];
+  activityStartedAt?: number | null;
 }
 
 export const Messages = React.forwardRef<HTMLDivElement, MessagesProps>((props: MessagesProps, ref) => {
-  const { id, isStreaming = false, messages = [], onEdit, onResend, jobEvents = [], streamingTool = null, activityEvents = [] } = props;
+  const { id, isStreaming = false, messages = [], onEdit, onResend, jobEvents = [], streamingTool = null, activityEvents = [], activityStartedAt = null } = props;
 
   return (
     <div id={id} ref={ref} className={props.className}>
@@ -51,9 +52,9 @@ export const Messages = React.forwardRef<HTMLDivElement, MessagesProps>((props: 
                 )}
                 <div className="grid grid-col-1 w-full">
                   {isUserMessage ? (
-                    <UserMessage content={content} onEdit={!isStreaming ? () => onEdit?.(index, content) : undefined} />
+                    <UserMessage content={content} onEdit={!isStreaming ? () => onEdit?.(index, content) : undefined} timestamp={message.createdAt ? new Date(message.createdAt) : undefined} />
                   ) : (
-                    <AssistantMessage content={content} onResend={!isStreaming && isLast ? () => onResend?.(index) : undefined} />
+                    <AssistantMessage content={content} onResend={!isStreaming && isLast ? () => onResend?.(index) : undefined} timestamp={message.createdAt ? new Date(message.createdAt) : undefined} />
                   )}
                 </div>
               </div>
@@ -66,7 +67,7 @@ export const Messages = React.forwardRef<HTMLDivElement, MessagesProps>((props: 
           <div className="mt-2 space-y-1">{jobEvents.map((event, index) => <AgentPart key={`${event}-${index}`} part={normalizeBuildEvent(event, index)} />)}</div>
         </details>
       )}
-      {activityEvents.length > 0 && <AgentActivity events={activityEvents} />}
+      {activityEvents.length > 0 && <AgentPipeline events={activityEvents} now={activityStartedAt ? new Date(activityStartedAt) : new Date()} />}
       {streamingTool && <AgentPart part={{ type: 'tool-call', id: 'streaming-tool', tool: streamingTool.name, args: streamingTool.args, status: 'running', agent: 'Galileo' }} />}
       {isStreaming && !streamingTool && <StreamingAgentStatus />}
     </div>

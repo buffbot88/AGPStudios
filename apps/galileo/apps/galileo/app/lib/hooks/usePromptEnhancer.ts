@@ -5,6 +5,32 @@ import { createScopedLogger } from '~/utils/logger';
 
 const logger = createScopedLogger('usePromptEnhancement');
 
+/**
+ * Rewrites a prompt through the enhancer endpoint. Returns null on failure
+ * (the caller decides whether to fall back to the original text).
+ */
+export async function enhanceText(message: string): Promise<string | null> {
+  const response = await fetch('/api/enhancer', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      message,
+    }),
+  });
+
+  if (!response.ok) {
+    const detail = (await response.json().catch(() => null)) as Parameters<typeof friendlyChatErrorMessage>[0];
+
+    logger.error('Enhancer request failed', detail);
+    toast.error(friendlyChatErrorMessage(detail), { autoClose: 8000 });
+
+    return null;
+  }
+
+  return response.text();
+}
+
 export function usePromptEnhancer() {
   const [enhancingPrompt, setEnhancingPrompt] = useState(false);
   const [promptEnhanced, setPromptEnhanced] = useState(false);
@@ -20,26 +46,14 @@ export function usePromptEnhancer() {
     setPromptEnhanced(false);
 
     try {
-      const response = await fetch('/api/enhancer', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: input,
-        }),
-      });
+      const enhanced = await enhanceText(input);
 
-      if (!response.ok) {
-        const detail = (await response.json().catch(() => null)) as Parameters<typeof friendlyChatErrorMessage>[0];
-
-        logger.error('Enhancer request failed', detail);
-        toast.error(friendlyChatErrorMessage(detail), { autoClose: 8000 });
+      if (enhanced === null) {
         setEnhancingPrompt(false);
 
         return;
       }
 
-      const enhanced = await response.text();
       setInput(enhanced);
       setEnhancingPrompt(false);
       setPromptEnhanced(true);

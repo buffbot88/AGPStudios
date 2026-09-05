@@ -9,48 +9,1022 @@
 
 :root {
   --galileo-bg-void: #050505;
-  --galileo-bg-base: #080808;
-  --galileo-bg-panel: rgba(18, 18, 18, 0.76);
-  --galileo-accent: #ff7a1a;
-  --galileo-accent-soft: #ffb26b;
-  --galileo-text: #f7f7f7;
-  --galileo-text-muted: #777;
+  --galileo-bg-base: #0a0a0a;
+  --galileo-bg-panel: rgba(20, 20, 20, 0.82);
+  --galileo-bg-chip: rgba(255, 255, 255, 0.04);
+  --galileo-accent: #f97316;
+  --galileo-accent-soft: #fdba74;
+  --galileo-accent-glow: rgba(249, 115, 22, 0.35);
+  --galileo-text: #f5f5f4;
+  --galileo-text-secondary: #d6d3d1;
+  --galileo-text-muted: #8a8a8a;
   --galileo-border: rgba(255, 255, 255, 0.08);
+  --galileo-border-strong: rgba(249, 115, 22, 0.4);
   --galileo-success: #47d18c;
   --galileo-error: #f06464;
+  --sidebar-w: 300px;
+  --rail-w: 300px;
 }
 
 html,
 body {
   background: var(--galileo-bg-void);
   color: var(--galileo-text);
+  height: 100%;
+  width: 100%;
 }
+
+/* ---------- Command bar ---------- */
 
 header {
-  background: rgba(8, 8, 8, 0.82) !important;
+  background: rgba(8, 8, 8, 0.88) !important;
   border-color: var(--galileo-border) !important;
   backdrop-filter: blur(18px) saturate(120%);
-  box-shadow: inset 0 -1px 0 rgba(255, 122, 26, 0.08);
+  box-shadow: inset 0 -1px 0 rgba(249, 115, 22, 0.1);
 }
 
-[data-chat-visible='true'] {
-  background:
-    radial-gradient(circle at 50% -20%, rgba(255, 122, 26, 0.07), transparent 42%),
-    var(--galileo-bg-void) !important;
+.galileo-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--galileo-text);
+  text-decoration: none;
 }
 
-textarea {
-  background: linear-gradient(180deg, rgba(255, 122, 26, 0.035), rgba(12, 12, 12, 0.72)) !important;
+.galileo-logo-mark {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, rgba(249, 115, 22, 0.22), rgba(249, 115, 22, 0.06));
+  border: 1px solid rgba(249, 115, 22, 0.45);
+  box-shadow: 0 0 18px var(--galileo-accent-glow);
+  color: var(--galileo-accent);
+}
+
+.galileo-icon-btn {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  border: 1px solid var(--galileo-border);
+  background: var(--galileo-bg-chip);
+  color: var(--galileo-text-secondary);
+  cursor: pointer;
+  position: relative;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+
+  &:hover {
+    color: var(--galileo-accent-soft);
+    border-color: rgba(249, 115, 22, 0.35);
+    background: rgba(249, 115, 22, 0.08);
+  }
+}
+
+.galileo-bell-dot {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--galileo-error);
+  box-shadow: 0 0 8px var(--galileo-error);
+}
+
+.galileo-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--galileo-accent-soft);
+  background: radial-gradient(circle at 30% 25%, rgba(249, 115, 22, 0.3), rgba(249, 115, 22, 0.08));
+  border: 1px solid rgba(249, 115, 22, 0.45);
+  cursor: pointer;
+}
+
+.galileo-project-selector {
+  color: var(--galileo-accent-soft) !important;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.galileo-project-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 380px;
+  padding: 9px 18px;
+  border-radius: 12px;
+  border: 1px solid rgba(249, 115, 22, 0.35);
+  background: linear-gradient(180deg, rgba(249, 115, 22, 0.08), rgba(12, 12, 12, 0.7));
+  box-shadow: 0 0 24px rgba(249, 115, 22, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  cursor: pointer;
+  color: var(--galileo-text);
+
+  &:hover {
+    border-color: rgba(249, 115, 22, 0.55);
+  }
+}
+
+.galileo-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  min-width: 220px;
+  padding: 6px;
+  border-radius: 12px;
+  border: 1px solid var(--galileo-border);
+  background: rgba(14, 14, 14, 0.97);
+  backdrop-filter: blur(20px);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+  z-index: 60;
+}
+
+.galileo-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--galileo-text-secondary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  text-decoration: none;
+
+  &:hover {
+    background: rgba(249, 115, 22, 0.1);
+    color: var(--galileo-accent-soft);
+  }
+}
+
+/* ---------- Status strip ---------- */
+
+.galileo-status-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 16px;
+  background: rgba(8, 8, 8, 0.88);
+  border-bottom: 1px solid var(--galileo-border);
+  color: var(--galileo-text-muted);
+  font-size: 12px;
+  backdrop-filter: blur(14px);
+}
+
+.galileo-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  border: 1px solid var(--galileo-border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.galileo-status-pill i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--galileo-text-muted);
+}
+
+.galileo-status-pill.is-healthy i {
+  background: var(--galileo-success);
+  box-shadow: 0 0 8px var(--galileo-success);
+}
+
+.galileo-status-pill.is-error i {
+  background: var(--galileo-error);
+  box-shadow: 0 0 8px var(--galileo-error);
+}
+
+.galileo-status-pill small {
+  color: var(--galileo-text-muted);
+}
+
+.galileo-status-spacer {
+  flex: 1;
+}
+
+.galileo-sparkline {
+  color: var(--galileo-accent);
+  opacity: 0.9;
+}
+
+/* ---------- Three-column shell ---------- */
+
+.galileo-shell {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+
+  /* Keep the workbench overlay inside the chat column between sidebar and rail. */
+  --workbench-width: min(calc(100vw - var(--sidebar-w) - var(--rail-w) - var(--chat-min-width)), 1536px);
+  --workbench-left: calc(var(--sidebar-w) + 100vw - var(--rail-w) - var(--workbench-width));
+
+  &.has-rail-collapsed,
+  &:not(:has(> .galileo-rail)) {
+    --rail-w: 0px;
+  }
+
+  &:has(> .galileo-sidebar.is-collapsed) {
+    --sidebar-w: 0px;
+  }
+}
+
+.galileo-shell .z-workbench > div {
+  top: calc(var(--header-height) + 40px + 0.75rem) !important;
+}
+
+.galileo-shell-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+/* ---------- Sidebar ---------- */
+
+.galileo-sidebar {
+  width: var(--sidebar-w);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: rgba(10, 10, 10, 0.96);
+  border-right: 1px solid var(--galileo-border);
+  overflow: hidden;
+  transition: width 0.2s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s ease, padding 0.2s ease;
+}
+
+.galileo-sidebar.is-collapsed {
+  width: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.galileo-new-chat {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 14px 12px 6px;
+  padding: 11px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(249, 115, 22, 0.5);
+  background: linear-gradient(180deg, rgba(249, 115, 22, 0.16), rgba(249, 115, 22, 0.06));
+  color: var(--galileo-text);
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+  box-shadow: 0 0 22px rgba(249, 115, 22, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  text-decoration: none;
+
+  &:hover {
+    border-color: var(--galileo-accent);
+    box-shadow: 0 0 30px rgba(249, 115, 22, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  }
+}
+
+.galileo-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 12px;
+}
+
+.galileo-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  border: none;
+  background: transparent;
+  color: var(--galileo-text-secondary);
+  font-size: 14px;
+  cursor: pointer;
+  text-align: left;
+  text-decoration: none;
+  width: 100%;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--galileo-text);
+  }
+
+  &.is-active {
+    background: rgba(249, 115, 22, 0.12);
+    color: var(--galileo-accent-soft);
+  }
+}
+
+.galileo-nav-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 22px 6px;
+  font-size: 12px;
+  color: var(--galileo-text-muted);
+}
+
+.galileo-convos {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 12px 12px;
+}
+
+.galileo-convo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  color: var(--galileo-text-secondary);
+  font-size: 13.5px;
+  text-decoration: none;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--galileo-text);
+  }
+
+  &.is-active {
+    background: rgba(249, 115, 22, 0.1);
+    border: 1px solid rgba(249, 115, 22, 0.28);
+    color: var(--galileo-text);
+  }
+}
+
+.galileo-convo-time {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--galileo-text-muted);
+}
+
+.galileo-convo-del {
+  flex-shrink: 0;
+  color: var(--galileo-text-muted);
+  opacity: 0;
+  cursor: pointer;
+
+  .galileo-convo:hover & {
+    opacity: 1;
+
+    &:hover {
+      color: var(--galileo-error);
+    }
+  }
+}
+
+.galileo-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--galileo-accent);
+  box-shadow: 0 0 8px var(--galileo-accent-glow);
+  flex-shrink: 0;
+}
+
+.galileo-sidebar-foot {
+  border-top: 1px solid var(--galileo-border);
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.galileo-user-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 10px;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.05);
+  }
+}
+
+.galileo-user-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--galileo-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.galileo-user-plan {
+  font-size: 11px;
+  color: var(--galileo-text-muted);
+}
+
+/* ---------- Panel surfaces (agent card, composer) ---------- */
+
+.galileo-panel {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(16, 16, 16, 0.72));
   border: 1px solid var(--galileo-border);
   border-radius: 14px;
-  backdrop-filter: blur(18px) saturate(120%);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.035);
+  backdrop-filter: blur(16px);
 }
 
-textarea:focus {
-  border-color: rgba(255, 122, 26, 0.42);
-  box-shadow: 0 0 0 1px rgba(255, 122, 26, 0.08), 0 0 30px rgba(255, 122, 26, 0.07);
+/* ---------- Agent pipeline ---------- */
+
+.galileo-pipeline {
+  margin: 0 auto 18px;
+  max-width: var(--chat-max-width);
+  width: 100%;
+  padding: 14px 16px;
 }
+
+.galileo-pipeline-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--galileo-text);
+  margin-bottom: 12px;
+}
+
+.galileo-pipeline-time {
+  color: var(--galileo-text-muted);
+  font-weight: 400;
+  font-size: 12px;
+}
+
+.galileo-pipeline-steps {
+  display: flex;
+  align-items: center;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.galileo-pipeline-step {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--galileo-border);
+  background: var(--galileo-bg-chip);
+  font-size: 12.5px;
+  color: var(--galileo-text-secondary);
+  white-space: nowrap;
+}
+
+.galileo-pipeline-step.is-running {
+  border-color: rgba(249, 115, 22, 0.55);
+  background: linear-gradient(180deg, rgba(249, 115, 22, 0.12), rgba(20, 12, 6, 0.6));
+  color: var(--galileo-text);
+  box-shadow: 0 0 18px rgba(249, 115, 22, 0.12);
+}
+
+.galileo-pipeline-step-label {
+  color: var(--galileo-text);
+  font-weight: 500;
+}
+
+.galileo-pipeline-step-time {
+  font-size: 11px;
+  color: var(--galileo-text-muted);
+}
+
+.galileo-pipeline-link {
+  flex-shrink: 0;
+  width: 18px;
+  height: 2px;
+  margin: 0 6px;
+  background: linear-gradient(90deg, rgba(249, 115, 22, 0.7), rgba(249, 115, 22, 0.25));
+  border-radius: 2px;
+}
+
+/* ---------- Messages ---------- */
+
+.galileo-message {
+  border: 1px solid transparent;
+}
+
+.galileo-user-message {
+  margin-left: auto;
+  max-width: 78%;
+  background: rgba(24, 24, 24, 0.78) !important;
+  border-color: var(--galileo-border);
+  border-radius: 16px 16px 4px 16px;
+  position: relative;
+}
+
+.galileo-msg-time {
+  position: absolute;
+  right: 16px;
+  bottom: 14px;
+  font-size: 11px;
+  color: var(--galileo-text-muted);
+}
+
+.galileo-assistant-message {
+  background: transparent !important;
+}
+
+.galileo-assistant-card {
+  max-width: 980px;
+  border: 1px solid rgba(249, 115, 22, 0.32);
+  border-radius: 14px;
+  background:
+    radial-gradient(120% 120% at 0% 0%, rgba(249, 115, 22, 0.09), transparent 55%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(18, 18, 18, 0.8));
+  box-shadow:
+    0 0 34px rgba(249, 115, 22, 0.1),
+    0 18px 44px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  padding: 18px 22px;
+}
+
+.galileo-assistant-card h1,
+.galileo-assistant-card h2,
+.galileo-assistant-card h3 {
+  color: var(--galileo-accent-soft);
+}
+
+.galileo-msg-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.galileo-msg-action {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: var(--galileo-text-muted);
+  cursor: pointer;
+
+  &:hover {
+    color: var(--galileo-accent-soft);
+    background: rgba(249, 115, 22, 0.1);
+  }
+
+  &.is-on {
+    color: var(--galileo-accent);
+  }
+}
+
+.galileo-view-md {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  padding: 7px 12px;
+  border-radius: 9px;
+  border: 1px solid var(--galileo-border);
+  background: var(--galileo-bg-chip);
+  color: var(--galileo-text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+
+  &:hover {
+    color: var(--galileo-accent-soft);
+    border-color: rgba(249, 115, 22, 0.35);
+  }
+}
+
+.galileo-agent-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--galileo-text);
+}
+
+.galileo-agent-chip time {
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--galileo-text-muted);
+}
+
+/* ---------- Activity cards (legacy + verification) ---------- */
+
+.galileo-activity-card {
+  background: linear-gradient(135deg, rgba(249, 115, 22, 0.055), rgba(12, 12, 12, 0.72));
+  border-color: var(--galileo-border) !important;
+  border-left-color: rgba(249, 115, 22, 0.42) !important;
+  border-radius: 12px;
+  backdrop-filter: blur(14px);
+}
+
+.galileo-activity-card button:hover {
+  background: rgba(249, 115, 22, 0.08);
+}
+
+.galileo-activity-row {
+  padding: 5px 9px;
+  border-left: 2px solid rgba(249, 115, 22, 0.3);
+}
+
+.galileo-verification-card {
+  background: linear-gradient(135deg, rgba(249, 115, 22, 0.06), rgba(12, 12, 12, 0.76));
+  border-color: var(--galileo-border) !important;
+  border-left: 2px solid var(--galileo-accent) !important;
+  backdrop-filter: blur(14px);
+}
+
+/* ---------- Composer ---------- */
+
+.galileo-composer {
+  border: 1px solid rgba(249, 115, 22, 0.4);
+  border-radius: 18px;
+  background:
+    radial-gradient(120% 140% at 50% 0%, rgba(249, 115, 22, 0.07), transparent 60%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(14, 14, 14, 0.9));
+  box-shadow:
+    0 0 42px rgba(249, 115, 22, 0.1),
+    0 18px 44px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(18px);
+  overflow: hidden;
+
+  &:focus-within {
+    border-color: rgba(249, 115, 22, 0.65);
+    box-shadow:
+      0 0 55px rgba(249, 115, 22, 0.16),
+      0 18px 44px rgba(0, 0, 0, 0.4),
+      inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  }
+}
+
+.galileo-composer textarea {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  backdrop-filter: none !important;
+}
+
+.galileo-composer-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px 12px;
+}
+
+.galileo-composer-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--galileo-border);
+  background: var(--galileo-bg-chip);
+  color: var(--galileo-text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+
+  &:hover {
+    color: var(--galileo-accent-soft);
+    border-color: rgba(249, 115, 22, 0.35);
+  }
+
+  &:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  &.is-on {
+    color: var(--galileo-accent);
+    border-color: rgba(249, 115, 22, 0.5);
+    background: rgba(249, 115, 22, 0.1);
+  }
+}
+
+.galileo-send {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 13px;
+  border: 1px solid rgba(249, 115, 22, 0.6);
+  background: linear-gradient(180deg, rgba(249, 115, 22, 0.25), rgba(249, 115, 22, 0.08));
+  color: var(--galileo-accent-soft);
+  cursor: pointer;
+  box-shadow: 0 0 24px rgba(249, 115, 22, 0.18);
+
+  &:hover {
+    border-color: var(--galileo-accent);
+    color: var(--galileo-accent);
+    box-shadow: 0 0 34px rgba(249, 115, 22, 0.3);
+  }
+}
+
+.galileo-auto-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  color: var(--galileo-text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+
+  &:hover {
+    color: var(--galileo-accent-soft);
+  }
+}
+
+/* ---------- Info rail ---------- */
+
+.galileo-rail {
+  width: var(--rail-w);
+  flex-shrink: 0;
+  overflow-y: auto;
+  background: rgba(10, 10, 10, 0.96);
+  border-left: 1px solid var(--galileo-border);
+  transition: width 0.2s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s ease;
+}
+
+.galileo-rail.is-collapsed {
+  width: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.galileo-rail-section {
+  border-bottom: 1px solid var(--galileo-border);
+  padding: 14px 16px;
+}
+
+.galileo-rail-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: transparent;
+  border: none;
+  padding: 0 0 10px;
+  color: var(--galileo-accent-soft);
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  text-align: left;
+}
+
+.galileo-rail-caret {
+  margin-left: auto;
+  color: var(--galileo-text-muted);
+}
+
+.galileo-rail-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--galileo-text-secondary);
+  padding: 2px 0;
+}
+
+.galileo-rail-muted {
+  color: var(--galileo-text-muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.galileo-rail-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--galileo-text);
+}
+
+.galileo-rail-id {
+  font-size: 12px;
+  color: var(--galileo-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.galileo-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--galileo-border);
+  background: var(--galileo-bg-chip);
+  font-size: 11.5px;
+  color: var(--galileo-text-secondary);
+  white-space: nowrap;
+}
+
+.galileo-chip.is-accent {
+  border-color: rgba(249, 115, 22, 0.45);
+  color: var(--galileo-accent-soft);
+  background: rgba(249, 115, 22, 0.08);
+}
+
+.galileo-chip.is-blue {
+  border-color: rgba(96, 165, 250, 0.4);
+  color: #93c5fd;
+  background: rgba(96, 165, 250, 0.08);
+}
+
+.galileo-chip.is-purple {
+  border-color: rgba(167, 139, 250, 0.4);
+  color: #c4b5fd;
+  background: rgba(167, 139, 250, 0.08);
+}
+
+.galileo-chip.is-teal {
+  border-color: rgba(45, 212, 191, 0.4);
+  color: #5eead4;
+  background: rgba(45, 212, 191, 0.08);
+}
+
+.galileo-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(71, 209, 140, 0.4);
+  background: rgba(71, 209, 140, 0.08);
+  color: var(--galileo-success);
+  font-size: 11.5px;
+
+  i {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--galileo-success);
+    box-shadow: 0 0 6px var(--galileo-success);
+  }
+
+  &.is-idle {
+    border-color: var(--galileo-border);
+    background: var(--galileo-bg-chip);
+    color: var(--galileo-text-muted);
+
+    i {
+      background: var(--galileo-text-muted);
+      box-shadow: none;
+    }
+  }
+}
+
+.galileo-file-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 6px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--galileo-text-secondary);
+  font-size: 12.5px;
+  cursor: pointer;
+  text-align: left;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--galileo-text);
+  }
+}
+
+.galileo-file-ext {
+  flex-shrink: 0;
+  width: 20px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  font-size: 8.5px;
+  font-weight: 700;
+  background: rgba(249, 115, 22, 0.14);
+  color: var(--galileo-accent-soft);
+}
+
+.galileo-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.galileo-session-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.galileo-session-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 4px;
+  border-radius: 10px;
+  border: 1px solid var(--galileo-border);
+  background: var(--galileo-bg-chip);
+}
+
+.galileo-session-stat-value {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--galileo-text);
+}
+
+.galileo-session-stat-label {
+  font-size: 10.5px;
+  color: var(--galileo-text-muted);
+}
+
+/* ---------- Search / Agents / Memory panels ---------- */
+
+.galileo-search-wrap {
+  padding: 0 12px 10px;
+
+  input {
+    width: 100%;
+    padding: 8px 10px;
+    border-radius: 9px;
+    border: 1px solid var(--galileo-border);
+    background: var(--galileo-bg-chip);
+    color: var(--galileo-text);
+    font-size: 13px;
+    outline: none;
+
+    &:focus {
+      border-color: rgba(249, 115, 22, 0.45);
+    }
+  }
+}
+
+.galileo-agent-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--galileo-border);
+  background: var(--galileo-bg-chip);
+  margin: 0 12px 8px;
+  font-size: 13px;
+  color: var(--galileo-text-secondary);
+}
+
+.galileo-agent-row strong {
+  color: var(--galileo-text);
+  font-weight: 600;
+}
+
+.galileo-memory-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 12px 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--galileo-border);
+  background: var(--galileo-bg-chip);
+  font-size: 12.5px;
+  color: var(--galileo-text-secondary);
+}
+
+.galileo-memory-item strong {
+  color: var(--galileo-text);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+/* ---------- Intro / examples ---------- */
 
 #intro h1 {
   color: var(--galileo-text) !important;
@@ -66,31 +1040,6 @@ textarea:focus {
   color: var(--galileo-accent-soft) !important;
 }
 
-.side-menu {
-  background: rgba(8, 8, 8, 0.9) !important;
-  border-color: var(--galileo-border) !important;
-  border-radius: 0 18px 18px 0 !important;
-  backdrop-filter: blur(22px) saturate(120%);
-  box-shadow: 12px 0 40px rgba(0, 0, 0, 0.38);
-}
-
-.galileo-activity-card {
-  background: linear-gradient(135deg, rgba(255, 122, 26, 0.055), rgba(12, 12, 12, 0.72));
-  border-color: var(--galileo-border) !important;
-  border-left-color: rgba(255, 122, 26, 0.42) !important;
-  border-radius: 12px;
-  backdrop-filter: blur(14px);
-}
-
-.galileo-activity-card button:hover {
-  background: rgba(255, 122, 26, 0.08);
-}
-
-.galileo-activity-row {
-  padding: 5px 9px;
-  border-left: 2px solid rgba(255, 122, 26, 0.3);
-}
-
 kbd.kdb {
   border: 1px solid var(--galileo-border);
   border-radius: 4px;
@@ -98,44 +1047,7 @@ kbd.kdb {
   padding: 1px 5px;
 }
 
-.galileo-project-selector {
-  color: var(--galileo-accent-soft) !important;
-  font-size: 0.9rem;
-  font-weight: 600;
-}
-
-.galileo-status-strip {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 34px;
-  padding: 0 16px;
-  background: rgba(8, 8, 8, 0.88);
-  border-bottom: 1px solid var(--galileo-border);
-  color: var(--galileo-text-muted);
-  font-size: 11px;
-  backdrop-filter: blur(14px);
-}
-
-.galileo-status-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 9px;
-  border: 1px solid var(--galileo-border);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.035);
-}
-
-.galileo-status-pill i {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--galileo-text-muted);
-}
-
-.galileo-status-pill.is-healthy i { background: var(--galileo-success); box-shadow: 0 0 8px var(--galileo-success); }
-.galileo-status-pill small { color: var(--galileo-text-muted); }
+/* ---------- Workbench ---------- */
 
 .galileo-workbench {
   background: var(--galileo-bg-panel) !important;
@@ -147,10 +1059,30 @@ kbd.kdb {
 
 .galileo-workbench > div:first-child {
   border-color: var(--galileo-border) !important;
-  background: rgba(255, 122, 26, 0.035);
+  background: rgba(249, 115, 22, 0.035);
+}
+
+@media (max-width: 1100px) {
+  .galileo-shell {
+    --rail-w: 0px;
+  }
+
+  .galileo-rail {
+    display: none;
+  }
 }
 
 @media (max-width: 900px) {
+  .galileo-shell {
+    --sidebar-w: 0px;
+  }
+
+  .galileo-sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 50;
+  }
+
   .galileo-workbench {
     position: fixed;
     inset: calc(var(--header-height) + 0.5rem) 0.5rem 0.5rem !important;
@@ -158,42 +1090,10 @@ kbd.kdb {
   }
 }
 
-.galileo-message {
-  border: 1px solid transparent;
-}
-
-.galileo-user-message {
-  margin-left: auto;
-  max-width: 78%;
-  background: rgba(24, 24, 24, 0.72) !important;
-  border-color: var(--galileo-border);
-}
-
-.galileo-assistant-message {
-  background: transparent !important;
-}
-
-.galileo-assistant-message > div:last-child {
-  max-width: 980px;
-}
-
-.galileo-verification-card {
-  background: linear-gradient(135deg, rgba(255, 122, 26, 0.06), rgba(12, 12, 12, 0.76));
-  border-color: var(--galileo-border) !important;
-  border-left: 2px solid var(--galileo-accent) !important;
-  backdrop-filter: blur(14px);
-}
-
-html,
-body {
-  height: 100%;
-  width: 100%;
-  scrollbar-color: var(--bolt-elements-bg-depth-4) var(--bolt-elements-bg-depth-2);
-  scrollbar-width: thin;
-}
+/* ---------- Scrollbars ---------- */
 
 * {
-  scrollbar-color: var(--bolt-elements-bg-depth-4) transparent;
+  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
   scrollbar-width: thin;
 }
 
@@ -207,13 +1107,19 @@ body {
 }
 
 *::-webkit-scrollbar-thumb {
-  background: var(--bolt-elements-bg-depth-4);
+  background: rgba(255, 255, 255, 0.14);
   border: 3px solid transparent;
   border-radius: 999px;
   background-clip: content-box;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background: var(--bolt-elements-textTertiary);
+  background: var(--galileo-text-muted);
   background-clip: content-box;
+}
+
+[data-chat-visible='true'] {
+  background:
+    radial-gradient(circle at 50% -20%, rgba(249, 115, 22, 0.06), transparent 42%),
+    var(--galileo-bg-void) !important;
 }
