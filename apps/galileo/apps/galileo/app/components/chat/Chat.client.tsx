@@ -98,6 +98,9 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
       .then(async (response) => response.ok ? await response.json() as { files: Record<string, string>; project?: string } : { files: {} as Record<string, string> })
       .then(async ({ files }) => {
         const container = await webcontainer;
+        for (const entry of await container.fs.readdir('.')) {
+          await container.fs.rm(entry, { recursive: true });
+        }
         for (const [filePath, content] of Object.entries(files)) {
           const directory = filePath.split('/').slice(0, -1).join('/');
           if (directory) await container.fs.mkdir(directory, { recursive: true });
