@@ -1,5 +1,5 @@
 import { json } from '@remix-run/node';
-import { collectStatus } from './api.status';
+import { collectStatus } from '~/lib/.server/status';
 
 /**
  * Alpha-style alias for /api/status so gateway-shaped probes answer at the

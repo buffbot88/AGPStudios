@@ -1,5 +1,5 @@
 import { json } from '@remix-run/node';
-import { collectStatus } from './api.status';
+import { collectStatus } from '~/lib/.server/status';
 
 /**
  * Alpha-style alias exposing the queue and worker subset of /api/status at
