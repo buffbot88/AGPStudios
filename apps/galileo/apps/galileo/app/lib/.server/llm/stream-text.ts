@@ -61,12 +61,6 @@ export async function streamText(messages: Messages, projectContext = '', sessio
       throw error;
     }
     if (!response.body) throw new Error('Alpha returned an empty stream');
-    if (events) {
-      // Re-wrap the streamed body: responses from fetch() carry immutable
-      // headers, and api.chat.ts must still set X-Request-Id on the result.
-      return new Response(response.body, { status: response.status, headers: response.headers });
-    }
-
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
     const reader = response.body.getReader();
@@ -105,7 +99,13 @@ export async function streamText(messages: Messages, projectContext = '', sessio
       },
       cancel() { void reader.cancel(); clearTimeout(timeout); },
     });
-    return new Response(stream, { status: 200, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-cache' } });
+    return new Response(stream, {
+      status: 200,
+      headers: {
+        'Content-Type': events ? 'text/event-stream; charset=utf-8' : 'text/plain; charset=utf-8',
+        'Cache-Control': 'no-cache',
+      },
+    });
   } catch (error) {
     clearTimeout(timeout);
     throw error;
