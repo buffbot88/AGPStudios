@@ -7,7 +7,7 @@ export type SystemStatus = {
   ok: boolean;
   gateway?: { reachable: boolean; latency_ms: number; version?: string | null; error?: string | null };
   queue?: { queued_requests: number; max_queue: number; active_requests: number } | null;
-  workers?: { liquid_backend_healthy: boolean; vision_worker_active: boolean } | null;
+  workers?: { liquid_backend_healthy?: boolean; liquid_backend_configured?: boolean; vision_worker_active: boolean } | null;
   pool?: { available_liquid_slots: number | null };
   updated_at?: string;
 };
@@ -60,7 +60,7 @@ export function startStatusPolling() {
   };
 }
 
-export const liquidHealthy = computed(systemStatus, (status) => Boolean(status?.gateway?.reachable && status?.workers?.liquid_backend_healthy));
+export const liquidHealthy = computed(systemStatus, (status) => Boolean(status?.gateway?.reachable && (status?.workers?.liquid_backend_healthy ?? status?.workers?.liquid_backend_configured)));
 
 export const visionActive = computed(systemStatus, (status) => Boolean(status?.workers?.vision_worker_active));
 

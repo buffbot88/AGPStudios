@@ -17,7 +17,8 @@ interface GatewayStatus {
 }
 
 interface GatewayWorkers {
-  liquid_backend_healthy: boolean;
+  liquid_backend_healthy?: boolean;
+  liquid_backend_configured?: boolean;
   vision_worker_active: boolean;
 }
 
