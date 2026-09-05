@@ -61,7 +61,11 @@ export async function streamText(messages: Messages, projectContext = '', sessio
       throw error;
     }
     if (!response.body) throw new Error('Alpha returned an empty stream');
-    if (events) return response;
+    if (events) {
+      // Re-wrap the streamed body: responses from fetch() carry immutable
+      // headers, and api.chat.ts must still set X-Request-Id on the result.
+      return new Response(response.body, { status: response.status, headers: response.headers });
+    }
 
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();

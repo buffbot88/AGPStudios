@@ -39,7 +39,7 @@ export function Sidebar() {
 
   const loadEntries = useCallback(() => {
     getAll(db)
-      .then((entries) => setList(entries.filter((item) => item.urlId || item.messages?.length)))
+      .then((entries) => setList(entries.filter((item) => item.id && (item.urlId || item.messages?.length))))
       .catch(() => setList([]));
   }, []);
 
@@ -156,7 +156,7 @@ export function Sidebar() {
             {filtered.length === 0 && <div className="px-2 py-1 text-xs text-bolt-elements-textTertiary">No conversations</div>}
             {filtered.map((item) => (
               <a
-                key={item.id}
+                key={item.id || item.timestamp}
                 href={`/chat/${item.urlId || item.id}`}
                 className={`galileo-convo ${activeChatId === item.id ? 'is-active' : ''}`}
               >

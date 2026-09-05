@@ -11,6 +11,9 @@ export default defineConfig((config) => {
       target: 'esnext',
     },
     optimizeDeps: {
+      // Kept pre-bundled so the client-only `path` shim can import it without
+      // it appearing in application source.
+      include: ['path-browserify'],
       esbuildOptions: {
         // Dependency pre-bundling (client) needs the same `path` ->
         // path-browserify mapping the plugin below provides for source
@@ -31,6 +34,11 @@ export default defineConfig((config) => {
           changeOrigin: true,
         },
       },
+      headers: {
+        // WebContainer (workbench) requires cross-origin isolation.
+        'Cross-Origin-Opener-Policy': 'same-origin',
+        'Cross-Origin-Embedder-Policy': 'require-corp',
+      },
     },
     plugins: [
       nodePolyfills({
@@ -49,7 +57,10 @@ export default defineConfig((config) => {
           }
 
           if (source === 'path' || source === 'node:path') {
-            return this.resolve('path-browserify', importer, { skipSelf: true });
+            // Namespace imports (`* as nodePath`) need real named exports,
+            // which CJS interop does not provide in dev — resolve to the ESM
+            // shim instead of the raw CJS package.
+            return this.resolve('~/lib/client/path-shim', importer, { skipSelf: true });
           }
 
           return null;
