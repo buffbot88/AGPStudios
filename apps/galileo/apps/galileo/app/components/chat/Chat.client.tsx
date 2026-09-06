@@ -292,9 +292,11 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
   };
 
   const resendMessage = (index: number) => {
-    const message = messages[index];
-    if (message?.role !== 'user' || agentRunning) return;
-    setMessages(messages.slice(0, index));
+    if (agentRunning) return;
+    const userIndex = [...messages].slice(0, index).map((message) => message.role).lastIndexOf('user');
+    const message = userIndex >= 0 ? messages[userIndex] : undefined;
+    if (!message || typeof message.content !== 'string') return;
+    setMessages(messages.slice(0, userIndex));
     void runCustomTurn(message.content, '');
   };
 
