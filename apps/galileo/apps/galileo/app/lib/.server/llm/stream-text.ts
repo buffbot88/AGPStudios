@@ -104,6 +104,35 @@ export async function streamText(
     let sawComplete = false;
     let started = false;
     const responseId = crypto.randomUUID();
+    /**
+     * Fallback-lane tool-call accumulation: old gateways answer in OpenAI
+     * chunks even in events mode. Tool-call deltas arrive fragmented and
+     * index-keyed (continuations carry no id), so accumulate by last-seen id
+     * and emit canonical tool.start/tool.arguments once on finish_reason.
+     */
+    const pendingToolCalls = new Map<string, { name: string; args: string }>();
+    let lastToolCallId = '';
+    const enqueueEvent = (streamController: ReadableStreamDefaultController<Uint8Array>, event: Parameters<typeof encodeGalileoEvent>[0]) => {
+      streamController.enqueue(encoder.encode(encodeGalileoEvent(event)));
+    };
+    const flushToolCalls = (streamController: ReadableStreamDefaultController<Uint8Array>) => {
+      for (const [id, call] of pendingToolCalls) {
+        if (!call.name) continue;
+        if (!started) {
+          started = true;
+          enqueueEvent(streamController, { type: 'response.start', response_id: responseId });
+        }
+        let parsedArgs: unknown = { raw: call.args };
+        try {
+          parsedArgs = JSON.parse(call.args || '{}');
+        } catch {
+          // Keep the raw accumulation when the upstream args are not valid JSON.
+        }
+        enqueueEvent(streamController, { type: 'tool.start', id, name: call.name });
+        enqueueEvent(streamController, { type: 'tool.arguments', id, arguments: parsedArgs });
+      }
+      pendingToolCalls.clear();
+    };
     const stream = new ReadableStream<Uint8Array>({
       /**
        * Keep reading upstream until at least one byte is enqueued or the
@@ -123,6 +152,7 @@ export async function streamText(
                * gateway closed without sending it (e.g. abrupt disconnect).
                */
               if (!sawComplete) {
+                flushToolCalls(streamController);
                 streamController.enqueue(encoder.encode(encodeGalileoEvent({ type: 'response.complete' })));
               }
             } else {
@@ -163,7 +193,7 @@ export async function streamText(
               try {
                 const parsed = JSON.parse(data) as {
                   type?: string;
-                  choices?: { delta?: { content?: unknown } }[];
+                  choices?: { delta?: { content?: unknown; tool_calls?: { id?: string; function?: { name?: string; arguments?: string } }[] }; finish_reason?: string | null }[];
                 };
 
                 if (typeof parsed.type === 'string') {
@@ -186,6 +216,26 @@ export async function streamText(
                   }
 
                   streamController.enqueue(encoder.encode(encodeGalileoEvent({ type: 'text.delta', delta: content })));
+                }
+
+                const toolCalls = parsed.choices?.[0]?.delta?.tool_calls;
+
+                if (Array.isArray(toolCalls)) {
+                  for (const call of toolCalls) {
+                    if (call.id) {
+                      lastToolCallId = call.id;
+                    }
+
+                    if (!lastToolCallId) continue;
+                    const entry = pendingToolCalls.get(lastToolCallId) ?? { name: '', args: '' };
+                    if (call.function?.name) entry.name = call.function.name;
+                    if (call.function?.arguments) entry.args += call.function.arguments;
+                    pendingToolCalls.set(lastToolCallId, entry);
+                  }
+                }
+
+                if (parsed.choices?.[0]?.finish_reason === 'tool_calls' && pendingToolCalls.size) {
+                  flushToolCalls(streamController);
                 }
               } catch {
                 // ignore malformed event records

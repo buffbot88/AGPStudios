@@ -109,6 +109,32 @@ const server = createServer((request, response) => {
 
     if (!hasToolResults) {
       // First turn: inspect the project with the `list` tool.
+      if (process.env.MOCK_DIALECT === 'openai') {
+        /**
+         * Old-gateway dialect: OpenAI chunks even in events mode. Mirrors the
+         * real Alpha version-skew lane (fragmented, index-keyed tool_calls
+         * with continuations carrying no id) so Galileo's fallback
+         * translation stays exercised. Run with MOCK_DIALECT=openai.
+         */
+        openaiChunk(controller, 'Let me inspect the project first. ');
+        await delay(30);
+        for (const [index, call] of [
+          { id: 'call_list_1', function: { name: 'list' } },
+          { function: { arguments: '{"path"' } },
+          { function: { arguments: ':"."}' } },
+        ].entries()) {
+          const delta = { tool_calls: [{ index, ...call }] };
+          controller.write(`data: ${JSON.stringify({ id: 'mock', object: 'chat.completion.chunk', choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`);
+          await delay(30);
+        }
+        controller.write(`data: ${JSON.stringify({ id: 'mock', object: 'chat.completion.chunk', choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })}\n\n`);
+        await delay(30);
+        controller.write('data: [DONE]\n\n');
+        controller.end();
+
+        return;
+      }
+
       sse(controller, { type: 'response.start', response_id: 'mock-response' });
       await delay(30);
       sse(controller, { type: 'text.delta', delta: 'Let me inspect the project first. ' });

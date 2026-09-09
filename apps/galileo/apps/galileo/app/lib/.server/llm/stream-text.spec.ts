@@ -133,6 +133,42 @@ describe('gateway stream translation', () => {
     expect(deltas.map((event) => (event as { delta: string }).delta).join('')).toBe('legacy gateway');
   });
 
+  it('translates fragmented OpenAI tool_calls into canonical tool events', async () => {
+    /**
+     * Regression: the events-mode fallback dropped `delta.tool_calls`
+     * entirely. Chunks mirror llama.cpp output — arguments fragmented across
+     * records, continuations carrying no id, emit on finish_reason.
+     */
+    stubGateway(
+      [
+        'data: {"choices":[{"delta":{"role":"assistant","content":"Let me inspect the project. "}}]}\n\n',
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"list","arguments":"{\\"path\\""}}]}}]}\n\n',
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":":\\".\\"}"}}]}}]}\n\n',
+        'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+        'data: [DONE]\n\n',
+      ],
+      true,
+    );
+
+    const response = await streamText([{ role: 'user', content: 'hi' }], '', '', true);
+    const events = [];
+
+    for await (const event of decodeGalileoEvents(response.body!)) {
+      events.push(event);
+    }
+    const types = events.map((event) => event.type);
+
+    expect(types).toEqual(expect.arrayContaining(['tool.start', 'tool.arguments']));
+
+    const start = events.find((event) => event.type === 'tool.start');
+    expect(start).toMatchObject({ id: 'call_1', name: 'list' });
+    // tool.start must precede tool.arguments so the client registers the call.
+    expect(types.indexOf('tool.start')).toBeLessThan(types.indexOf('tool.arguments'));
+
+    const args = events.find((event) => event.type === 'tool.arguments');
+    expect((args as { arguments: unknown }).arguments).toEqual({ path: '.' });
+  });
+
   it('synthesizes exactly one response.complete when the gateway closes without one', async () => {
     stubGateway(
       [
