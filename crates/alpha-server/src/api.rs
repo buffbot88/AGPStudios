@@ -8,7 +8,7 @@ use axum::{
 };
 use serde::Serialize;
 use futures_util::StreamExt;
-use std::{collections::{HashMap, HashSet}, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 use tokio::{sync::Semaphore, time::{timeout, Duration}};
 
 use crate::AppState;
@@ -200,12 +200,44 @@ fn canonical_vision_stream_response(pool: Arc<alpha_core::demand::VisionPool>, p
     normalized_stream_response(response.bytes_stream(), Some((pool, port)))
 }
 
+/// Per-call accumulation for OpenAI tool_call deltas: the name may trail the
+/// id, arguments arrive fragmented across records, and continuations carry no
+/// id (they are keyed by the last-seen id).
+#[derive(Default)]
+struct ToolAccumulation {
+    name: String,
+    args: String,
+    announced: bool,
+}
+
+/// Emit every accumulated tool call exactly once: tool.start (if the name
+/// arrived after the initial id chunk) followed by a single tool.arguments
+/// carrying the fully accumulated, parsed arguments. Fragmented deltas are
+/// joined before parsing, so partial JSON prefixes never leak downstream.
+fn flush_tool_events(tools: &mut HashMap<String, ToolAccumulation>, order: &mut Vec<String>) -> String {
+    let mut output = String::new();
+    for id in order.drain(..) {
+        if let Some(entry) = tools.remove(&id) {
+            if entry.name.is_empty() {
+                continue;
+            }
+            if !entry.announced {
+                output.push_str(&encode_event(&AgentEvent::ToolStart { id: id.clone(), name: entry.name.clone() }));
+            }
+            let arguments = serde_json::from_str::<serde_json::Value>(entry.args.trim())
+                .unwrap_or_else(|_| serde_json::json!({ "raw": entry.args }));
+            output.push_str(&encode_event(&AgentEvent::ToolArguments { id, arguments }));
+        }
+    }
+    output
+}
+
 fn normalized_stream_response(
     input: impl futures_util::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send + 'static,
     release: Option<(Arc<alpha_core::demand::VisionPool>, u16)>,
 ) -> Response {
     let response_id = format!("resp-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|value| value.as_nanos()).unwrap_or_default());
-    let stream = futures_util::stream::unfold((Box::pin(input), String::new(), false, false, response_id, release, HashSet::<String>::new(), HashMap::<String, String>::new()), |(mut input, mut buffer, mut started, complete, response_id, release, mut tool_ids, mut tool_args)| async move {
+    let stream = futures_util::stream::unfold((Box::pin(input), String::new(), false, false, response_id, release, HashMap::<String, ToolAccumulation>::new(), Vec::<String>::new(), String::new()), |(mut input, mut buffer, mut started, complete, response_id, release, mut tools, mut tool_order, mut last_tool_id)| async move {
         loop {
             if let Some(end) = buffer.find("\n\n") {
                 let record: String = buffer.drain(..end + 2).collect();
@@ -222,23 +254,40 @@ fn normalized_stream_response(
                         }
                         if let Some(calls) = chunk.pointer("/choices/0/delta/tool_calls").and_then(serde_json::Value::as_array) {
                             for call in calls {
-                                let id = call.get("id").and_then(serde_json::Value::as_str).unwrap_or_default().to_owned();
-                                if id.is_empty() { continue; }
-                                if tool_ids.insert(id.clone()) {
-                                    if let Some(name) = call.pointer("/function/name").and_then(serde_json::Value::as_str) {
-                                        output.push_str(&encode_event(&AgentEvent::ToolStart { id: id.clone(), name: name.to_owned() }));
+                                // Continuation deltas (argument fragments) carry no id; they belong to the last-seen call.
+                                if let Some(id) = call.get("id").and_then(serde_json::Value::as_str) {
+                                    if !id.is_empty() {
+                                        if !tools.contains_key(id) {
+                                            tools.insert(id.to_owned(), ToolAccumulation::default());
+                                            tool_order.push(id.to_owned());
+                                        }
+                                        last_tool_id = id.to_owned();
+                                    }
+                                }
+                                if last_tool_id.is_empty() {
+                                    continue;
+                                }
+                                let Some(entry) = tools.get_mut(&last_tool_id) else { continue };
+                                if let Some(name) = call.pointer("/function/name").and_then(serde_json::Value::as_str) {
+                                    if entry.name.is_empty() {
+                                        entry.name = name.to_owned();
                                     }
                                 }
                                 if let Some(args) = call.pointer("/function/arguments").and_then(serde_json::Value::as_str) {
-                                    tool_args.entry(id.clone()).or_default().push_str(args);
-                                    if let Ok(arguments) = serde_json::from_str(&tool_args[&id]) {
-                                        output.push_str(&encode_event(&AgentEvent::ToolArguments { id, arguments }));
-                                    }
+                                    entry.args.push_str(args);
+                                }
+                                if !entry.announced && !entry.name.is_empty() {
+                                    entry.announced = true;
+                                    output.push_str(&encode_event(&AgentEvent::ToolStart { id: last_tool_id.clone(), name: entry.name.clone() }));
                                 }
                             }
                         }
+                        // tool.arguments goes out exactly once per call, when the upstream declares the calls complete.
+                        if chunk.pointer("/choices/0/finish_reason").and_then(serde_json::Value::as_str) == Some("tool_calls") && !tool_order.is_empty() {
+                            output.push_str(&flush_tool_events(&mut tools, &mut tool_order));
+                        }
                         if !output.is_empty() {
-                            return Some((Ok::<bytes::Bytes, std::convert::Infallible>(bytes::Bytes::from(output)), (input, buffer, started, complete, response_id, release, tool_ids, tool_args)));
+                            return Some((Ok::<bytes::Bytes, std::convert::Infallible>(bytes::Bytes::from(output)), (input, buffer, started, complete, response_id, release, tools, tool_order, last_tool_id)));
                         }
                     }
                 }
@@ -249,13 +298,15 @@ fn normalized_stream_response(
                 Some(Err(error)) => {
                     let output = encode_event(&AgentEvent::Error { code: "upstream_stream".into(), message: error.to_string(), retryable: true });
                     if let Some((pool, port)) = release { pool.release(port).await; }
-                    return Some((Ok::<bytes::Bytes, std::convert::Infallible>(bytes::Bytes::from(output)), (input, buffer, started, true, response_id, None, tool_ids, tool_args)));
+                    return Some((Ok::<bytes::Bytes, std::convert::Infallible>(bytes::Bytes::from(output)), (input, buffer, started, true, response_id, None, tools, tool_order, last_tool_id)));
                 }
                 None => {
                     if !complete {
+                        // Upstream closed without finish_reason; flush pending tool calls before completing.
+                        let mut output = flush_tool_events(&mut tools, &mut tool_order);
                         if let Some((pool, port)) = release { pool.release(port).await; }
-                        let output = encode_event(&AgentEvent::ResponseComplete);
-                        return Some((Ok::<bytes::Bytes, std::convert::Infallible>(bytes::Bytes::from(output)), (input, buffer, started, true, response_id, None, tool_ids, tool_args)));
+                        output.push_str(&encode_event(&AgentEvent::ResponseComplete));
+                        return Some((Ok::<bytes::Bytes, std::convert::Infallible>(bytes::Bytes::from(output)), (input, buffer, started, true, response_id, None, tools, tool_order, last_tool_id)));
                     }
                     return None;
                 }
@@ -360,4 +411,56 @@ async fn workers(State(state): State<AppState>) -> impl IntoResponse {
         liquid_backend_healthy: state.liquid.health_check().await,
         vision_worker_active: state.vision_pool.has_running().await,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flush_emits_start_then_arguments_once_with_joined_fragments() {
+        let mut tools: HashMap<String, ToolAccumulation> = HashMap::new();
+        let mut order = vec!["call_1".to_string()];
+        tools.insert("call_1".to_string(), ToolAccumulation { name: "list".into(), args: format!("{}{}", "{\"pa", "th\":\".\"}"), announced: true });
+
+        // announced=true: tool.start already went out during accumulation, flush must not repeat it.
+        let output = flush_tool_events(&mut tools, &mut order);
+        assert_eq!(output.matches("event: tool.start").count(), 0);
+        assert_eq!(output.matches("event: tool.arguments").count(), 1);
+        assert!(output.contains("\"path\":\".\""), "fragmented args must join: {output}");
+    }
+
+    #[test]
+    fn flush_announces_start_for_name_arriving_after_id() {
+        let mut tools: HashMap<String, ToolAccumulation> = HashMap::new();
+        let mut order = vec!["call_2".to_string()];
+        // Id chunk carried no name; name arrived in a continuation. No start event was emitted yet.
+        tools.insert("call_2".to_string(), ToolAccumulation { name: "read".into(), args: "{}".into(), announced: false });
+
+        let output = flush_tool_events(&mut tools, &mut order);
+        assert_eq!(output.matches("event: tool.start").count(), 1);
+        let start = output.find("event: tool.start").expect("start present");
+        let args = output.find("event: tool.arguments").expect("args present");
+        assert!(start < args, "tool.start must precede tool.arguments");
+    }
+
+    #[test]
+    fn flush_skips_nameless_calls_and_repeated_flush_is_empty() {
+        let mut tools: HashMap<String, ToolAccumulation> = HashMap::new();
+        let mut order = vec!["call_3".to_string()];
+        tools.insert("call_3".to_string(), ToolAccumulation { name: String::new(), args: "{}".into(), announced: false });
+
+        assert!(flush_tool_events(&mut tools, &mut order).is_empty());
+        assert!(flush_tool_events(&mut tools, &mut order).is_empty(), "second flush must be empty");
+    }
+
+    #[test]
+    fn flush_falls_back_to_raw_object_on_unparseable_args() {
+        let mut tools: HashMap<String, ToolAccumulation> = HashMap::new();
+        let mut order = vec!["call_4".to_string()];
+        tools.insert("call_4".to_string(), ToolAccumulation { name: "search".into(), args: "{oops".into(), announced: true });
+
+        let output = flush_tool_events(&mut tools, &mut order);
+        assert!(output.contains("\"raw\":\"{oops\""), "unparseable args must degrade to a raw payload: {output}");
+    }
 }
