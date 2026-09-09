@@ -1,4 +1,5 @@
 import { webcontainer } from '~/lib/webcontainer';
+import { refreshProjectContext } from '~/lib/project-context';
 
 const TOOLS = new Set(['list', 'read', 'search', 'refresh_context']);
 
@@ -50,7 +51,8 @@ export async function executeReadOnlyTool(name: string, args: Record<string, unk
         signal?.removeEventListener('abort', onAbort);
       }
     }
-    return { ok: true, result: 'Project context refreshed from the active WebContainer.' };
+    const context = await refreshProjectContext();
+    return { ok: true, result: context ? `Project context rebuilt from the current workspace:\n\n${context}` : 'Workspace is empty; no project context to rebuild.' };
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') throw error;
     return { ok: false, error: error instanceof Error ? error.message : 'Tool failed' };

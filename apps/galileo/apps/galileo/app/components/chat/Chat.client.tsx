@@ -6,6 +6,7 @@ import { cssTransition, toast, ToastContainer } from 'react-toastify';
 import { useMessageParser, usePromptEnhancer, useShortcuts, useSnapScroll } from '~/lib/hooks';
 import { enhanceText } from '~/lib/hooks/usePromptEnhancer';
 import { runAgentTurn } from '~/lib/runtime/agent-controller';
+import { ensureProjectContext, projectContextStore, setActiveProjectId } from '~/lib/project-context';
 import type { AgentEvent } from '~/lib/runtime/galileo-stream';
 import { useChatHistory } from '~/lib/persistence';
 import { chatStore } from '~/lib/stores/chat';
@@ -94,7 +95,14 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
   useEffect(() => {
     let hydrated = false;
     let timer: number | undefined;
-    fetch(`/api/projects?project_id=${encodeURIComponent(window.location.pathname.split('/').pop() || 'default')}`, { credentials: 'include' })
+    /**
+     * Capture the project id once: useChatHistory rewrites the URL to
+     * /chat/<chatId> after the first artifact, so pathname-derived ids rot
+     * and snapshots would land under the wrong project.
+     */
+    const projectId = window.location.pathname.split('/').pop() || 'default';
+    setActiveProjectId(projectId);
+    fetch(`/api/projects?project_id=${encodeURIComponent(projectId)}`, { credentials: 'include' })
       .then(async (response) => response.ok ? await response.json() as { files: Record<string, string>; project?: string } : { files: {} as Record<string, string> })
       .then(async ({ files }) => {
         const container = await webcontainer;
@@ -106,6 +114,10 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
           if (directory) await container.fs.mkdir(directory, { recursive: true });
           await container.fs.writeFile(filePath, content);
         }
+        // Build the project context from the exact snapshot just mounted, cached by project id.
+        void ensureProjectContext(projectId, {
+          files: Object.fromEntries(Object.entries(files).map(([filePath, content]) => [filePath, { type: 'file', content, isBinary: false }])),
+        });
         const packageJson = files['package.json'];
         if (packageJson) {
           try {
@@ -127,7 +139,7 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
       window.clearTimeout(timer);
       timer = window.setTimeout(() => {
         const snapshot = Object.fromEntries(Object.entries(files).filter(([, file]) => file?.type === 'file' && !file.isBinary).map(([filePath, file]) => [filePath.replace(/^.*?\/home\/project\//, ''), (file as { content: string }).content || '']));
-        if (Object.keys(snapshot).length) void fetch('/api/projects', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project_id: window.location.pathname.split('/').pop() || 'default', files: snapshot }) });
+        if (Object.keys(snapshot).length) void fetch('/api/projects', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project_id: projectId, files: snapshot }) });
       }, 1500);
     });
     return () => { unsubscribe(); window.clearTimeout(timer); };
@@ -189,7 +201,7 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
     setChatStarted(true);
   };
 
-  const runCustomTurn = async (content: string, context: string) => {
+  const runCustomTurn = async (content: string, context: string | (() => string) = () => projectContextStore.get().context) => {
     const controller = new AbortController();
     agentAbort.current = controller;
     setAgentRunning(true);
@@ -201,6 +213,8 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
     const conversation = [...messages, userMessage, assistant];
     setMessages(conversation);
     try {
+      // Serve the cached context or rebuild it when the workspace drifted since the last turn.
+      await ensureProjectContext();
       for await (const event of runAgentTurn([...messages, userMessage], { projectContext: context, signal: controller.signal })) {
         setActivityEvents((current) => [...current, event]);
         if (event.type === 'tool.start') setStreamingTool({ name: event.name, args: {} });
@@ -267,7 +281,7 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
        * manually reset the input and we'd have to manually pass in file attachments. However, those
        * aren't relevant here.
        */
-      await runCustomTurn(`${diff}\n\n${turnInput}`, '');
+      await runCustomTurn(`${diff}\n\n${turnInput}`);
 
       /**
        * After sending a new message we reset all modifications since the model
@@ -275,7 +289,7 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
        */
       workbenchStore.resetAllFileModifications();
     } else {
-      await runCustomTurn(turnInput, '');
+      await runCustomTurn(turnInput);
     }
 
     setInput('');
@@ -297,7 +311,7 @@ export const ChatImpl = memo(({ project, initialMessages, storeMessageHistory }:
     const message = userIndex >= 0 ? messages[userIndex] : undefined;
     if (!message || typeof message.content !== 'string') return;
     setMessages(messages.slice(0, userIndex));
-    void runCustomTurn(message.content, '');
+    void runCustomTurn(message.content);
   };
 
   const [messageRef, scrollRef] = useSnapScroll();

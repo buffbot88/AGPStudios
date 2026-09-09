@@ -7,6 +7,7 @@ import { InfoRail } from '~/components/rail/InfoRail.client';
 import { Sidebar } from '~/components/sidebar/Sidebar.client';
 import { Workbench } from '~/components/workbench/Workbench.client';
 import { autoEnhance } from '~/lib/stores/ui';
+import { projectContextStore } from '~/lib/project-context';
 import { classNames } from '~/utils/classNames';
 import { Messages } from './Messages.client';
 
@@ -73,6 +74,7 @@ export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
   ) => {
     const TEXTAREA_MAX_HEIGHT = chatStarted ? 400 : 200;
     const autoEnhanceOn = useStore(autoEnhance);
+    const contextState = useStore(projectContextStore);
 
     return (
       <div
@@ -97,6 +99,11 @@ export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
                     <p className="mb-4 text-center text-bolt-elements-textSecondary">
                       Bring ideas to life in seconds or get help on existing projects.
                     </p>
+                    {contextState.state === 'scanning' && (
+                      <p className="text-center text-sm text-bolt-elements-textSecondary" role="status">
+                        Scanning project…
+                      </p>
+                    )}
                   </div>
                 )}
                 <div
