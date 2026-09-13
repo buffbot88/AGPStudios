@@ -28,16 +28,37 @@ impl LiquidBackend {
     }
 
     async fn request(&self, request: &ChatRequest) -> anyhow::Result<ChatStream> {
+        let mut messages = request.messages.clone();
+        if let Some(tools) = &request.tools {
+            let definitions = tools.iter()
+                .map(|tool| tool.get("function").cloned().unwrap_or_else(|| tool.clone()))
+                .collect::<Vec<_>>();
+            let definitions = serde_json::to_string(&definitions)?;
+            let prompt = format!("List of tools: {definitions}\nOutput function calls as JSON.");
+            if let Some(system) = messages.iter_mut().find(|message| message.role == "system") {
+                if let alpha_common::MessageContent::Text(content) = &mut system.content {
+                    content.push('\n');
+                    content.push_str(&prompt);
+                }
+            } else {
+                messages.insert(0, alpha_common::ChatMessage {
+                    role: "system".into(),
+                    content: alpha_common::MessageContent::Text(prompt),
+                    tool_calls: None,
+                    tool_call_id: None,
+                });
+            }
+        }
         let response = self.client
             .post(format!("{}/v1/chat/completions", self.config.endpoint.trim_end_matches('/')))
             .json(&serde_json::json!({
                 "model": self.config.model,
-                "messages": request.messages,
-                "max_tokens": request.max_tokens,
+                "messages": messages,
+                "max_tokens": request.max_tokens.max(1024),
                 "temperature": request.temperature,
                 "stream": true,
-                "tools": request.tools,
-                "tool_choice": "auto",
+                "tools": serde_json::Value::Null,
+                "tool_choice": "none",
             }))
             .send()
             .await?;

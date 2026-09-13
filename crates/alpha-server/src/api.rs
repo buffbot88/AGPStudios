@@ -232,12 +232,30 @@ fn flush_tool_events(tools: &mut HashMap<String, ToolAccumulation>, order: &mut 
     output
 }
 
+fn parse_special_tool_call(raw: &str) -> Option<(String, serde_json::Value)> {
+    let call = raw.trim().trim_start_matches('[').trim_end_matches(']').trim();
+    let open = call.find('(')?;
+    let name = call[..open].trim().to_owned();
+    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') { return None; }
+    let args = call[open + 1..].trim_end_matches(')').trim();
+    if args.is_empty() { return Some((name, serde_json::json!({}))); }
+    let mut object = serde_json::Map::new();
+    for pair in args.split(',') {
+        let (key, value) = pair.split_once('=')?;
+        let key = key.trim().trim_matches('"').trim_matches('\'').to_owned();
+        let value = value.trim();
+        let value = serde_json::from_str(value).unwrap_or_else(|_| serde_json::Value::String(value.trim_matches('"').trim_matches('\'').to_owned()));
+        object.insert(key, value);
+    }
+    Some((name, serde_json::Value::Object(object)))
+}
+
 fn normalized_stream_response(
     input: impl futures_util::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send + 'static,
     release: Option<(Arc<alpha_core::demand::VisionPool>, u16)>,
 ) -> Response {
     let response_id = format!("resp-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|value| value.as_nanos()).unwrap_or_default());
-    let stream = futures_util::stream::unfold((Box::pin(input), String::new(), false, false, response_id, release, HashMap::<String, ToolAccumulation>::new(), Vec::<String>::new(), String::new()), |(mut input, mut buffer, mut started, complete, response_id, release, mut tools, mut tool_order, mut last_tool_id)| async move {
+    let stream = futures_util::stream::unfold((Box::pin(input), String::new(), false, false, response_id, release, HashMap::<String, ToolAccumulation>::new(), Vec::<String>::new(), String::new(), String::new(), false, 0u32), |(mut input, mut buffer, mut started, complete, response_id, release, mut tools, mut tool_order, mut last_tool_id, mut special_tool, mut special_active, mut special_index)| async move {
         loop {
             if let Some(end) = buffer.find("\n\n") {
                 let record: String = buffer.drain(..end + 2).collect();
@@ -250,7 +268,30 @@ fn normalized_stream_response(
                                 started = true;
                                 output.push_str(&encode_event(&AgentEvent::ResponseStart { response_id: response_id.clone() }));
                             }
-                            output.push_str(&encode_event(&AgentEvent::TextDelta { delta: content.to_owned() }));
+                            let mut text = content.to_owned();
+                            loop {
+                                if !special_active {
+                                    let Some(start) = text.find("<|tool_call_start|>") else {
+                                        output.push_str(&encode_event(&AgentEvent::TextDelta { delta: text }));
+                                        break;
+                                    };
+                                    if start > 0 { output.push_str(&encode_event(&AgentEvent::TextDelta { delta: text[..start].to_owned() })); }
+                                    text = text[start + "<|tool_call_start|>".len()..].to_owned();
+                                    special_active = true;
+                                }
+                                special_tool.push_str(&text);
+                                let Some(end) = special_tool.find("<|tool_call_end|>") else { break; };
+                                let raw = special_tool[..end].to_owned();
+                                special_tool = special_tool[end + "<|tool_call_end|>".len()..].to_owned();
+                                special_active = false;
+                                if let Some((name, arguments)) = parse_special_tool_call(&raw) {
+                                    special_index += 1;
+                                    let id = format!("special-{response_id}-{special_index}");
+                                    output.push_str(&encode_event(&AgentEvent::ToolStart { id: id.clone(), name }));
+                                    output.push_str(&encode_event(&AgentEvent::ToolArguments { id, arguments }));
+                                }
+                                text = std::mem::take(&mut special_tool);
+                            }
                         }
                         if let Some(calls) = chunk.pointer("/choices/0/delta/tool_calls").and_then(serde_json::Value::as_array) {
                             for call in calls {
@@ -287,7 +328,7 @@ fn normalized_stream_response(
                             output.push_str(&flush_tool_events(&mut tools, &mut tool_order));
                         }
                         if !output.is_empty() {
-                            return Some((Ok::<bytes::Bytes, std::convert::Infallible>(bytes::Bytes::from(output)), (input, buffer, started, complete, response_id, release, tools, tool_order, last_tool_id)));
+                            return Some((Ok::<bytes::Bytes, std::convert::Infallible>(bytes::Bytes::from(output)), (input, buffer, started, complete, response_id, release, tools, tool_order, last_tool_id, special_tool, special_active, special_index)));
                         }
                     }
                 }
@@ -298,7 +339,7 @@ fn normalized_stream_response(
                 Some(Err(error)) => {
                     let output = encode_event(&AgentEvent::Error { code: "upstream_stream".into(), message: error.to_string(), retryable: true });
                     if let Some((pool, port)) = release { pool.release(port).await; }
-                    return Some((Ok::<bytes::Bytes, std::convert::Infallible>(bytes::Bytes::from(output)), (input, buffer, started, true, response_id, None, tools, tool_order, last_tool_id)));
+                    return Some((Ok::<bytes::Bytes, std::convert::Infallible>(bytes::Bytes::from(output)), (input, buffer, started, true, response_id, None, tools, tool_order, last_tool_id, special_tool, special_active, special_index)));
                 }
                 None => {
                     if !complete {
@@ -306,7 +347,7 @@ fn normalized_stream_response(
                         let mut output = flush_tool_events(&mut tools, &mut tool_order);
                         if let Some((pool, port)) = release { pool.release(port).await; }
                         output.push_str(&encode_event(&AgentEvent::ResponseComplete));
-                        return Some((Ok::<bytes::Bytes, std::convert::Infallible>(bytes::Bytes::from(output)), (input, buffer, started, true, response_id, None, tools, tool_order, last_tool_id)));
+                        return Some((Ok::<bytes::Bytes, std::convert::Infallible>(bytes::Bytes::from(output)), (input, buffer, started, true, response_id, None, tools, tool_order, last_tool_id, special_tool, special_active, special_index)));
                     }
                     return None;
                 }
