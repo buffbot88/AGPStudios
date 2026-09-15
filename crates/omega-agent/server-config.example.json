@@ -1,0 +1,75 @@
+{
+  "ASHAT_KEY": "REPLACE_WITH_LIVE_KEY",
+  "server": {
+    "bind": "0.0.0.0:8080",
+    "orchestrator_port": 18079,
+    "orchestrator_binary_default": "llama-server"
+  },
+  "models": {
+    "dir": "models",
+    "orchestrator_hint": "LFM2.5-VL-450M-Q4_K_M.gguf",
+    "inference_hint": "LFM2.5-1.2B-Instruct-Q4_K_M.gguf"
+  },
+  "inference": {
+    "context": 4096,
+    "max_tokens": 1024,
+    "timeout_seconds": 120,
+    "llama_threads": 2,
+    "llama_gpu_layers": 0
+  },
+  "orchestrator_pool": {
+    "ports_baseline": [18079],
+    "ports_extra":    [18078, 18077],
+    "queue_max": 32,
+    "spawn_attempts_before_503": 3
+  },
+  "coding_agent_pool": {
+    "ports": [18080, 18081, 18082],
+    "queue_max": 32,
+    "spawn_attempts_before_503": 3
+  },
+  "row_chain": [
+    {"id": "omega", "host": "127.0.0.1", "port": 8080, "enabled": true, "weight": 2},
+    {"id": "beta",  "host": "BETA_IP",   "port": 8082, "enabled": true, "weight": 1,
+     "api_key": "REPLACE_WITH_LIVE_KEY"},
+    {"id": "delta", "host": "DELTA_IP",  "port": 8088, "enabled": true, "weight": 1,
+     "api_key": "REPLACE_WITH_LIVE_KEY"}
+  ],
+  "metrics": {
+    "persist_path": "logs/metrics.jsonl"
+  },
+  "hub": {
+    "enabled": false,
+    "url": ""
+  },
+  "workspace": {
+    "dir": "workspaces"
+  },
+  "tool_loop": {
+    "max_iterations": 5,
+    "command_timeout_seconds": 10,
+    "output_max_chars": 4000,
+    "serper_api_key": ""
+  },
+  "skills_db": {
+    "enabled": false,
+    "host": "127.0.0.1",
+    "port": 3306,
+    "database": "",
+    "user": "",
+    "password": ""
+  },
+  "update": {
+    "timeout_seconds": 600,
+    "peers": [
+      {"host": "opc@BETA_IP",
+       "install": "/home/opc/Projects/ashatneuralhost-slave",
+       "port": 8082,
+       "enabled": true},
+      {"host": "opc@DELTA_IP",
+       "install": "/home/opc/Projects/ashatneuralhost-slave",
+       "port": 8088,
+       "enabled": true}
+    ]
+  }
+}
