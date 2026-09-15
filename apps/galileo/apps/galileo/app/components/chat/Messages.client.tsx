@@ -34,6 +34,7 @@ export const Messages = React.forwardRef<HTMLDivElement, MessagesProps>((props: 
             const isLast = index === messages.length - 1;
 
             return (
+              <React.Fragment key={index}>
               <div
                 key={index}
                 className={classNames('galileo-message flex gap-4 p-6 w-full rounded-[calc(0.75rem-1px)]', {
@@ -56,8 +57,12 @@ export const Messages = React.forwardRef<HTMLDivElement, MessagesProps>((props: 
                   ) : (
                     <AssistantMessage content={content} onResend={!isStreaming && isLast ? () => onResend?.(index) : undefined} timestamp={message.createdAt ? new Date(message.createdAt) : undefined} />
                   )}
+                  {!isUserMessage && isLast && activityEvents.length > 0 && <AgentPipeline events={activityEvents} now={activityStartedAt ? new Date(activityStartedAt) : new Date()} />}
+                  {!isUserMessage && isLast && streamingTool && <AgentPart part={{ type: 'tool-call', id: 'streaming-tool', tool: streamingTool.name, args: streamingTool.args, status: 'running', agent: 'Galileo' }} />}
+                  {!isUserMessage && isLast && isStreaming && !streamingTool && activityEvents.length === 0 && <StreamingAgentStatus />}
                 </div>
               </div>
+              </React.Fragment>
             );
           })
         : null}
@@ -67,9 +72,6 @@ export const Messages = React.forwardRef<HTMLDivElement, MessagesProps>((props: 
           <div className="mt-2 space-y-1">{jobEvents.map((event, index) => <AgentPart key={`${event}-${index}`} part={normalizeBuildEvent(event, index)} />)}</div>
         </details>
       )}
-      {activityEvents.length > 0 && <AgentPipeline events={activityEvents} now={activityStartedAt ? new Date(activityStartedAt) : new Date()} />}
-      {streamingTool && <AgentPart part={{ type: 'tool-call', id: 'streaming-tool', tool: streamingTool.name, args: streamingTool.args, status: 'running', agent: 'Galileo' }} />}
-      {isStreaming && !streamingTool && <StreamingAgentStatus />}
     </div>
   );
 });
