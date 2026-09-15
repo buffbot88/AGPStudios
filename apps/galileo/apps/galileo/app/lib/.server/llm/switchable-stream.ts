@@ -1,6 +1,7 @@
 export default class SwitchableStream extends TransformStream {
   private _controller: TransformStreamDefaultController | null = null;
   private _currentReader: ReadableStreamDefaultReader | null = null;
+  private _pumpPromise: Promise<void> | null = null;
   private _switches = 0;
 
   constructor() {
@@ -20,14 +21,12 @@ export default class SwitchableStream extends TransformStream {
   }
 
   async switchSource(newStream: ReadableStream) {
-    if (this._currentReader) {
-      await this._currentReader.cancel();
-    }
+    const oldReader = this._currentReader;
+    if (oldReader) await oldReader.cancel().catch(() => undefined);
+    await this._pumpPromise;
 
     this._currentReader = newStream.getReader();
-
-    this._pumpStream();
-
+    this._pumpPromise = this._pumpStream();
     this._switches++;
   }
 
@@ -48,7 +47,7 @@ export default class SwitchableStream extends TransformStream {
       }
     } catch (error) {
       console.log(error);
-      this._controller.error(error);
+      if (this._controller) this._controller.error(error);
     }
   }
 
