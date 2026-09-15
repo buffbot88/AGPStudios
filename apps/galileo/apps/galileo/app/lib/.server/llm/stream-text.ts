@@ -59,7 +59,11 @@ export async function streamText(
   const base = getGatewayURL().trim().replace(/\/+$/, '');
   const endpoint = `${base.endsWith('/v1') ? base : `${base}/v1`}/chat/completions`;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), GATEWAY_TIMEOUT_MS);
+  let responseReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  const timeout = setTimeout(() => {
+    if (responseReader) void responseReader.cancel().catch(() => undefined);
+    else controller.abort();
+  }, GATEWAY_TIMEOUT_MS);
 
   try {
     const response = await fetch(endpoint, {
@@ -100,6 +104,7 @@ export async function streamText(
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
     const reader = response.body.getReader();
+    responseReader = reader;
     let buffer = '';
     let sawComplete = false;
     let started = false;
@@ -160,6 +165,7 @@ export async function streamText(
             }
 
             streamController.close();
+            responseReader = null;
             clearTimeout(timeout);
 
             return;
@@ -267,7 +273,8 @@ export async function streamText(
         } while (!streamController.desiredSize || streamController.desiredSize > 0);
       },
       cancel() {
-        void reader.cancel();
+        responseReader = null;
+        void reader.cancel().catch(() => undefined);
         clearTimeout(timeout);
       },
     });
