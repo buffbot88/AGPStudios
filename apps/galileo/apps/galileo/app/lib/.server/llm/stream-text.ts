@@ -148,7 +148,24 @@ export async function streamText(
        */
       async pull(streamController) {
         do {
-          const next = await reader.read();
+          let next: ReadableStreamReadResult<Uint8Array>;
+          try {
+            next = await reader.read();
+          } catch (error) {
+            if (events) {
+              streamController.enqueue(encoder.encode(encodeGalileoEvent({
+                type: 'error',
+                code: 'gateway_stream_error',
+                message: error instanceof Error ? error.message : 'Gateway stream failed',
+                retryable: true,
+              })));
+              streamController.enqueue(encoder.encode(encodeGalileoEvent({ type: 'response.complete' })));
+            }
+            responseReader = null;
+            clearTimeout(timeout);
+            streamController.close();
+            return;
+          }
 
           if (next.done) {
             if (events) {
