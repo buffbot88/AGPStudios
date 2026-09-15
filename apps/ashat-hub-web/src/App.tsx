@@ -110,7 +110,7 @@ export default function App() {
   }, []);
 
   const loadTelemetry = useCallback(async () => {
-    if (!user || (view !== 'home' && view !== 'telemetry')) { setTelemetry(null); setTelemetryError(null); return; }
+    if (!user || view !== 'telemetry') { setTelemetry(null); setTelemetryError(null); return; }
     try {
       const response = await fetch('/api/telemetry', { credentials: 'same-origin', cache: 'no-store' });
       if (!response.ok) throw new Error(`Telemetry request failed (${response.status})`);
@@ -124,7 +124,7 @@ export default function App() {
 
   useEffect(() => {
     void loadTelemetry();
-    if (!user || (view !== 'home' && view !== 'telemetry')) return undefined;
+    if (!user || view !== 'telemetry') return undefined;
     const timer = window.setInterval(() => void loadTelemetry(), 8000);
     return () => window.clearInterval(timer);
   }, [loadTelemetry]);
@@ -185,7 +185,7 @@ export default function App() {
       {view === 'terms' && <LegalPage kind="terms" />}
       {view === 'privacy' && <LegalPage kind="privacy" />}
       {view === 'error' && <section className="member-panel legal-panel"><span className="eyebrow">Ashat platform</span><h2>Page unavailable</h2><p>The requested page could not be found.</p></section>}
-      {showHome && <TelemetrySection user={user} telemetry={telemetry} telemetryError={telemetryError} updatedAt={updatedAt} />}
+
       {view !== 'admin' && <StudioFooter navigate={navigate} />}
     </main>
   );
