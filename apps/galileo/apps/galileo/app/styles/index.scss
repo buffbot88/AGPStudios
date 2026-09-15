@@ -472,6 +472,41 @@ header {
   font-size: 12px;
 }
 
+.galileo-tool-surface {
+  margin-top: 8px;
+  border: 1px solid var(--galileo-border);
+  border-radius: 9px;
+  background: rgba(12, 12, 12, 0.62);
+  overflow: hidden;
+}
+
+.galileo-tool-surface.is-running { border-color: rgba(249, 115, 22, 0.55); }
+.galileo-tool-surface.is-failed { border-color: rgba(239, 68, 68, 0.55); }
+.galileo-tool-surface summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 11px;
+  cursor: pointer;
+  list-style: none;
+  color: var(--galileo-text-secondary);
+}
+.galileo-tool-surface summary::-webkit-details-marker { display: none; }
+.galileo-tool-surface summary > span:first-child { color: var(--galileo-text-muted); }
+.galileo-tool-surface.is-complete summary > span:first-child { color: #55c98a; }
+.galileo-tool-surface.is-failed summary > span:first-child { color: #f87171; }
+.galileo-tool-surface summary strong { color: var(--galileo-text); font-weight: 600; }
+.galileo-tool-status { margin-left: auto; font-size: 11px; color: var(--galileo-text-muted); }
+.galileo-tool-surface pre {
+  margin: 0;
+  padding: 9px 11px;
+  border-top: 1px solid var(--galileo-border);
+  overflow: auto;
+  white-space: pre-wrap;
+  color: var(--galileo-text-muted);
+  font-size: 11px;
+}
+
 .galileo-pipeline-steps {
   display: flex;
   align-items: center;
