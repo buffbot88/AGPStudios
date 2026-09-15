@@ -175,6 +175,8 @@ pub enum AgentEvent {
     ResponseStart { response_id: String },
     #[serde(rename = "text.delta")]
     TextDelta { delta: String },
+    #[serde(rename = "reasoning.delta")]
+    ReasoningDelta { delta: String },
     #[serde(rename = "tool.start")]
     ToolStart { id: String, name: String },
     #[serde(rename = "tool.arguments")]

@@ -449,6 +449,16 @@ header {
 
 /* ---------- Agent pipeline ---------- */
 
+.galileo-reasoning-surface {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.5rem;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--galileo-text-secondary);
+  font-size: 0.8rem;
+}
+.galileo-reasoning-surface summary { cursor: pointer; padding: 0.45rem 0.65rem; color: var(--galileo-text-muted); }
+.galileo-reasoning-surface > div { white-space: pre-wrap; padding: 0 0.65rem 0.65rem; max-height: 12rem; overflow: auto; }
+
 .galileo-pipeline {
   margin: 0 auto 18px;
   max-width: var(--chat-max-width);

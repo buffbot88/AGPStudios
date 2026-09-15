@@ -272,7 +272,16 @@ fn normalized_stream_response(
                             loop {
                                 if !special_active {
                                     let Some(start) = text.find("<|tool_call_start|>") else {
-                                        output.push_str(&encode_event(&AgentEvent::TextDelta { delta: text }));
+                                        if let Some(end) = text.find("</think>") {
+                                            let (reasoning, answer) = text.split_at(end);
+                                            output.push_str(&encode_event(&AgentEvent::ReasoningDelta { delta: reasoning.strip_prefix("<think>").unwrap_or(reasoning).to_owned() }));
+                                            output.push_str(&encode_event(&AgentEvent::TextDelta { delta: answer["</think>".len()..].to_owned() }));
+                                        } else if let Some(start) = text.find("<think>") {
+                                            if start > 0 { output.push_str(&encode_event(&AgentEvent::TextDelta { delta: text[..start].to_owned() })); }
+                                            output.push_str(&encode_event(&AgentEvent::ReasoningDelta { delta: text[start + "<think>".len()..].to_owned() }));
+                                        } else {
+                                            output.push_str(&encode_event(&AgentEvent::TextDelta { delta: text }));
+                                        }
                                         break;
                                     };
                                     if start > 0 { output.push_str(&encode_event(&AgentEvent::TextDelta { delta: text[..start].to_owned() })); }
@@ -365,6 +374,7 @@ fn event_type(event: &AgentEvent) -> &'static str {
     match event {
         AgentEvent::ResponseStart { .. } => "response.start",
         AgentEvent::TextDelta { .. } => "text.delta",
+        AgentEvent::ReasoningDelta { .. } => "reasoning.delta",
         AgentEvent::ToolStart { .. } => "tool.start",
         AgentEvent::ToolArguments { .. } => "tool.arguments",
         AgentEvent::ToolResult { .. } => "tool.result",

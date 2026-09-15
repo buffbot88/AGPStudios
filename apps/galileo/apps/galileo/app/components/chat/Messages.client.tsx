@@ -57,6 +57,7 @@ export const Messages = React.forwardRef<HTMLDivElement, MessagesProps>((props: 
                   ) : (
                     <AssistantMessage content={content} onResend={!isStreaming && isLast ? () => onResend?.(index) : undefined} timestamp={message.createdAt ? new Date(message.createdAt) : undefined} />
                   )}
+                  {!isUserMessage && isLast && <ReasoningSurface events={activityEvents} />}
                   {!isUserMessage && isLast && activityEvents.length > 0 && <AgentPipeline events={activityEvents} now={activityStartedAt ? new Date(activityStartedAt) : new Date()} />}
                   {!isUserMessage && isLast && streamingTool && <AgentPart part={{ type: 'tool-call', id: 'streaming-tool', tool: streamingTool.name, args: streamingTool.args, status: 'running', agent: 'Galileo' }} />}
                   {!isUserMessage && isLast && isStreaming && !streamingTool && activityEvents.length === 0 && <StreamingAgentStatus />}
@@ -75,3 +76,12 @@ export const Messages = React.forwardRef<HTMLDivElement, MessagesProps>((props: 
     </div>
   );
 });
+
+function ReasoningSurface({ events }: { events: AgentEvent[] }) {
+  const text = events.filter((event): event is Extract<AgentEvent, { type: 'reasoning.delta' }> => event.type === 'reasoning.delta').map((event) => event.delta).join('');
+  if (!text) return null;
+  return <details className="galileo-reasoning-surface mt-3" open={false}>
+    <summary>Thinking</summary>
+    <div>{text}</div>
+  </details>;
+}

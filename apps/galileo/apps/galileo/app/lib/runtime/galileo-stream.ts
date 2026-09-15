@@ -17,6 +17,7 @@ export type AgentRequest = {
 export type AgentEvent =
   | { type: 'response.start'; response_id: string }
   | { type: 'text.delta'; delta: string }
+  | { type: 'reasoning.delta'; delta: string }
   | { type: 'tool.start'; id: string; name: string }
   | { type: 'tool.arguments'; id: string; arguments: unknown }
   | { type: 'tool.result'; id: string; ok: boolean; result?: unknown; error?: { code: string; message: string } }
