@@ -320,7 +320,7 @@ function UserDetailPanel({ user: u, busy, currentUser, onUpdate, onBan, onDelete
 // ── Galileo workspace ──
 
 function GalileoTab({ section, onSectionChange, summary, deployments, filter, onFilterChange, onRefresh, onSelectDeploy, selectedDeploy, busy, onUndeploy, onUpdate, onPush, status }: { section: GalileoSection; onSectionChange: (section: GalileoSection) => void; summary: AdminSummary | null; deployments: AdminDeploymentRow[]; filter: string; onFilterChange: (filter: string) => void; onRefresh: () => void; onSelectDeploy: (deployment: AdminDeploymentRow | null) => void; selectedDeploy: AdminDeploymentRow | null; busy: boolean; onUndeploy: (userId: string, projectId: string) => void; onUpdate: () => void; onPush: () => void; status: RepoStatus | null }) {
-  return <div className="galileo-layout"><aside className="galileo-sidebar"><div className="galileo-sidebar-brand"><span className="galileo-mark">✦</span><div><strong>Galileo</strong><small>Workspace engine</small></div></div><nav aria-label="Galileo administration">{([{ id: 'overview', label: 'Overview', icon: '◈' }, { id: 'projects', label: 'Projects', icon: '▦' }, { id: 'deployments', label: 'Deployments', icon: '▲' }, { id: 'system', label: 'System', icon: '⚙' }] as { id: GalileoSection; label: string; icon: string }[]).map(item => <button key={item.id} type="button" className={section === item.id ? 'galileo-nav-item selected' : 'galileo-nav-item'} onClick={() => onSectionChange(item.id)}><span>{item.icon}</span>{item.label}</button>)}</nav></aside><div className="galileo-content">{section === 'overview' && <GalileoOverview summary={summary} deployments={deployments} onNavigate={onSectionChange} />}{section === 'projects' && <GalileoProjects summary={summary} />}{section === 'deployments' && <DeploymentsTab deployments={deployments} filter={filter} onFilterChange={onFilterChange} onRefresh={onRefresh} onSelectDeploy={onSelectDeploy} selectedDeploy={selectedDeploy} busy={busy} onUndeploy={onUndeploy} onGalileoUpdate={onUpdate} onGalileoPush={onPush} status={status} />}{section === 'system' && <GalileoSystem onPush={onPush} onUpdate={onUpdate} status={status} />}</div></div>;
+  return <div className="galileo-layout"><aside className="galileo-sidebar"><div className="galileo-sidebar-brand"><span className="galileo-mark">✦</span><div><strong>Galileo</strong><small>Workspace engine</small></div></div><nav aria-label="Galileo administration">{([{ id: 'overview', label: 'Overview', icon: '◈' }, { id: 'projects', label: 'Projects', icon: '▦' }, { id: 'deployments', label: 'Deployments', icon: '▲' }, { id: 'system', label: 'System', icon: '⚙' }] as { id: GalileoSection; label: string; icon: string }[]).map(item => <button key={item.id} type="button" className={section === item.id ? 'galileo-nav-item selected' : 'galileo-nav-item'} onClick={() => onSectionChange(item.id)}><span>{item.icon}</span>{item.label}</button>)}</nav></aside><div className="galileo-content">{section === 'overview' && <GalileoOverview summary={summary} deployments={deployments} onNavigate={onSectionChange} />}{section === 'projects' && <GalileoProjects summary={summary} />}{section === 'deployments' && <DeploymentsTab deployments={deployments} filter={filter} onFilterChange={onFilterChange} onRefresh={onRefresh} onSelectDeploy={onSelectDeploy} selectedDeploy={selectedDeploy} busy={busy} onUndeploy={onUndeploy} />}{section === 'system' && <GalileoSystem onPush={onPush} onUpdate={onUpdate} status={status} />}</div></div>;
 }
 
 function GalileoOverview({ summary, deployments, onNavigate }: { summary: AdminSummary | null; deployments: AdminDeploymentRow[]; onNavigate: (section: GalileoSection) => void }) {
@@ -337,15 +337,14 @@ function GalileoSystem({ onPush, onUpdate, status }: { onPush: () => void; onUpd
 
 // ── Deployments Tab ──
 
-function DeploymentsTab({ deployments, filter, onFilterChange, onRefresh, onSelectDeploy, selectedDeploy, busy, onUndeploy, onGalileoUpdate, onGalileoPush, status }: {
+function DeploymentsTab({ deployments, filter, onFilterChange, onRefresh, onSelectDeploy, selectedDeploy, busy, onUndeploy }: {
   deployments: AdminDeploymentRow[]; filter: string; onFilterChange: (f: string) => void; onRefresh: () => void;
   onSelectDeploy: (d: AdminDeploymentRow | null) => void; selectedDeploy: AdminDeploymentRow | null;
-  busy: boolean; onUndeploy: (userId: string, projectId: string) => void; onGalileoUpdate: () => void; onGalileoPush: () => void; status: RepoStatus | null;
+  busy: boolean; onUndeploy: (userId: string, projectId: string) => void;
 }) {
   return (
     <div className="adm-panel-layout">
       <div className="adm-panel-list">
-        <div className={`adm-repo-status adm-repo-${status?.galileo?.state || 'unknown'}`}><strong>Galileo</strong><span className="adm-repo-commit-label">Live / repo</span><code>{repoCommit(status?.galileo)}</code></div>
         <div className="adm-toolbar">
           <select value={filter} onChange={(e) => onFilterChange(e.target.value)}>
             <option value="">All status</option>
