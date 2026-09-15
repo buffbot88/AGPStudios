@@ -332,7 +332,7 @@ function GalileoProjects({ summary }: { summary: AdminSummary | null }) {
 }
 
 function GalileoSystem({ onPush, onUpdate, status }: { onPush: () => void; onUpdate: () => void; status: RepoStatus | null }) {
-  return <div className="galileo-page"><span className="eyebrow">Galileo system</span><h3 className="galileo-page-title">Engine maintenance</h3><p className="galileo-intro">Manage the Galileo runtime and keep its GitHub source synchronized.</p><section className="galileo-update-card"><div><span className="eyebrow">GitHub updater</span><h4>Update Galileo</h4><p>Pull the latest Galileo changes, rebuild the workspace engine, and restart the live service.</p><code>Live / repo: {repoCommit(status?.galileo)}</code></div><div className="galileo-update-actions"><button type="button" className="primary-button" onClick={onUpdate}>Update Galileo</button><button type="button" className="secondary-button" onClick={onPush}>Push Changes to Galileo GitHub</button></div></section></div>;
+  return <div className="galileo-page"><span className="eyebrow">Galileo system</span><h3 className="galileo-page-title">Monorepo runtime</h3><p className="galileo-intro">Galileo is maintained and released through the AGPStudios monorepo. Use the System page for repository updates.</p><code>Live / repo: {repoCommit(status?.galileo)}</code></div>;
 }
 
 // ── Deployments Tab ──
@@ -355,8 +355,6 @@ function DeploymentsTab({ deployments, filter, onFilterChange, onRefresh, onSele
             <option value="undeployed">Removed</option>
           </select>
           <button type="button" className="secondary-button" onClick={onRefresh}>Refresh</button>
-          <button type="button" className="secondary-button" onClick={onGalileoPush}>Push Changes to Galileo GitHub</button>
-          <button type="button" className="secondary-button" onClick={onGalileoUpdate}>Update Galileo</button>
         </div>
         <div className="adm-deploy-list">
           {deployments.map((d) => {
