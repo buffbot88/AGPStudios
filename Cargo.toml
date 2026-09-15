@@ -1,3 +1,3 @@
 [workspace]
 resolver = "2"
-members = ["crates/alpha-common", "crates/alpha-core", "crates/alpha-server", "crates/ashat-hub"]
+members = ["crates/alpha-common", "crates/alpha-core", "crates/alpha-server", "crates/ashat-hub", "crates/omega-agent"]
