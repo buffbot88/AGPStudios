@@ -51,6 +51,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/admin/users/ban", post(ban_user))
         .route("/api/admin/users/:user_id", delete(delete_user))
         .route("/api/admin/deployments", get(all_deployments))
+        .route("/api/admin/projects", get(all_projects))
         .route("/api/admin/deployments/:deployment_id", get(deployment_detail))
         .route("/api/admin/deployment/undeploy", post(admin_undeploy))
         .route("/api/admin/audit", get(audit_log))
@@ -184,6 +185,23 @@ async fn github_push(
     let result = Command::new("git").current_dir("/var/oled/data/AshatHub").arg("push").arg(format!("https://github.com/{repo}.git")).arg("HEAD:main").env("GIT_ASKPASS", &askpass).env("GIT_TERMINAL_PROMPT", "0").output().await;
     let _ = fs::remove_file(&askpass).await;
     match result { Ok(output) if output.status.success() => Json(serde_json::json!({"ok":true,"repository":repo,"branch":"main"})).into_response(), Ok(output) => { tracing::error!(status=?output.status, stderr=%String::from_utf8_lossy(&output.stderr), "GitHub push failed"); error_response(StatusCode::BAD_GATEWAY, "github_push_failed") }, Err(error) => { tracing::error!(?error, "GitHub push process failed"); error_response(StatusCode::BAD_GATEWAY, "github_push_failed") } }
+}
+
+async fn all_projects(
+    auth::AdminUser(_admin): auth::AdminUser,
+    State(state): State<AppState>,
+) -> Response {
+    let mut projects = Vec::new();
+    let Ok(mut users) = fs::read_dir(&state.projects_root).await else { return Json(serde_json::json!({"projects": projects})).into_response(); };
+    while let Ok(Some(user_entry)) = users.next_entry().await {
+        let Ok(user_type) = user_entry.file_type().await else { continue; };
+        if !user_type.is_dir() { continue; }
+        let user_id = user_entry.file_name().to_string_lossy().into_owned();
+        if let Ok(found) = crate::projects::load_projects(&user_entry.path()) {
+            for project in found { projects.push(serde_json::json!({"user_id": user_id, "id": project.id, "name": project.name, "description": project.description, "created_at": project.created_at, "file_count": project.file_count})); }
+        }
+    }
+    Json(serde_json::json!({"projects": projects})).into_response()
 }
 
 async fn summary(

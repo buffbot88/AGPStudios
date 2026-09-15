@@ -25,12 +25,12 @@ struct CreateProjectRequest {
 }
 
 #[derive(Debug, Serialize)]
-struct Project {
-    id: String,
-    name: String,
-    description: String,
-    created_at: String,
-    file_count: usize,
+pub(crate) struct Project {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) description: String,
+    pub(crate) created_at: String,
+    pub(crate) file_count: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -898,7 +898,7 @@ fn collect_files(root: &Path, current: &Path) -> std::io::Result<Vec<FileEntry>>
     Ok(files)
 }
 
-fn load_projects(root: &Path) -> std::io::Result<Vec<Project>> {
+pub(crate) fn load_projects(root: &Path) -> std::io::Result<Vec<Project>> {
     let mut projects = Vec::new();
     for entry in fs::read_dir(root)? {
         let entry = entry?;
