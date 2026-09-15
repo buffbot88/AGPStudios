@@ -1112,6 +1112,7 @@ pub(crate) async fn enforce_csrf(
             // is exempt because the admin session may be legacy and lack CSRF.
             | "/api/admin/github/push" | "/api/admin/github/galileo-push"
             | "/api/admin/system/update" | "/api/admin/galileo/update"
+            | "/api/admin/omega/servers" | "/api/admin/omega/status" | "/api/admin/omega/launch"
             | "/api/admin/users/role" | "/api/admin/users/status" | "/api/admin/users/ban"
             | "/api/admin/users" | "/api/admin/telemetry/refresh" | "/api/admin/telemetry/clear"
         )) && !path.starts_with("/api/admin/users/")
