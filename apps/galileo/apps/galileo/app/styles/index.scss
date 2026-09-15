@@ -838,6 +838,15 @@ header {
   padding: 2px 0;
 }
 
+.galileo-agent-tool {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 6px;
+  color: var(--galileo-text-secondary);
+  font-size: 12px;
+}
+
 .galileo-rail-muted {
   color: var(--galileo-text-muted);
   font-size: 12.5px;

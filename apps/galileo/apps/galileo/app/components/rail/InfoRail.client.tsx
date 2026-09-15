@@ -2,6 +2,7 @@ import { useStore } from '@nanostores/react';
 import { useEffect, useMemo, useState } from 'react';
 import { chatId } from '~/lib/persistence';
 import type { FileMap } from '~/lib/stores/files';
+import type { AgentEvent } from '~/lib/runtime/galileo-stream';
 import { workbenchStore } from '~/lib/stores/workbench';
 import { railOpen, railTab, type RailTab } from '~/lib/stores/ui';
 
@@ -14,7 +15,7 @@ const TOOL_CHIPS = [
   { icon: 'i-ph:arrows-counter-clockwise-duotone', label: 'refresh_context' },
 ];
 
-export function InfoRail({ agentActive, messages }: { agentActive: boolean; messages: Array<{ role: string; content: string; createdAt?: Date | number }> }) {
+export function InfoRail({ agentActive, messages, activityEvents = [] }: { agentActive: boolean; messages: Array<{ role: string; content: string; createdAt?: Date | number }>; activityEvents?: AgentEvent[] }) {
   const open = useStore(railOpen);
   const tab = useStore(railTab);
 
@@ -40,7 +41,7 @@ export function InfoRail({ agentActive, messages }: { agentActive: boolean; mess
         onToggle={() => railTab.set(tab === 'agent' ? 'files' : 'agent')}
         sectionKey="agent"
       >
-        <AgentSection active={agentActive} />
+        <AgentSection active={agentActive} events={activityEvents} />
       </RailSection>
       <RailSection
         icon="i-ph:folder-duotone"
@@ -131,7 +132,9 @@ function ProjectSection({ messages }: { messages: Array<{ role: string; content:
   );
 }
 
-function AgentSection({ active }: { active: boolean }) {
+function AgentSection({ active, events }: { active: boolean; events: AgentEvent[] }) {
+  const tools = events.filter((event): event is Extract<AgentEvent, { type: 'tool.start' }> => event.type === 'tool.start');
+  const latestStatus = [...events].reverse().find((event): event is Extract<AgentEvent, { type: 'status' }> => event.type === 'status');
   return (
     <div>
       <div className="flex items-center gap-2">
@@ -142,7 +145,8 @@ function AgentSection({ active }: { active: boolean }) {
           {active ? 'Active' : 'Idle'}
         </span>
       </div>
-      <p className="galileo-rail-muted mt-2">Coding agent with project awareness and read-only tool access.</p>
+      <p className="galileo-rail-muted mt-2">{latestStatus?.message || (active ? 'Working through the current request.' : 'Ready for the next request.')}</p>
+      {active && tools.length > 0 && <div className="mt-3"><div className="text-xs text-bolt-elements-textTertiary">TOOLS</div>{tools.map((tool) => <div className="galileo-agent-tool" key={tool.id}><span className="i-ph:wrench text-xs" /><span>{tool.name.replace(/_/g, ' ')}</span></div>)}</div>}
       <div className="mt-3 text-xs text-bolt-elements-textTertiary">Capabilities</div>
       <div className="mt-1.5 flex flex-wrap gap-1.5">
         {TOOL_CHIPS.map((tool) => (

@@ -250,7 +250,7 @@ export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
             </div>
           </div>
 
-          <ClientOnly>{() => <InfoRail agentActive={isStreaming} messages={messages} />}</ClientOnly>
+          <ClientOnly>{() => <InfoRail agentActive={isStreaming} messages={messages} activityEvents={activityEvents} />}</ClientOnly>
         </div>
       </div>
     );
