@@ -18,14 +18,8 @@ type AdminDeploymentRow = {
 type AdminTelemetry = { servers: { id: string; label: string; online: boolean; active_requests: number; requests_last_5m: number; generation_tokens_per_second: number; prompt_tokens_per_second: number; total_completion_tokens: number; queue_depth: number; queue_limit: number }[]; updated_at: number };
 type AdminTab = 'overview' | 'users' | 'galileo' | 'telemetry' | 'system';
 type GalileoSection = 'overview' | 'projects' | 'deployments' | 'system';
-type CodingAgentRepoStatus = { ok?: boolean; repo?: string; branch?: string; direction?: string; local_sha?: string; remote_sha?: string; ahead?: number; behind?: number; peers?: string[]; message?: string; error?: string };
-
-function codingAgentStatus(status: RepoStatus | null): CodingAgentRepoStatus {
-  if (!status || typeof status.coding_agents === 'string') return { error: typeof status?.coding_agents === 'string' ? status.coding_agents : 'Loading…' };
-  return status.coding_agents;
-}
 type RepoPair = { live: string; repo: string; state: string };
-type RepoStatus = { ashathub: RepoPair; galileo: RepoPair; coding_agents: CodingAgentRepoStatus };
+type RepoStatus = { ashathub: RepoPair; galileo: RepoPair };
 function repoCommit(pair?: RepoPair) { return pair ? `${pair.live.slice(0, 8)} / ${pair.repo.slice(0, 8)}` : 'Loading…'; }
 
 // ── Helpers ──
@@ -117,7 +111,6 @@ export function AdminSurface({ user }: { user: User | null }) {
   async function systemUpdate() { if (!window.confirm('Pull main, rebuild Ashat Hub, and restart the live service?')) return; setBusy(true); setError(null); try { const result = await request<{ commit: string }>(`${API}/admin/system/update`, { method: 'POST' }); window.alert(`System updated to ${result.commit}. Reloading Admin CP…`); window.setTimeout(() => window.location.reload(), 2500); } catch (reason) { setError(reason instanceof Error ? reason.message : 'System update failed'); } finally { setBusy(false); } }
   async function galileoPush() { if (!window.confirm('Push committed Galileo changes to GitHub main?')) return; setBusy(true); setError(null); try { await request(`${API}/admin/github/galileo-push`, { method: 'POST' }); window.alert('Galileo changes pushed.'); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Galileo GitHub push failed'); } finally { setBusy(false); } }
   async function galileoUpdate() { if (!window.confirm('Pull Galileo, rebuild it, and restart the live service?')) return; setBusy(true); setError(null); try { const result = await request<{ commit: string }>(`${API}/admin/galileo/update`, { method: 'POST' }); window.alert(`Galileo updated to ${result.commit}. Reloading Admin CP…`); window.setTimeout(() => window.location.reload(), 2500); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Galileo update failed'); } finally { setBusy(false); } }
-  async function codingAgentsPush() { if (!window.confirm('Push committed coding-agent hotfixes to GitHub?')) return; setBusy(true); setError(null); try { await request(`${API}/admin/coding-agents/push`, { method: 'POST' }); window.alert('Coding-agent hotfixes pushed.'); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Coding-agent push failed'); } finally { setBusy(false); } }
   async function codingAgentsUpdate() { if (!window.confirm('Launch the Omega coding agent?')) return; setBusy(true); setError(null); try { await request(`${API}/admin/omega/launch`, { method: 'POST' }); window.alert('Omega coding agent launched.'); await loadTelemetry(); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Omega launch failed'); } finally { setBusy(false); } }
 
   async function updateUser(userId: string, body: { role?: string; is_active?: boolean }) {
@@ -199,15 +192,14 @@ export function AdminSurface({ user }: { user: User | null }) {
       {tab === 'overview' && <OverviewTab summary={summary} onNavigate={setTab} />}
       {tab === 'users' && <UsersTab users={users} query={query} onQueryChange={setQuery} onSearch={load} onSelectUser={setSelectedUser} selectedUser={selectedUser} busy={busy} currentUser={user} onUpdateUser={updateUser} onBanUser={banUser} onDeleteUser={deleteUser} />}
       {tab === 'galileo' && <GalileoTab section={galileoSection} onSectionChange={(section) => { setGalileoSection(section); setSelectedDeploy(null); }} summary={summary} deployments={deployments} filter={deployFilter} onFilterChange={setDeployFilter} onRefresh={loadDeployments} onSelectDeploy={setSelectedDeploy} selectedDeploy={selectedDeploy} busy={busy} onUndeploy={adminUndeploy} onUpdate={galileoUpdate} onPush={galileoPush} status={repoStatus} />}
-      {tab === 'telemetry' && <TelemetryTab telemetry={telemetry} busy={busy} onAction={telemetryAction} onUpdate={codingAgentsUpdate} onPush={codingAgentsPush} status={repoStatus} />}
+      {tab === 'telemetry' && <TelemetryTab telemetry={telemetry} busy={busy} onAction={telemetryAction} onUpdate={codingAgentsUpdate} />}
       {tab === 'system' && <SystemTab database={database} settings={settings} onPush={pushGithub} onUpdate={systemUpdate} status={repoStatus} />}
     </section>
   );
 }
 
-function TelemetryTab({ telemetry, busy, onAction, onUpdate, onPush, status }: { telemetry: AdminTelemetry | null; busy: boolean; onAction: (action: 'refresh' | 'clear') => void; onUpdate: () => void; onPush: () => void; status: RepoStatus | null }) {
+function TelemetryTab({ telemetry, busy, onAction, onUpdate }: { telemetry: AdminTelemetry | null; busy: boolean; onAction: (action: 'refresh' | 'clear') => void; onUpdate: () => void }) {
   return <div className="adm-telemetry-page">
-    <div className="adm-repo-status"><div><strong>Coding Agents</strong><span className="adm-repo-subtitle">Omega · up to 3 Instruct workers</span></div><div className="adm-repo-commit"><span>Live / GitHub</span><code>{codingAgentStatus(status).local_sha ? `${(codingAgentStatus(status).local_sha || '').slice(0, 8)} / ${(codingAgentStatus(status).remote_sha || '').slice(0, 8)}` : codingAgentStatus(status).error || 'Loading…'}</code><small className={`adm-agent-state adm-agent-${codingAgentStatus(status).direction || 'unknown'}`}>{codingAgentStatus(status).direction || 'status unavailable'}</small></div></div>
     <section className="adm-update-card"><div className="adm-update-card-copy"><span className="eyebrow">Coding Agent</span><h3>Launch Omega coding workers</h3><p>Start the always-on Omega Instruct workers. Repeated launches are safe and never exceed the three-worker ceiling.</p><div className="adm-agent-flow"><span>1 · Omega online</span><b>→</b><span>2 · Up to 3 workers</span><b>→</b><span>3 · Ready</span></div></div><div className="adm-update-card-actions"><button type="button" className="primary-button" onClick={onUpdate} disabled={busy}>{busy ? 'Updating…' : 'Build, Test & Seed Agents'}</button></div></section>
     
     <div className="adm-toolbar adm-telemetry-toolbar"><button type="button" className="secondary-button" onClick={() => onAction('refresh')} disabled={busy}>Refresh telemetry</button><button type="button" className="secondary-button" onClick={() => onAction('clear')} disabled={busy}>Clear server cache</button><span className="refresh-state">{telemetry ? `Updated ${new Date(telemetry.updated_at * 1000).toLocaleTimeString()}` : 'Loading…'}</span></div>

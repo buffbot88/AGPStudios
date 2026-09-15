@@ -283,16 +283,6 @@ pub fn state_from_env() -> Result<AppState, Box<dyn std::error::Error + Send + S
             label: "Omega",
             base_url: env_url("ASHAT_OMEGA_TELEMETRY_URL", "https://129.213.94.124"),
         },
-        TelemetryTarget {
-            id: "beta",
-            label: "Beta",
-            base_url: env_url("ASHAT_BETA_TELEMETRY_URL", "https://150.136.208.93:8082"),
-        },
-        TelemetryTarget {
-            id: "delta",
-            label: "Delta",
-            base_url: env_url("ASHAT_DELTA_TELEMETRY_URL", "https://129.213.147.225:8088"),
-        },
     ];
 
     let db = match env::var("ASHAT_DATABASE_URL").or_else(|_| env::var("DATABASE_URL")) {
@@ -544,12 +534,8 @@ async fn showcase() -> impl IntoResponse {
 }
 
 pub(crate) async fn collect_telemetry(state: &AppState) -> TelemetryResponse {
-    let omega = snapshot(&state.client, &state.targets[0]);
-    let beta = snapshot(&state.client, &state.targets[1]);
-    let delta = snapshot(&state.client, &state.targets[2]);
-    let (omega, beta, delta) = tokio::join!(omega, beta, delta);
-
-    let servers = vec![omega, beta, delta];
+    let omega = snapshot(&state.client, &state.targets[0]).await;
+    let servers = vec![omega];
     TelemetryResponse {
         servers,
         updated_at: SystemTime::now()

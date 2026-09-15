@@ -595,7 +595,7 @@ async fn admin_restart(
     headers: axum::http::HeaderMap,
     Json(input): Json<TelemetryRestart>,
 ) -> Response {
-    if !["omega", "beta", "delta"].contains(&input.server.as_str()) {
+    if input.server != "omega" {
         return error_response(StatusCode::BAD_REQUEST, "invalid_server");
     }
     if let Some(retry) = state.operation_rate_limiter.check(
