@@ -413,7 +413,11 @@ async fn authorize_login(
         urlencoding::encode(form.code_challenge.as_deref().unwrap_or("")),
         urlencoding::encode(form.code_challenge_method.as_deref().unwrap_or("S256")),
     );
-    let response = Redirect::temporary(&authorize_url).into_response();
+    let response = (
+        StatusCode::SEE_OTHER,
+        [(header::LOCATION, authorize_url.as_str())],
+    )
+        .into_response();
     crate::auth::with_auth_cookies(
         response,
         &state,
