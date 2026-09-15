@@ -44,7 +44,7 @@ const EXAMPLE_PROMPTS = [
   { text: 'How do I center a div?' },
 ];
 
-const TEXTAREA_MIN_HEIGHT = 64;
+const TEXTAREA_MIN_HEIGHT = 56;
 
 export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
   (
@@ -75,6 +75,7 @@ export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
     const TEXTAREA_MAX_HEIGHT = chatStarted ? 400 : 200;
     const autoEnhanceOn = useStore(autoEnhance);
     const contextState = useStore(projectContextStore);
+    const activeToolCount = activityEvents.filter((event) => event.type === 'tool.start').length - activityEvents.filter((event) => event.type === 'tool.result').length;
 
     return (
       <div
@@ -192,6 +193,7 @@ export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
                           Auto
                           <span className={autoEnhanceOn ? 'i-ph:caret-up' : 'i-ph:caret-down'} />
                         </button>
+                        {isStreaming && <span className="galileo-agent-running">Agent running · {Math.max(0, activeToolCount)} tools active</span>}
                         <ClientOnly>
                           {() => (
                             <button

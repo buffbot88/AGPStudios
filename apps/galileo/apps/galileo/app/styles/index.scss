@@ -562,7 +562,8 @@ header {
 
 .galileo-user-message {
   margin-left: auto;
-  max-width: 78%;
+  max-width: 68%;
+  width: fit-content;
   background: rgba(24, 24, 24, 0.78) !important;
   border-color: var(--galileo-border);
   border-radius: 16px 16px 4px 16px;
@@ -682,6 +683,12 @@ header {
 }
 
 /* ---------- Composer ---------- */
+
+.galileo-agent-running {
+  color: var(--galileo-accent-soft);
+  font-size: 11px;
+  white-space: nowrap;
+}
 
 .galileo-composer {
   border: 1px solid rgba(249, 115, 22, 0.4);
