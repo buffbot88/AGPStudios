@@ -166,9 +166,16 @@ async fn github_push(
     auth::AdminUser(admin): auth::AdminUser,
 ) -> Response {
     let Some(pool) = state.db.as_ref() else { return error_response(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"); };
-    let token = match sqlx::query_scalar::<_, Option<String>>("SELECT github_access_token FROM users WHERE id=?").bind(&admin.id).fetch_one(pool).await {
-        Ok(Some(token)) if !token.is_empty() => token,
-        _ => return error_response(StatusCode::BAD_REQUEST, "github_account_not_linked"),
+    let (installation_id, oauth_token) = match sqlx::query_as::<_, (Option<u64>, Option<String>)>("SELECT github_app_installation_id, github_access_token FROM users WHERE id=?").bind(&admin.id).fetch_one(pool).await {
+        Ok(value) => value,
+        Err(_) => return error_response(StatusCode::BAD_REQUEST, "github_account_not_linked"),
+    };
+    let token = if let Some(id) = installation_id {
+        match crate::github_app::installation_token(&state, id).await { Ok(token) => token, Err(_) => return error_response(StatusCode::BAD_GATEWAY, "github_installation_token_failed") }
+    } else if let Some(token) = oauth_token.filter(|value| !value.is_empty()) {
+        token
+    } else {
+        return error_response(StatusCode::BAD_REQUEST, "github_account_not_linked");
     };
     let repo = std::env::var("GITHUB_REPOSITORY").unwrap_or_else(|_| "buffbot88/AshatHub".to_owned());
     let askpass = std::env::temp_dir().join(format!("ashat-github-askpass-{}", Uuid::new_v4()));

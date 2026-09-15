@@ -168,7 +168,7 @@ async fn repositories(State(state): State<AppState>, auth::AuthenticatedUser(use
     Json(repositories.into_iter().map(|repo| Repository { id: repo.id, name: repo.name, full_name: repo.full_name, private: repo.private, clone_url: repo.clone_url }).collect::<Vec<_>>()).into_response()
 }
 
-async fn installation_token(state: &AppState, installation_id: u64) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+pub(crate) async fn installation_token(state: &AppState, installation_id: u64) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let app_id = std::env::var("ASHAT_GITHUB_APP_ID")?;
     let key_path = std::env::var("ASHAT_GITHUB_APP_PRIVATE_KEY")?;
     let key = std::fs::read_to_string(key_path)?;
