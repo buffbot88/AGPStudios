@@ -55,7 +55,7 @@ describe('Galileo stream', () => {
     expect(events).toEqual([{ type: 'tool.result', id: 'c9', ok: true, result: 'résult ✓ "quoted"' }]);
   });
 
-  it('stops cleanly when the stream ends mid-record without a closing blank line', async () => {
+  it('decodes the final record without a closing blank line', async () => {
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(encoder.encode('event: text.delta\ndata: {"type":"text.delta","delta":"tail"}\n'));
@@ -67,6 +67,18 @@ describe('Galileo stream', () => {
     for await (const value of decodeGalileoEvents(stream)) {
       events.push(value);
     }
-    expect(events).toEqual([]);
+    expect(events).toEqual([{ type: 'text.delta', delta: 'tail' }]);
+  });
+
+  it('accepts CRLF-delimited records', async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"type":"response.complete"}\r\n\r\n'));
+        controller.close();
+      },
+    });
+    const events = [];
+    for await (const value of decodeGalileoEvents(stream)) events.push(value);
+    expect(events).toEqual([{ type: 'response.complete' }]);
   });
 });

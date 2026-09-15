@@ -38,8 +38,13 @@ export async function* decodeGalileoEvents(stream: ReadableStream<Uint8Array>): 
     for (;;) {
       const next = await reader.read();
       buffer += decoder.decode(next.value, { stream: !next.done });
+      buffer = buffer.replace(/\r\n/g, '\n');
       const records = buffer.split('\n\n');
       buffer = records.pop() || '';
+      if (next.done && buffer.trim()) {
+        records.push(buffer);
+        buffer = '';
+      }
       for (const record of records) {
         const data = record.split('\n').find((line) => line.startsWith('data:'))?.slice(5).trim();
         if (!data) continue;
