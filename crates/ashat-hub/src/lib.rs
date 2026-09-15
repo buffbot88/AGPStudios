@@ -39,6 +39,7 @@ mod icarus_auth;
 mod mail;
 mod member;
 mod oidc;
+mod omega;
 mod preview;
 mod projects;
 mod response;
@@ -259,6 +260,7 @@ pub fn app(state: AppState) -> Router {
         .merge(deployment::routes())
         .merge(icarus_auth::routes())
         .merge(oidc::routes())
+        .merge(omega::routes())
         .merge(vesper::routes())
         .merge(member::routes())
         .merge(web::routes())
