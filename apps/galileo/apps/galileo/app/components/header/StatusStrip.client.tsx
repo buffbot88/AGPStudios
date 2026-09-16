@@ -1,6 +1,6 @@
 import { useStore } from '@nanostores/react';
 import { useEffect, useState } from 'react';
-import { availableSlots, liquidHealthy, latencyHistory, startStatusPolling, statusUpdatedAt, visionActive, visionReady, type LatencySample } from '~/lib/stores/system';
+import { liquidHealthy, latencyHistory, startStatusPolling, statusUpdatedAt, visionActive, visionReady, type LatencySample } from '~/lib/stores/system';
 
 export function StatusStrip() {
   useEffect(() => startStatusPolling(), []);
@@ -8,7 +8,6 @@ export function StatusStrip() {
   const liquid = useStore(liquidHealthy);
   const vision = useStore(visionReady);
   const visionRunning = useStore(visionActive);
-  const slots = useStore(availableSlots);
   const updatedAt = useStore(statusUpdatedAt);
   const history = useStore(latencyHistory);
 
@@ -16,13 +15,8 @@ export function StatusStrip() {
 
   return (
     <div className="galileo-status-strip" aria-label="System status">
-      <StatusPill healthy={liquid} label="Liquid" detail={latest !== null ? `${latest} ms` : undefined} />
+      <StatusPill healthy={liquid} label="Qwen" detail={latest !== null ? `${latest} ms` : undefined} />
       <StatusPill healthy={vision} label="Vision" detail={visionRunning ? 'active' : vision ? 'ready' : 'offline'} />
-      <span className="inline-flex items-center gap-2 rounded-full border border-bolt-elements-borderColor bg-white/[0.035] px-3 py-[5px]">
-        <span className="i-ph:users-three text-sm" />
-        Peers {slots === null ? '—' : `${Math.max(slots, 0)}/3`}
-        <i className={slots !== null && slots > 0 ? 'is-healthy' : ''} style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', background: slots ? 'var(--galileo-success)' : 'var(--galileo-text-muted)' }} />
-      </span>
       <span className="galileo-status-spacer" />
       {updatedAt && <span>updated {updatedAt.toLocaleTimeString()}</span>}
       <Sparkline history={history} />

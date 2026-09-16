@@ -253,7 +253,7 @@ function SystemBell() {
           <div className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-bolt-elements-textTertiary">System events</div>
           <div className="galileo-menu-item cursor-default">
             <span className="i-ph:drop-duotone text-base" />
-            Liquid: {liquid ? 'healthy' : 'unreachable'}
+            Qwen: {liquid ? 'healthy' : 'unreachable'}
           </div>
           <div className="galileo-menu-item cursor-default">
             <span className="i-ph:eye-duotone text-base" />

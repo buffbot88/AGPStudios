@@ -181,7 +181,7 @@ export function Sidebar() {
           <div className="galileo-agent-row">
             <span className={`galileo-dot ${liquid ? '' : 'opacity-40'}`} />
             <span>
-              <strong>Liquid</strong> · text worker ·{' '}
+              <strong>Qwen</strong> · text worker ·{' '}
               {liquid ? `healthy${slots !== null ? ` · ${slots} slot${slots === 1 ? '' : 's'}` : ''}` : 'unreachable'}
             </span>
           </div>
