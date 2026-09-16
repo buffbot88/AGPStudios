@@ -123,12 +123,12 @@ async fn chat_completions(
                 },
                 Err(error) => completion_response(true, StatusCode::BAD_GATEWAY, serde_json::json!({"error": error.to_string()})),
             },
-            Intent::Vision => return match alpha_core::proxy::vision_stream(&state.vision_pool, &request).await {
-                Ok((port, response)) => {
+            Intent::Vision => return match alpha_core::proxy::vision_stream(&state.config.vision.endpoint, &request).await {
+                Ok(response) => {
                     if headers.get("x-galileo-protocol").and_then(|value| value.to_str().ok()) == Some("events") {
-                        canonical_vision_stream_response(state.vision_pool.clone(), port, response)
+                        canonical_stream_response(response)
                     } else {
-                        vision_stream_response(state.vision_pool.clone(), port, response)
+                        upstream_stream_response(response)
                     }
                 },
                 Err(error) => completion_response(true, StatusCode::BAD_GATEWAY, serde_json::json!({"error": error.to_string()})),
@@ -139,7 +139,7 @@ async fn chat_completions(
     match intent {
         // ── Vision: on-demand 450M VL ──────────────────────────
         Intent::Vision => {
-            match alpha_core::proxy::vision_completions(&state.vision_pool, &request).await {
+            match alpha_core::proxy::vision_completions(&state.config.vision.endpoint, &request).await {
                 Ok(body) => completion_response(request.stream, StatusCode::OK, body),
                 Err(e) => {
                     tracing::error!("Vision inference failed: {}", e);
@@ -196,9 +196,6 @@ fn canonical_stream_response(response: reqwest::Response) -> Response {
     normalized_stream_response(response.bytes_stream(), None)
 }
 
-fn canonical_vision_stream_response(pool: Arc<alpha_core::demand::VisionPool>, port: u16, response: reqwest::Response) -> Response {
-    normalized_stream_response(response.bytes_stream(), Some((pool, port)))
-}
 
 /// Per-call accumulation for OpenAI tool_call deltas: the name may trail the
 /// id, arguments arrive fragmented across records, and continuations carry no
@@ -389,18 +386,6 @@ fn upstream_stream_response(response: reqwest::Response) -> Response {
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/event-stream"), (header::CACHE_CONTROL, "no-cache")], Body::from_stream(stream)).into_response()
 }
 
-fn vision_stream_response(pool: Arc<alpha_core::demand::VisionPool>, port: u16, response: reqwest::Response) -> Response {
-    let stream = futures_util::stream::unfold((response.bytes_stream(), Some((pool, port))), |(mut input, release)| async move {
-        match input.next().await {
-            Some(chunk) => Some((chunk.map_err(axum::Error::new), (input, release))),
-            None => {
-                if let Some((pool, port)) = release { pool.release(port).await; }
-                None
-            }
-        }
-    });
-    (StatusCode::OK, [(header::CONTENT_TYPE, "text/event-stream"), (header::CACHE_CONTROL, "no-cache")], Body::from_stream(stream)).into_response()
-}
 
 async fn models() -> impl IntoResponse {
     Json(serde_json::json!({

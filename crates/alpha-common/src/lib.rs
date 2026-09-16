@@ -39,6 +39,7 @@ fn default_true() -> bool {
 /// needs to be read. Auto-stops after idle timeout.
 #[derive(serde::Deserialize, Clone)]
 pub struct VisionConfig {
+    pub endpoint: String,
     pub idle_timeout_secs: u64,
     #[serde(default = "default_true")]
     pub on_demand: bool,
@@ -47,6 +48,7 @@ pub struct VisionConfig {
 impl Default for VisionConfig {
     fn default() -> Self {
         Self {
+            endpoint: "http://127.0.0.1:19000".into(),
             idle_timeout_secs: 300,
             on_demand: true,
         }
