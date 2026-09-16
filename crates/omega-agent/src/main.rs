@@ -26,14 +26,22 @@ async fn status(State(state): State<AppState>) -> Response {
     Response::builder().header(header::CONTENT_TYPE, "application/json").body(Body::from(format!(r#"{{"workers":{},"max_workers":{}}}"#, state.workers.len(), MAX_WORKERS))).unwrap()
 }
 
-async fn completions(State(state): State<AppState>, request: Request<Body>) -> Response {
-    if state.workers.is_empty() { return (StatusCode::SERVICE_UNAVAILABLE, "no inference workers").into_response(); }
-    let url = format!("{}/v1/chat/completions", state.workers[state.next.fetch_add(1, Ordering::Relaxed) % state.workers.len()]);
+async fn forward(state: &AppState, request: Request<Body>, url: String) -> Response {
     let body = match axum::body::to_bytes(request.into_body(), 16 * 1024 * 1024).await { Ok(body) => body, Err(_) => return (StatusCode::BAD_REQUEST, "invalid request body").into_response() };
     let response = match state.client.post(url).header(header::CONTENT_TYPE, "application/json").body(body).send().await { Ok(response) => response, Err(_) => return (StatusCode::BAD_GATEWAY, "inference worker unavailable").into_response() };
     let mut builder = Response::builder().status(response.status());
     if let Some(value) = response.headers().get(header::CONTENT_TYPE) { builder = builder.header(header::CONTENT_TYPE, value); }
     builder.body(Body::from_stream(response.bytes_stream())).unwrap()
+}
+
+async fn completions(State(state): State<AppState>, request: Request<Body>) -> Response {
+    if state.workers.is_empty() { return (StatusCode::SERVICE_UNAVAILABLE, "no inference workers").into_response(); }
+    let url = format!("{}/v1/chat/completions", state.workers[state.next.fetch_add(1, Ordering::Relaxed) % state.workers.len()]);
+    forward(&state, request, url).await
+}
+
+async fn vision(State(state): State<AppState>, request: Request<Body>) -> Response {
+    forward(&state, request, format!("{}/v1/chat/completions", setting("OMEGA_VISION_ENDPOINT", "http://127.0.0.1:19000"))).await
 }
 
 use axum::response::IntoResponse;
@@ -70,7 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     });
-    let app = Router::new().route("/health", get(health)).route("/ready", get(health)).route("/status", get(status)).route("/v1/chat/completions", any(completions)).with_state(state.clone());
+    let app = Router::new().route("/health", get(health)).route("/ready", get(health)).route("/status", get(status)).route("/v1/chat/completions", any(completions)).route("/v1/vision/chat/completions", any(vision)).with_state(state.clone());
     tracing::info!(workers = state.workers.len(), %bind, "Omega agent listening");
     axum::serve(tokio::net::TcpListener::bind(&bind).await?, app).await?;
     Ok(())
