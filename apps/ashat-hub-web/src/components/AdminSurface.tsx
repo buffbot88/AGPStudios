@@ -178,7 +178,7 @@ export function AdminSurface({ user }: { user: User | null }) {
     { id: 'overview', label: 'Overview' },
     { id: 'users', label: 'Users' },
     { id: 'galileo', label: 'Galileo' },
-    { id: 'telemetry', label: 'Coding Agents' },
+    { id: 'telemetry', label: 'Omega' },
     { id: 'system', label: 'System' },
   ];
 
@@ -207,7 +207,7 @@ export function AdminSurface({ user }: { user: User | null }) {
 
 function TelemetryTab({ telemetry, servers, busy, onAction, onUpdate }: { telemetry: AdminTelemetry | null; servers: OmegaServer[]; busy: boolean; onAction: (action: 'refresh' | 'clear') => void; onUpdate: () => void }) {
   return <div className="adm-telemetry-page">
-    <section className="adm-update-card"><div className="adm-update-card-copy"><span className="eyebrow">Coding Agent</span><h3>Launch Omega coding workers</h3><p>Start the always-on Omega Instruct workers. Repeated launches are safe and never exceed the three-worker ceiling.</p><div className="adm-agent-flow"><span>1 · Omega online</span><b>→</b><span>2 · Up to 3 workers</span><b>→</b><span>3 · Ready</span></div></div><div className="adm-update-card-actions"><button type="button" className="primary-button" onClick={onUpdate} disabled={busy}>{busy ? 'Updating…' : 'Build, Test & Seed Agents'}</button></div></section>
+    <section className="adm-update-card"><div className="adm-update-card-copy"><span className="eyebrow">Omega Inference</span><h3>Qwen + Vision</h3><p>Omega hosts Qwen for coding and the 450M VL worker for image understanding. Alpha runs the agent runtime only.</p><div className="adm-agent-flow"><span>Qwen · coding</span><b>→</b><span>Vision · 450M VL</span><b>→</b><span>Alpha · tools</span></div></div><div className="adm-update-card-actions"><button type="button" className="primary-button" onClick={onUpdate} disabled={busy}>{busy ? 'Starting…' : 'Ensure Omega is running'}</button></div></section>
     
     <div className="adm-toolbar adm-telemetry-toolbar"><button type="button" className="secondary-button" onClick={() => onAction('refresh')} disabled={busy}>Refresh telemetry</button><button type="button" className="secondary-button" onClick={() => onAction('clear')} disabled={busy}>Clear server cache</button><span className="refresh-state">{telemetry ? `Updated ${new Date(telemetry.updated_at * 1000).toLocaleTimeString()}` : 'Loading…'}</span></div>
     <div className="admin-telemetry-grid">{servers.map((server) => <div className={`admin-server ${server.online ? 'online' : 'offline'}`} key={server.id}><div className="admin-server-heading"><strong>{server.label}</strong><span className="admin-server-status">{server.online ? '● Online' : '○ Offline'}</span></div><small>{server.ready ? 'Ready' : 'Not ready'} · {server.workers ?? 0}/{server.max_workers} workers</small><small>Omega managed by Ashat Hub SSH provisioning</small></div>)}</div>
@@ -239,7 +239,7 @@ function OverviewTab({ summary, onNavigate }: { summary: AdminSummary | null; on
       <div className="adm-overview-actions">
         <button type="button" className="adm-action-card" onClick={() => onNavigate('users')}><span className="adm-action-icon">♙</span><span><strong>Manage Users</strong><small>Accounts, roles, and access</small></span><b>→</b></button>
         <button type="button" className="adm-action-card" onClick={() => onNavigate('galileo')}><span className="adm-action-icon">✦</span><span><strong>Galileo Workspace</strong><small>Projects and deployments</small></span><b>→</b></button>
-        <button type="button" className="adm-action-card" onClick={() => onNavigate('telemetry')}><span className="adm-action-icon">⌁</span><span><strong>Coding Agents</strong><small>Runtime telemetry and updates</small></span><b>→</b></button>
+        <button type="button" className="adm-action-card" onClick={() => onNavigate('telemetry')}><span className="adm-action-icon">⌁</span><span><strong>Omega</strong><small>Qwen and Vision status</small></span><b>→</b></button>
         <button type="button" className="adm-action-card" onClick={() => onNavigate('system')}><span className="adm-action-icon">⚙</span><span><strong>System Health</strong><small>Database and configuration</small></span><b>→</b></button>
       </div>
 
