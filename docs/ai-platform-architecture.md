@@ -1,144 +1,98 @@
 # AGP Studios AI Platform Architecture
 
-Status: current implementation baseline (post-Liquid cutover). Galileo speaks only to the
-Alpha gateway; the Omega/Beta/Delta coding-agent tier no longer sits in the inference path,
-and Galileo has no Chat/Plan/Build conversational modes.
+Status: current implementation baseline for v8.9.
+
+## Naming
+
+- **Ashat** — the complete AI system.
+- **Liquid Qwen** — Qwen coding inference plus LiquidAI 450M VL inference.
+- **Alpha** — Ashat's Rust gateway and deterministic agent runtime.
+- **Omega** — Ashat's dedicated inference host.
+- **Galileo 3** — the user-facing coding workspace.
 
 ## System boundary
 
 ```text
 User
   ↓
-Galileo
-  ├─ conversation UI and agent loop
-  ├─ live WebContainer workspace (files, editor, preview, terminal)
-  ├─ local tool execution inside the workspace (read-only tools + file/command actions)
-  └─ deployment request
-        ↓  /v1/chat/completions  (OpenAI-compatible; canonical SSE with the events header)
-Alpha gateway (alpha-server, :3000)
-  ├─ deterministic intent routing: text → Liquid, image messages → VL
-  ├─ admission: request queue, Liquid slots, VL slots, per-account limits
-  ├─ Liquid lane  → LFM2.5-1.2B-Instruct (streamed)
-  └─ Vision lane  → demand-loaded LFM2.5-VL-450M worker (idle-unloaded)
+Galileo 3
+  ↓
+Alpha (:3000)
+  ├─ sessions, permissions, workspace and agent loop
+  ├─ structured tool execution and streaming events
+  ├─ text proxy → Omega /v1/chat/completions
+  └─ image proxy → Omega /v1/vision/chat/completions
         ↓
-structured event stream (text.delta / tool.start / tool.arguments / tool.result / status / error)
-        ↓
-Galileo workspace
-        ↓ explicit deploy
-AshatHub durable snapshot and deployment record
+Omega (:8080)
+  ├─ Qwen2.5-Coder-3B-Instruct Q4_K_M (primary coding/chat model)
+  └─ LiquidAI 450M VL (vision model, internal worker)
 ```
 
-Galileo communicates with Alpha only for AI operations. Galileo must not select, probe, or
-call Omega, Beta, Delta, individual local model instances, or remote agent retry paths.
+Alpha performs no model inference and must not spawn `llama-server`. Omega is the only
+inference host. Beta, Delta, peer routing, and the legacy Coding Agent are retired.
 
 ## Ownership
 
-### Galileo
+### Galileo 3
 
-Owns the user experience:
+Owns the authenticated user experience, WebContainer workspace, editor, preview, terminal,
+conversation UI, and rendering of structured events. It executes typed tools against its own
+workspace and never selects a model or inference worker.
 
-- conversation and the agent loop;
-- project selection and workspace identity;
-- WebContainer filesystem, preview, editor, and terminal;
-- executing structured tool calls against its own workspace: `list`, `read`, `search`,
-  `refresh_context`, file writes, and commands (all abortable from the UI);
-- rendering structured events, tool results, and file changes;
-- requesting deployment;
-- local UI cache and recovery checkpoints, if added.
+### Alpha
 
-Galileo is deliberately unaware of model instance selection, retry policy, capacity
-calculations, or worker health internals.
+Owns sessions, authorization, request admission, deterministic image detection, the agent
+loop, tool execution, abort propagation, bounded outputs, and the OpenAI-compatible proxy.
+Alpha forwards inference to Omega and emits canonical events; it contains no model runtime.
 
-### Alpha / Ashat AI
+### Omega
 
-Owns AI communication and capacity:
+Owns inference only:
 
-- deterministic intent routing (Liquid vs. Vision by request capabilities);
-- admission control: bounded request queue and per-lane slot semaphores;
-- Liquid backend streaming, health, and error translation;
-- VL demand loading, supervision, and idle unload;
-- the canonical structured event stream;
-- `/health`, `/status`, and `/workers` observability surfaces.
+- `/v1/chat/completions` proxies to Qwen workers;
+- `/v1/vision/chat/completions` proxies to the internal 450M VL worker;
+- `/health`, `/ready`, and `/status` expose inference readiness;
+- one Qwen worker is the safe current configuration on the 6 GiB host.
 
-Alpha is the only AI gateway used by Galileo. Routing is plain Rust — no model-based
-classification and no second model tier.
+### Ashat Hub
 
-### AshatHub
+Owns durable users, projects, snapshots, deployments, Admin CP, and operational control of
+Omega. It does not execute Galileo tools or perform inference.
 
-Owns durable platform records and peer-fleet telemetry:
-
-- project metadata and deployment persistence;
-- immutable snapshots and deployment records/URLs;
-- durable jobs/checkpoints infrastructure;
-- telemetry for the Omega/Beta/Delta peer fleet, observed as infrastructure targets.
-
-Omega/Beta/Delta remain peer fleet nodes (update/restart/telemetry owned by AshatHub
-operators). Distributed request routing and admission scoring across those peers is a later
-phase; current Galileo traffic never selects a peer.
-
-AshatHub is not a continuous mirror of the live WebContainer workspace. Account-backed
-conversation history is a separate durable record and can be downloaded by the user.
-
-## Concepts
-
-- **Project** — logical application and metadata.
-- **Workspace** — current editable WebContainer filesystem.
-- **Checkpoint** — optional temporary recovery copy of workspace state.
-- **Snapshot** — captured filesystem state.
-- **Deployment** — published snapshot plus build and runtime metadata.
-
-During development, the WebContainer is authoritative. An explicit deployment creates a
-snapshot; browser reload or close does not implicitly deploy.
-
-## Agent operation lanes
-
-| Request | Primary path |
-|---|---|
-| Text (no images) | Alpha → Liquid 1.2B |
-| Image messages | Alpha → demand-loaded 450M VL |
-| Tool calls | typed calls in the event stream, executed locally by Galileo's workspace |
-
-There is one agent loop with no conversational modes. Image messages must not silently
-convert a coding request into a standalone Vision-only reply: tool calls remain part of the
-same loop regardless of lane.
-
-## Agent operation lifecycle (Galileo side)
+## Agent lifecycle
 
 ```text
-User message
-  → Alpha streams text + typed tool calls
-  → Galileo executes tools against the live workspace
-  → structured results return to the same model turn
-  → repeat until the turn completes or the user stops the run
+User request
+  → Alpha sends messages and typed tools to Qwen
+  → Alpha returns text and structured tool calls
+  → Galileo executes tools and sends bounded results back
+  → Qwen chooses the next action or final response
 ```
 
-Agent prose is for the user. Tool identity and arguments are structured event data — never
-parsed from assistant text. Galileo is the software-building surface; Alpha supplies the
-inference lanes that drive it.
+Requests containing images are sent through Alpha to Omega's vision route; the resulting
+visual context remains part of the same agent turn.
 
-## Deployment lifecycle
+## Local development
 
-```text
-Open project
-  → hydrate workspace
-  → develop in WebContainer
-  → run and preview
-  → explicit deploy
-  → capture snapshot
-  → build/publish
-  → persist deployment record
+```bash
+cd /var/oled/data/AshatHub
+cargo check --workspace
+cd apps/ashat-hub-web && pnpm run build
+cd ../galileo/apps/galileo && pnpm run typecheck && pnpm run test
 ```
 
-Deployments reference immutable snapshots. A later workspace change produces a new
-deployment rather than mutating an earlier one.
+Runtime configuration and model files are intentionally ignored by Git. Do not copy keys,
+service environment files, databases, logs, `target/`, `node_modules/`, or model files into
+the repository.
 
 ## Events
 
-The chat/agent path uses one canonical event vocabulary:
+The canonical Galileo stream is SSE with `X-Galileo-Protocol: events`:
 
 ```text
 response.start
 text.delta
+reasoning.delta
 tool.start
 tool.arguments
 tool.result
@@ -147,19 +101,23 @@ error
 response.complete
 ```
 
-The `job.*` and `deployment.*` vocabularies belong to AshatHub's durable jobs and deployment
-records, not the chat path. Events never include prompts, credentials, or file contents in
-logs.
+Tool identity and arguments are structured event data. Consumers must never parse assistant
+text to discover tools. Events and logs must not contain credentials, prompts, or private
+runtime data.
 
-## Conversation history
+## Deployment
 
-Conversation history belongs to the authenticated user account and should be available
-across sessions. Galileo may cache it locally, but account storage is authoritative for
-history. Users must be able to download their history in a documented format.
+Galileo development is authoritative in the WebContainer. Explicit deployment captures a
+snapshot in Ashat Hub; reload or close does not deploy automatically.
+
+```text
+edit → test → preview → explicit deploy → snapshot → publish
+```
 
 ## Non-goals
 
-- Distributed multi-peer admission and latency scoring (future phase; peers currently run
-  the same Liquid stack and are monitored, not routed to).
-- Account-history migration and schema work.
-- Live Liquid/VL coexistence profiling (needs a deployed Liquid backend).
+- local Alpha inference;
+- Liquid Thinking or Liquid 1.2B inference;
+- Beta/Delta services;
+- distributed peer inference or peer request routing;
+- direct Galileo access to Omega workers.

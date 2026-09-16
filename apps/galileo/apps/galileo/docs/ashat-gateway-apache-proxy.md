@@ -21,7 +21,7 @@ Restart alpha-server after the change.
 In the `agpstudios.org` vhost, next to the existing `/api` proxy block, add:
 
 ```apache
-# Ashat Alpha inference gateway (Liquid / Vision intent routing)
+# Ashat Alpha gateway (Omega-backed Qwen / Vision routing)
 ProxyPreserveHost Off
 ProxyPass        /v1/ http://127.0.0.1:3000/v1/ timeout=600
 ProxyPassReverse /v1/ http://127.0.0.1:3000/v1/
@@ -53,10 +53,10 @@ curl -s https://agpstudios.org/v1/../health
 # or directly:
 curl -s https://agpstudios.org/health   # existing ashat-hub liveness, unchanged
 
-# Round-trip inference through Liquid (short reply)
+# Round-trip inference through Omega Qwen (short reply)
 curl -s -X POST https://agpstudios.org/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model":"liquid","messages":[{"role":"user","content":"hi"}],"max_tokens":8,"stream":false}'
+  -d '{"model":"ashat","messages":[{"role":"user","content":"hi"}],"max_tokens":8,"stream":false}'
 ```
 
 The `/v1/models` response must be JSON, not the AGP Studios SPA HTML. If you still get HTML, the vhost edit did not land on the active site config (`apachectl -S` to check which file is live).

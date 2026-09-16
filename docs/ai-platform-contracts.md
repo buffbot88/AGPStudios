@@ -1,31 +1,32 @@
 # AGP Studios AI Platform Contracts
 
-Status: current contract baseline. Galileo's wire protocol matches `app/lib/runtime/galileo-stream.ts`
-and `alpha-server`'s canonical stream; the Alpha gateway is OpenAI-compatible at
-`/v1/chat/completions`.
+Status: current v8.9 contract baseline.
 
-## Agent request
+## Request boundary
 
-```ts
-type AgentRequest = {
-  conversation_id: string;
-  project_id?: string;
-  messages: AgentMessage[];
-  operation?: 'chat' | 'agent' | 'vision';
-  capabilities: { tools: boolean; vision: boolean };
-};
+```text
+Galileo 3 → Alpha (:3000) → Omega (:8080)
 ```
 
-There are no Chat/Plan/Build conversational modes. Text messages route to the Liquid lane;
-messages containing images route to the 450M VL lane.
+Galileo calls Alpha only. Alpha owns authorization, admission, deterministic image detection,
+tool execution, abort propagation, output caps, and the agent loop. Alpha performs no
+inference.
 
-## Event stream
+## Omega API
 
-When the caller sends `X-Galileo-Protocol: events`, the gateway emits canonical SSE events
-instead of OpenAI chunks:
+- `POST /v1/chat/completions` — Qwen2.5-Coder-3B-Instruct text, coding, and tool calls.
+- `POST /v1/vision/chat/completions` — LiquidAI 450M VL image understanding.
+- `/health`, `/ready`, `/status` — Omega readiness and worker status.
+
+The 450M VL process is internal to Omega. Workers are never selected directly by Galileo.
+
+## Canonical events
+
+With `X-Galileo-Protocol: events`, Alpha emits canonical SSE records:
 
 ```text
 response.start     { response_id }
+reasoning.delta    { delta }
 text.delta         { delta }
 tool.start         { id, name }
 tool.arguments     { id, arguments }
@@ -35,84 +36,40 @@ error              { code, message, retryable }
 response.complete  {}
 ```
 
-Tool identity and arguments are structured event data. No consumer may parse assistant
-text, JSON embedded in message content, prefixes, or regular expressions to detect tool
-calls. `alpha-common` carries structured `tool_calls` / `tool_call_id` on messages so the
-same protocol round-trips to and from the model backend.
-
-## Communication boundary
-
-```text
-Galileo → Alpha only (OpenAI-compatible chat completions + canonical events)
-Alpha   → local workers (Liquid 1.2B text, demand-loaded 450M VL)
-AshatHub → durable account, snapshot, deployment, and peer-fleet telemetry storage
-```
-
-Galileo must not call or select an individual model instance or remote coding agent. The
-Omega/Beta/Delta nodes are peer fleet infrastructure observed by AshatHub telemetry;
-distributed request routing across them is a future phase.
+Tool calls are structured events. No consumer may parse assistant text, embedded JSON,
+prefixes, or regular expressions to find tools.
 
 ## Tool execution
 
-Tools arrive as typed calls in the event stream. Execution is local to the workspace owner:
-
-- Read-only tools (`list`, `read`, `search`, `refresh_context`) run inside Galileo's
-  WebContainer; long-running processes are killed when the user stops the run.
-- File writes and shell commands run through Galileo's action runner, which owns per-action
-  abort signals.
-- The legacy Omega JSON action protocol is removed; structured calls are authoritative.
-
-Every long-running tool either accepts an abort token or owns a killable process handle.
-Results are bounded (output truncation) and repeated-call protection and iteration limits
-live in the agent loop.
+Galileo executes typed tools against its own workspace. Read-only tools, file actions, and
+commands are bounded and abortable. Repeated-call protection and iteration limits belong to
+Alpha's agent loop. Model inference never executes tools directly.
 
 ## Vision
 
-Image messages are demand-routed to the VL lane (`LFM2.5-VL-450M-Q8_0.gguf` plus its
-multimodal projector). The VL worker loads on first image request and unloads after its idle
-timeout. Vision slots are separate from Liquid slots so an image request cannot starve text.
+Alpha detects image content without model routing and forwards the request to Omega's vision
+route. Vision output remains part of the same Galileo agent turn and can be followed by Qwen
+tool calls.
 
-## Deployment
+## Data and security
 
-```text
-Galileo deployment boundary → capture workspace snapshot → AshatHub durable record
+Ashat Hub owns users, projects, snapshots, deployments, and Admin CP records. Runtime
+credentials, cookies, provider keys, model files, logs, databases, and service environment
+files stay outside Git and are never returned in events, API responses, browser storage, or
+logs.
+
+## Local development
+
+```bash
+cd /var/oled/data/AshatHub
+cargo check --workspace
+cd apps/ashat-hub-web && pnpm run build
+cd ../galileo/apps/galileo && pnpm run typecheck && pnpm run test
 ```
 
-- The Galileo WebContainer is authoritative during development.
-- Browser reload or close does not deploy automatically.
-- Explicit deployment captures a workspace snapshot.
-- AshatHub stores the durable snapshot and deployment record.
-- A later deployment creates a new snapshot; earlier deployments are not mutated.
+Do not commit generated assets, `target/`, `node_modules/`, model files, or runtime data.
 
-Projects, workspaces, snapshots, checkpoints, and deployments are separate concepts and
-identifiers.
+## Retired
 
-## Conversation history
-
-Conversation history is account-backed and available across sessions. Galileo may maintain a
-local cache, but account history is authoritative. Users can download their history in a
-documented export format.
-
-## Telemetry
-
-AshatHub owns per-peer telemetry for the Omega/Beta/Delta fleet. Galileo consumes
-Alpha-managed aggregate state (`/status`, `/workers`) and renders agent events. No frontend
-component probes or routes directly to Omega, Beta, or Delta.
-
-## Security rules
-
-- Never log prompts, credentials, cookies, full responses, or file contents in events.
-- Provider and gateway keys are service credentials: they never leave the server, and are
-  never returned to Galileo, Alpha, Omega, Beta, Delta, browser storage, logs, or API
-  responses.
-- Galileo resolves gateway credentials from runtime environment variables or
-  `config.json`; real credentials are never committed.
-
-## Open implementation decisions
-
-These remain intentionally unresolved until their implementation phases:
-
-- deployment API placement and authentication;
-- account-history schema and export format;
-- workspace ID lifecycle;
-- distributed peer admission and failure matrix across Liquid-capable nodes.
+Beta, Delta, peer-fleet inference, Liquid Thinking, Liquid 1.2B, local Alpha inference, and
+the legacy Omega action protocol are not part of the active contract.
