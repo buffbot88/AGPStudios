@@ -6,17 +6,12 @@ export default defineConfig({
   server: {
     port: 3101,
     proxy: {
-      '/api/rust': {
-        target: 'http://127.0.0.1:3100',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api\/rust/, '/api'),
-      },
       '/api': {
-        target: 'http://127.0.0.1:3100',
+        target: 'http://127.0.0.1:3110',
         changeOrigin: true,
       },
       '/health': {
-        target: 'http://127.0.0.1:3100',
+        target: 'http://127.0.0.1:3110',
         changeOrigin: true,
       },
     },
