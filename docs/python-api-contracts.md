@@ -22,6 +22,13 @@ The Python service is the public API at `/api/*`; Rust is not part of the contra
 | GET | `/api/support/:id` | 200/401/404 | Authenticated ticket and replies |
 | POST | `/api/support/:id/reply` | 200/401/404 | Authenticated reply |
 
+### Admin endpoints (session + role: Admin + CSRF header required)
+
+| Method | Path | Success | Purpose |
+|---|---|---:|---|
+| POST | `/api/admin/audit/prune` | 200 | JSON `{before_id: int}`; deletes all audit events with `id < before_id`, then records an `admin.audit.pruned` event. Returns `{ok, deleted}`. |
+| DELETE | `/api/admin/users/:id` | 200 | Permanently deletes a member: ticket replies, tickets, sessions, email verifications, then the user row. Self-delete returns 409. Audit event `admin.user.deleted` is recorded. |
+
 ## OIDC issuer
 
 Issuer: `https://www.agpstudios.org/api/oauth`

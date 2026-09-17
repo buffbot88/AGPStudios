@@ -108,6 +108,8 @@ class Proxy(BaseHTTPRequestHandler):
             return self.resend_verification()
         if urlparse(self.path).path == "/api/auth/logout":
             return self.auth_logout()
+        if urlparse(self.path).path == "/api/admin/audit/prune":
+            return self.admin_audit_prune()
         if urlparse(self.path).path.startswith("/api/admin/"):
             return self.admin_post()
         if urlparse(self.path).path == "/api/support" or urlparse(self.path).path.startswith("/api/support/"):
@@ -121,6 +123,7 @@ class Proxy(BaseHTTPRequestHandler):
     def do_DELETE(self):
         self._delete_body=self.rfile.read(int(self.headers.get('Content-Length','0')) or 0)
         if urlparse(self.path).path == "/api/account": return self.account_delete()
+        if urlparse(self.path).path.startswith("/api/admin/users/"): return self.admin_user_delete(urlparse(self.path).path.rsplit('/',1)[1])
         self.forward()
     def do_OPTIONS(self): self.forward()
 
@@ -176,6 +179,39 @@ class Proxy(BaseHTTPRequestHandler):
                     else: return error(self,'admin endpoint not found',404)
                     cur.execute("INSERT INTO admin_audit_events (actor_id,actor_name,action,target_type,target_id,detail,created_at) VALUES (%s,%s,%s,'user',%s,%s,UNIX_TIMESTAMP())",(user['id'],user['username'],action,form.get('user_id',''),json.dumps(form)))
             return oidc_json(self,{"ok":True})
+        except Exception as exc: return error(self,f"admin unavailable: {exc}",503)
+
+    def admin_user_delete(self, uid):
+        user=self.admin_user()
+        if not user: return error(self,"admin authentication required",403)
+        if not self.csrf_ok(user): return error(self,"csrf token required",403)
+        if not uid: return error(self,"user id required")
+        if uid == str(user.get('id','')): return error(self,"cannot delete your own account",409)
+        try:
+            with db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT username FROM users WHERE id=%s",(uid,)); row=cur.fetchone()
+                    if not row: return error(self,"user not found",404)
+                    for table in ('support_ticket_replies','support_tickets','rust_sessions','sessions','email_verifications'):
+                        cur.execute(f"DELETE FROM {table} WHERE user_id=%s",(uid,))
+                    cur.execute("DELETE FROM users WHERE id=%s",(uid,))
+                    cur.execute("INSERT INTO admin_audit_events (actor_id,actor_name,action,target_type,target_id,detail,created_at) VALUES (%s,%s,%s,'user',%s,%s,UNIX_TIMESTAMP())",(user['id'],user['username'],'admin.user.deleted',uid,json.dumps({'deleted_username':row['username']})))
+            return oidc_json(self,{"ok":True,"deleted":uid})
+        except Exception as exc: return error(self,f"admin unavailable: {exc}",503)
+
+    def admin_audit_prune(self):
+        user=self.admin_user()
+        if not user: return error(self,"admin authentication required",403)
+        if not self.csrf_ok(user): return error(self,"csrf token required",403)
+        try:
+            length=int(self.headers.get("Content-Length","0")); form=json.loads(self.rfile.read(length) or b'{}'); before=form.get('before_id')
+            if not isinstance(before,int) or before < 1: return error(self,"integer before_id required")
+            with db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT COUNT(*) AS n FROM admin_audit_events WHERE id<%s",(before,)); count=cur.fetchone()['n']
+                    cur.execute("DELETE FROM admin_audit_events WHERE id<%s",(before,))
+                    cur.execute("INSERT INTO admin_audit_events (actor_id,actor_name,action,target_type,target_id,detail,created_at) VALUES (%s,%s,%s,'audit',%s,%s,UNIX_TIMESTAMP())",(user['id'],user['username'],'admin.audit.pruned',str(before),json.dumps({'deleted':count,'before_id':before})))
+            return oidc_json(self,{"ok":True,"deleted":count})
         except Exception as exc: return error(self,f"admin unavailable: {exc}",503)
 
     def portal_data(self):
