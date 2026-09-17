@@ -139,9 +139,9 @@ class Proxy(BaseHTTPRequestHandler):
                     if path in ('/api/admin/summary','/api/admin/overview'):
                         cur.execute("SELECT COUNT(*) AS n FROM users"); total=cur.fetchone()['n']; cur.execute("SELECT COUNT(*) AS n FROM users WHERE is_active=1"); active=cur.fetchone()['n']; cur.execute("SELECT COUNT(*) AS n FROM support_tickets WHERE status IN ('open','in_progress')"); tickets=cur.fetchone()['n']; return oidc_json(self,{"users":total,"active_users":active,"disabled_users":total-active,"open_tickets":tickets,"active_projects":0,"active_deploys":0})
                     if path == '/api/admin/users':
-                        q=query.get('q',[''])[0]; page=max(1,min(1000,int(query.get('page',['1'])[0]))); like='%'+q+'%'; cur.execute("SELECT id,username,email,display_name,role,is_active,banned_at,email_verified_at FROM users WHERE username LIKE %s OR email LIKE %s OR display_name LIKE %s ORDER BY username LIMIT 50 OFFSET %s",(like,like,like,(page-1)*50)); return oidc_json(self,{"users":cur.fetchall(),"page":page,"page_size":50})
+                        q=query.get('q',[''])[0]; page=max(1,min(1000,int(query.get('page',['1'])[0]))); like='%'+q+'%'; cur.execute("SELECT id,username,email,display_name,role,diamonds,is_active,banned_at,email_verified_at FROM users WHERE username LIKE %s OR email LIKE %s OR display_name LIKE %s ORDER BY username LIMIT 50 OFFSET %s",(like,like,like,(page-1)*50)); return oidc_json(self,{"users":cur.fetchall(),"page":page,"page_size":50})
                     if path.startswith('/api/admin/users/'):
-                        uid=path.rsplit('/',1)[1]; cur.execute("SELECT id,username,email,display_name,role,is_active,banned_at,email_verified_at FROM users WHERE id=%s",(uid,)); row=cur.fetchone(); return oidc_json(self,{"user":row}) if row else error(self,'user not found',404)
+                        uid=path.rsplit('/',1)[1]; cur.execute("SELECT id,username,email,display_name,role,diamonds,is_active,banned_at,email_verified_at FROM users WHERE id=%s",(uid,)); row=cur.fetchone(); return oidc_json(self,{"user":row}) if row else error(self,'user not found',404)
                     if path in ('/api/admin/support','/api/admin/tickets'):
                         cur.execute("SELECT id,subject,status,priority,category,created_at,updated_at FROM support_tickets ORDER BY updated_at DESC LIMIT 100"); return oidc_json(self,{"tickets":cur.fetchall()})
                     if path in ('/api/admin/health','/api/admin/database/status'):
@@ -196,12 +196,12 @@ class Proxy(BaseHTTPRequestHandler):
             with conn.cursor() as cur:
                 token=cookies.get('ashat_rust_sid')
                 if token:
-                    cur.execute("SELECT u.id,u.username,u.email,u.display_name,u.role,s.csrf_hash FROM rust_sessions s JOIN users u ON u.id=s.user_id WHERE s.session_hash=%s AND s.expires_at>UTC_TIMESTAMP() AND u.is_active=1 LIMIT 1", (sha256(token.encode()).hexdigest(),))
+                    cur.execute("SELECT u.id,u.username,u.email,u.display_name,u.role,u.diamonds,s.csrf_hash FROM rust_sessions s JOIN users u ON u.id=s.user_id WHERE s.session_hash=%s AND s.expires_at>UTC_TIMESTAMP() AND u.is_active=1 LIMIT 1", (sha256(token.encode()).hexdigest(),))
                     user=cur.fetchone()
                     if user: return user
                 legacy=cookies.get('ashat_sid')
                 if legacy:
-                    cur.execute("SELECT u.id,u.username,u.email,u.display_name,u.role,'' AS csrf_hash FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=%s AND s.expires_at>UTC_TIMESTAMP() AND u.is_active=1 LIMIT 1", (legacy,))
+                    cur.execute("SELECT u.id,u.username,u.email,u.display_name,u.role,u.diamonds,'' AS csrf_hash FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=%s AND s.expires_at>UTC_TIMESTAMP() AND u.is_active=1 LIMIT 1", (legacy,))
                     return cur.fetchone()
         return None
 
@@ -332,7 +332,7 @@ class Proxy(BaseHTTPRequestHandler):
         try:
             with db() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("SELECT u.id,u.username,u.email,u.display_name,u.role FROM rust_sessions s JOIN users u ON u.id=s.user_id WHERE s.session_hash=%s AND s.expires_at>UTC_TIMESTAMP() AND u.is_active=1 LIMIT 1", (sha256(token.encode()).hexdigest(),))
+                    cur.execute("SELECT u.id,u.username,u.email,u.display_name,u.role,u.diamonds FROM rust_sessions s JOIN users u ON u.id=s.user_id WHERE s.session_hash=%s AND s.expires_at>UTC_TIMESTAMP() AND u.is_active=1 LIMIT 1", (sha256(token.encode()).hexdigest(),))
                     user = cur.fetchone()
             return oidc_json(self, {"authenticated": bool(user), "user": user})
         except Exception as exc:
