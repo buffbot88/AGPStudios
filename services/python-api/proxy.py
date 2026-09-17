@@ -91,6 +91,8 @@ class Proxy(BaseHTTPRequestHandler):
             return self.game_status()
         if urlparse(self.path).path == "/api/auth/verify-email":
             return self.verify_email(parse_qs(urlparse(self.path).query).get('token', [''])[0])
+        if urlparse(self.path).path.startswith("/api/admin/"):
+            return self.admin_get()
         if urlparse(self.path).path in ("/api/support", "/api/account/summary") or urlparse(self.path).path.startswith("/api/support/"):
             return self.member_get()
         self.forward()
@@ -106,6 +108,8 @@ class Proxy(BaseHTTPRequestHandler):
             return self.resend_verification()
         if urlparse(self.path).path == "/api/auth/logout":
             return self.auth_logout()
+        if urlparse(self.path).path.startswith("/api/admin/"):
+            return self.admin_post()
         if urlparse(self.path).path == "/api/support" or urlparse(self.path).path.startswith("/api/support/"):
             return self.member_post()
         self.forward()
@@ -115,9 +119,64 @@ class Proxy(BaseHTTPRequestHandler):
         self.forward()
     def do_PATCH(self): self.forward()
     def do_DELETE(self):
+        self._delete_body=self.rfile.read(int(self.headers.get('Content-Length','0')) or 0)
         if urlparse(self.path).path == "/api/account": return self.account_delete()
         self.forward()
     def do_OPTIONS(self): self.forward()
+
+    def admin_user(self):
+        user=self.current_user()
+        if not user or str(user.get('role','')).lower() != 'admin': return None
+        return user
+
+    def admin_get(self):
+        user=self.admin_user()
+        if not user: return error(self,"admin authentication required",403)
+        path=urlparse(self.path).path; query=parse_qs(urlparse(self.path).query)
+        try:
+            with db() as conn:
+                with conn.cursor() as cur:
+                    if path in ('/api/admin/summary','/api/admin/overview'):
+                        cur.execute("SELECT COUNT(*) AS n FROM users"); total=cur.fetchone()['n']; cur.execute("SELECT COUNT(*) AS n FROM users WHERE is_active=1"); active=cur.fetchone()['n']; cur.execute("SELECT COUNT(*) AS n FROM support_tickets WHERE status IN ('open','in_progress')"); tickets=cur.fetchone()['n']; return oidc_json(self,{"users":total,"active_users":active,"disabled_users":total-active,"open_tickets":tickets,"active_projects":0,"active_deploys":0})
+                    if path == '/api/admin/users':
+                        q=query.get('q',[''])[0]; page=max(1,min(1000,int(query.get('page',['1'])[0]))); like='%'+q+'%'; cur.execute("SELECT id,username,email,display_name,role,is_active,banned_at,email_verified_at FROM users WHERE username LIKE %s OR email LIKE %s OR display_name LIKE %s ORDER BY username LIMIT 50 OFFSET %s",(like,like,like,(page-1)*50)); return oidc_json(self,{"users":cur.fetchall(),"page":page,"page_size":50})
+                    if path.startswith('/api/admin/users/'):
+                        uid=path.rsplit('/',1)[1]; cur.execute("SELECT id,username,email,display_name,role,is_active,banned_at,email_verified_at FROM users WHERE id=%s",(uid,)); row=cur.fetchone(); return oidc_json(self,{"user":row}) if row else error(self,'user not found',404)
+                    if path in ('/api/admin/support','/api/admin/tickets'):
+                        cur.execute("SELECT id,subject,status,priority,category,created_at,updated_at FROM support_tickets ORDER BY updated_at DESC LIMIT 100"); return oidc_json(self,{"tickets":cur.fetchall()})
+                    if path in ('/api/admin/health','/api/admin/database/status'):
+                        cur.execute("SELECT VERSION() AS version"); return oidc_json(self,{"database":"healthy","version":cur.fetchone()['version'],"paws":self.game_status_value()})
+                    if path == '/api/admin/audit':
+                        page=max(1,min(1000,int(query.get('page',['1'])[0]))); cur.execute("SELECT id,actor_id,actor_name,action,target_type,target_id,detail,created_at FROM admin_audit_events ORDER BY created_at DESC,id DESC LIMIT 50 OFFSET %s",((page-1)*50,)); return oidc_json(self,{"events":cur.fetchall(),"page":page,"page_size":50})
+                    if path == '/api/admin/settings': return oidc_json(self,{"email_verification_enabled":False,"secure_cookie":True,"backend":"python"})
+            return error(self,'admin endpoint not found',404)
+        except Exception as exc: return error(self,f"admin unavailable: {exc}",503)
+
+    def game_status_value(self):
+        try:
+            with urlopen(os.environ.get("PAWS_HEALTH_URL", "http://127.0.0.1:3003/api/health"), timeout=5) as response: return json.loads(response.read())
+        except Exception: return {"status":"unavailable"}
+
+    def admin_post(self):
+        user=self.admin_user()
+        if not user: return error(self,"admin authentication required",403)
+        if not self.csrf_ok(user): return error(self,"csrf token required",403)
+        path=urlparse(self.path).path; length=int(self.headers.get("Content-Length","0")); form=json.loads(self.rfile.read(length) or b'{}')
+        try:
+            with db() as conn:
+                with conn.cursor() as cur:
+                    if path == '/api/admin/users/role':
+                        if form.get('role') not in ('Member','Pro','Admin'): return error(self,'invalid role')
+                        cur.execute("UPDATE users SET role=%s,updated_at=UTC_TIMESTAMP() WHERE id=%s",(form['role'],form.get('user_id'))); action='user.role.updated'
+                    elif path in ('/api/admin/users/status','/api/admin/users/ban'):
+                        status='banned' if path.endswith('/ban') else form.get('status','active')
+                        if status == 'banned': cur.execute("UPDATE users SET is_active=0,banned_at=UNIX_TIMESTAMP(),updated_at=UTC_TIMESTAMP() WHERE id=%s",(form.get('user_id'),))
+                        else: cur.execute("UPDATE users SET is_active=%s,banned_at=NULL,updated_at=UTC_TIMESTAMP() WHERE id=%s",(0 if status=='disabled' else 1,form.get('user_id')))
+                        action='user.status.updated'
+                    else: return error(self,'admin endpoint not found',404)
+                    cur.execute("INSERT INTO admin_audit_events (actor_id,actor_name,action,target_type,target_id,detail,created_at) VALUES (%s,%s,%s,'user',%s,%s,UNIX_TIMESTAMP())",(user['id'],user['username'],action,form.get('user_id',''),json.dumps(form)))
+            return oidc_json(self,{"ok":True})
+        except Exception as exc: return error(self,f"admin unavailable: {exc}",503)
 
     def game_status(self):
         try:
@@ -204,7 +263,7 @@ class Proxy(BaseHTTPRequestHandler):
         user=self.current_user()
         if not user: return error(self,"authentication required",401)
         if not self.csrf_ok(user): return error(self,"csrf token required",403)
-        length=int(self.headers.get("Content-Length","0")); form=json.loads(self.rfile.read(length) or b'{}')
+        form=json.loads(getattr(self,'_delete_body',b'{}') or b'{}')
         if form.get('confirm') != 'DELETE': return error(self,"confirm DELETE to remove the account",400)
         try:
             with db() as conn:

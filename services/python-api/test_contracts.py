@@ -39,6 +39,8 @@ def main():
     status, headers, body = get("/api/support", expected=401)
     assert json.loads(body)["error"]["code"] == "authentication_required"
     get("/api/account/summary", expected=401)
+    _, _, body = get("/api/admin/users", expected=403)
+    assert json.loads(body)["error"]["code"] == "admin_authentication_required"
     request = urllib.request.Request(BASE + "/api/account", data=b'{"confirm":"DELETE"}', headers={"Content-Type":"application/json"}, method="DELETE")
     try: urllib.request.urlopen(request, timeout=15)
     except urllib.error.HTTPError as exc: assert exc.code == 401
