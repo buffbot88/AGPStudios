@@ -50,17 +50,11 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/admin/users/status", post(update_status))
         .route("/api/admin/users/ban", post(ban_user))
         .route("/api/admin/users/:user_id", delete(delete_user))
-        .route("/api/admin/deployments", get(all_deployments))
-        .route("/api/admin/projects", get(all_projects))
-        .route("/api/admin/deployments/:deployment_id", get(deployment_detail))
-        .route("/api/admin/deployment/undeploy", post(admin_undeploy))
         .route("/api/admin/audit", get(audit_log))
         .route("/api/admin/database/status", get(database_status))
         .route("/api/admin/settings", get(settings))
         .route("/api/admin/github/push", post(github_push))
-        .route("/api/admin/github/galileo-push", post(galileo_github_push))
         .route("/api/admin/system/update", post(system_update))
-        .route("/api/admin/galileo/update", post(galileo_update))
         .route("/api/admin/repo-status", get(repo_status))
         .route("/api/admin/support", get(support))
 }
@@ -226,18 +220,8 @@ async fn summary(
     .fetch_one(pool)
     .await
     .unwrap_or(0);
-    let active_deploys = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM galileo_deployments WHERE status='deployed'",
-    )
-    .fetch_one(pool)
-    .await
-    .unwrap_or(0);
-    let active_projects = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(DISTINCT project_id) FROM galileo_deployments WHERE status='deployed'",
-    )
-    .fetch_one(pool)
-    .await
-    .unwrap_or(0);
+    let active_deploys = 0;
+    let active_projects = 0;
     Json(serde_json::json!({
         "users": users,
         "active_users": active_users,

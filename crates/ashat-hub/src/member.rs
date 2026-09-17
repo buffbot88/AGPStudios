@@ -130,21 +130,6 @@ struct TelemetryRestart {
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
-        .route(
-            "/api/community/projects",
-            get(community_list).post(community_submit),
-        )
-        .route(
-            "/api/community/projects/:slug",
-            get(community_show)
-                .put(community_update)
-                .delete(community_delete),
-        )
-        .route(
-            "/api/community/projects/:slug/resubmit",
-            post(community_resubmit),
-        )
-        .route("/api/community/users/:username", get(community_publisher))
         .route("/api/docs", get(docs_list))
         .route("/api/docs/:slug", get(docs_show))
         .route("/api/support", get(support_list).post(support_create))
@@ -516,25 +501,9 @@ async fn account_summary(
     let Some(pool) = state.db.as_ref() else {
         return error_response(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable");
     };
-    let projects_root = state.projects_root.join(&user.id);
-    let projects = fs::read_dir(projects_root)
-        .map(|entries| {
-            entries
-                .filter_map(Result::ok)
-                .filter(|entry| entry.path().is_dir())
-                .count()
-        })
-        .unwrap_or(0);
-    let deployments = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM galileo_deployments WHERE user_id=? AND status='deployed'",
-    )
-    .bind(&user.id)
-    .fetch_one(pool)
-    .await
-    .unwrap_or(0);
     let files = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM conversation_messages cm JOIN conversations c ON c.id=cm.conversation_id WHERE c.user_id=?").bind(&user.id).fetch_one(pool).await.unwrap_or(0);
     let github_linked = sqlx::query_scalar::<_, Option<String>>("SELECT github_login FROM users WHERE id=?").bind(&user.id).fetch_one(pool).await.unwrap_or(None).is_some();
-    Json(serde_json::json!({"user":user,"github_linked":github_linked,"stats":{"projects":projects,"deployments":deployments,"conversation_messages":files}})).into_response()
+    Json(serde_json::json!({"user":user,"github_linked":github_linked,"stats":{"conversation_messages":files}})).into_response()
 }
 
 async fn account_github_unlink(
@@ -553,7 +522,7 @@ async fn account_delete(
     auth::AuthenticatedUser(user): auth::AuthenticatedUser,
 ) -> Response {
     let Some(pool) = state.db.as_ref() else { return error_response(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"); };
-    let tables = ["conversation_messages", "conversations", "galileo_job_events", "galileo_job_changes", "galileo_jobs", "galileo_plans", "galileo_deployment_history", "galileo_deployments", "galileo_activity", "galileo_community_links", "support_ticket_replies", "support_tickets", "password_resets", "email_verifications", "rust_sessions", "google_accounts", "icarus_devices", "admin_audit_events"];
+    let tables = ["conversation_messages", "conversations", "support_ticket_replies", "support_tickets", "password_resets", "email_verifications", "rust_sessions", "google_accounts", "icarus_devices", "admin_audit_events"];
     for table in tables { let _ = sqlx::query(&format!("DELETE FROM {table} WHERE user_id=?")).bind(&user.id).execute(pool).await; }
     let _ = sqlx::query("DELETE FROM users WHERE id=?").bind(&user.id).execute(pool).await;
     let _ = tokio::fs::remove_dir_all(state.projects_root.join(&user.id)).await;

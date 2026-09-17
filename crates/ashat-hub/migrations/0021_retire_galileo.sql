@@ -1,0 +1,13 @@
+SET FOREIGN_KEY_CHECKS=0;
+DROP TABLE IF EXISTS galileo_job_changes;
+DROP TABLE IF EXISTS galileo_job_events;
+DROP TABLE IF EXISTS galileo_jobs;
+DROP TABLE IF EXISTS galileo_plans;
+DROP TABLE IF EXISTS galileo_deployment_history;
+DROP TABLE IF EXISTS galileo_deployments;
+DROP TABLE IF EXISTS galileo_activity;
+DROP TABLE IF EXISTS galileo_community_links;
+DROP TABLE IF EXISTS community_projects;
+DROP TABLE IF EXISTS conversations;
+DROP TABLE IF EXISTS conversation_messages;
+SET FOREIGN_KEY_CHECKS=1;

@@ -5,12 +5,11 @@ AGP Studios is the monorepo for **Ashat**, the complete AI coding system.
 ## Architecture
 
 ```text
-Galileo 3 → Alpha Rust agent runtime → Omega inference host
+Alpha Rust agent runtime → Omega inference host
                                       ├─ Qwen2.5-Coder-3B-Instruct
                                       └─ LiquidAI 450M VL
 ```
 
-- `apps/galileo/` — Galileo 3 coding workspace and structured-event UI.
 - `apps/ashat-hub-web/` — Ashat Hub web and Admin CP.
 - `crates/ashat-hub/` — durable platform, authentication, projects, deployments, and admin APIs.
 - `crates/alpha-common/` — Alpha request and event types.
@@ -29,7 +28,6 @@ for image understanding. Beta, Delta, peer routing, and Liquid Thinking are reti
 cd /var/oled/data/AshatHub
 cargo check --workspace
 cd apps/ashat-hub-web && pnpm run build
-cd ../galileo/apps/galileo && pnpm run typecheck && pnpm run test
 ```
 
 Production services and model paths are runtime-managed. Model files, credentials, service
@@ -38,6 +36,5 @@ must not be committed.
 
 ## Storage boundary
 
-User-owned Galileo projects and editable project data live under `/var/oled/data/projects`.
 Runtime code remains on the root filesystem; `/var/oled/pcp` is reserved for Oracle
 Performance Co-Pilot data.
