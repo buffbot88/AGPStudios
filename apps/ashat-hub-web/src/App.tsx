@@ -16,7 +16,7 @@ function App() {
   const [portalData, setPortalData] = useState<any>(null);
   const [loginOpen, setLoginOpen] = useState(false);
   const [route, setRoute] = useState(window.location.hash);
-  useEffect(() => { const onHash=()=>setRoute(window.location.hash); window.addEventListener('hashchange',onHash); return()=>window.removeEventListener('hashchange',onHash); }, []);
+  useEffect(() => { const onHash=()=>{setRoute(window.location.hash);setLoginOpen(window.location.hash==='#login')}; window.addEventListener('hashchange',onHash); if(window.location.hash==='#login')setLoginOpen(true); return()=>window.removeEventListener('hashchange',onHash); }, []);
   useEffect(() => { fetch('/api/auth/session', { credentials: 'same-origin' }).then(r => r.json()).then(d => setUser(d.authenticated ? d.user : null)).catch(() => {}); fetch('/api/portal-data').then(r => r.json()).then(d => { setPortalData(d); setOnline(d.health?.status === 'ok'); }).catch(() => setOnline(false)); }, []);
   const logout = () => fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }).then(() => { setUser(null); window.location.assign('/'); });
   return <div className="portal">
