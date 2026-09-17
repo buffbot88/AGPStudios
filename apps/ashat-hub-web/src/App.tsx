@@ -18,7 +18,7 @@ function App() {
   const [route, setRoute] = useState(window.location.hash);
   useEffect(() => { const onHash=()=>setRoute(window.location.hash); window.addEventListener('hashchange',onHash); return()=>window.removeEventListener('hashchange',onHash); }, []);
   useEffect(() => { fetch('/api/auth/session', { credentials: 'same-origin' }).then(r => r.json()).then(d => setUser(d.authenticated ? d.user : null)).catch(() => {}); fetch('/api/portal-data').then(r => r.json()).then(d => { setPortalData(d); setOnline(d.health?.status === 'ok'); }).catch(() => setOnline(false)); }, []);
-  const logout = () => fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }).then(() => setUser(null));
+  const logout = () => fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }).then(() => { setUser(null); window.location.assign('/'); });
   return <div className="portal">
     <header className="nav"><a className="wordmark" href="#top"><b>AGP</b> STUDIOS</a><nav><a href="#top">Home</a><a href="#world">Games</a><a href="#news">News</a><a href="#community">Community</a><a href="#support-page">Support</a>{user&&<a href="#account">Account</a>}{user?.role?.toLowerCase()==='admin'&&<a href="#admin">Admin</a>}</nav><div className="nav-tools"><button aria-label="Search">⌕</button><button aria-label="Notifications">♢</button>{user ? <button className="profile" onClick={logout}>{user.display_name || user.username} · Sign out</button> : <button className="profile" onClick={() => setLoginOpen(true)}>◎ Sign in</button>}<a className="play-button" href="https://pawsandparcels.agpstudios.org/">PLAY</a></div></header>
     {loginOpen && <Login onClose={() => setLoginOpen(false)} onUser={(next) => { setUser(next); setLoginOpen(false); }} />}
