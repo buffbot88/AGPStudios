@@ -1,3 +1,0 @@
-[workspace]
-resolver = "2"
-members = ["crates/alpha-common", "crates/alpha-core", "crates/alpha-server", "crates/omega-agent"]

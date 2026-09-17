@@ -1,6 +1,10 @@
-# AGP Studios AI Platform Architecture
+# AGP Studios AI Platform Architecture (ARCHIVED)
 
-Status: current implementation baseline for v8.9.
+ARCHIVED — NOT CURRENT IMPLEMENTATION.
+
+This document described an earlier architecture baseline. It is retained as
+historical record only. It is not authoritative for the current AGP Studios
+repo.
 
 ## Naming
 

@@ -1,39 +1,43 @@
 # AGP Studios
 
-AGP Studios is the monorepo for **Ashat**, the complete AI coding system.
+AGP Studios is the web portal and Python API project for AGP Studios.
 
-## Architecture
+## What this repo is
+
+- `apps/ashat-hub-web/` — Vite + React portal. Public site, member area, and admin UI.
+- `services/python-api/` — Python API service. Serves the public `/api/*` surface: auth,
+  OIDC, account, support, and admin endpoints.
+- `docs/system-architecture.md` — what the active system is and its request boundary.
+- `docs/python-api-contracts.md` — the public API contract source of truth.
+- `docs/retired-components.md` — what was removed and where archival material lives.
+- `docs/provider-credentials.md` — provider credential handling rules.
+- `docs/security-remediation-ledger.md` — security remediation status.
+
+## Request boundary
 
 ```text
-Alpha Rust agent runtime → Omega inference host
-                                      ├─ Qwen2.5-Coder-3B-Instruct
-                                      └─ LiquidAI 450M VL
+Browser -> Python API (/api/*)
 ```
 
-- `apps/ashat-hub-web/` — Ashat Hub web and Admin CP.
-- `services/python-api/` — active authentication, member, support, OIDC, and admin APIs.
-- `archive/retired-rust/ashat-hub/` — preserved Rust implementation for historical rollback only.
-- `crates/alpha-common/` — Alpha request and event types.
-- `crates/alpha-core/` — Alpha admission, routing, and Omega proxy logic.
-- `crates/alpha-server/` — Alpha gateway (`:3000`).
-- `crates/omega-agent/` — Omega inference proxy and worker supervisor (`:8080`).
-- `docs/ai-platform-architecture.md` — current system ownership and topology.
-- `docs/ai-platform-contracts.md` — current API, event, tool, and security contracts.
-
-Alpha performs no inference. Omega hosts Qwen for coding/chat/tool calls and LiquidAI 450M VL
-for image understanding. Beta, Delta, peer routing, and Liquid Thinking are retired.
+The portal talks to the Python API. There is no in-repo AI runtime, model host, or agent
+gateway.
 
 ## Local development
 
 ```bash
-cd /var/oled/data/AshatHub
-cargo check --workspace
-cd apps/ashat-hub-web && pnpm run build
+cd apps/ashat-hub-web && npm install && npm run build
+cd services/python-api && python3 proxy.py
 ```
 
-Production services and model paths are runtime-managed. Model files, credentials, service
-environment files, logs, databases, `target/`, `node_modules/`, and generated runtime data
-must not be committed.
+Production services and environment configuration are runtime-managed. Credentials, service
+environment files, logs, databases, `node_modules/`, and generated runtime data must not be
+committed.
+
+## Archive
+
+Historical Rust implementation material is under `archive/retired-rust/`. That material is
+archived record only — not active, not built, and not authoritative. See `archive/README.md`
+and `docs/retired-components.md`.
 
 ## Storage boundary
 

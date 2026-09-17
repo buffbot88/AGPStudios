@@ -1,6 +1,10 @@
-# AGP Studios AI Platform Contracts
+# AGP Studios AI Platform Contracts (ARCHIVED)
 
-Status: current v8.9 contract baseline.
+ARCHIVED — NOT CURRENT IMPLEMENTATION.
+
+This document described an earlier contract baseline. It is retained as
+historical record only. It is not authoritative for the current AGP Studios
+repo.
 
 ## Request boundary
 
