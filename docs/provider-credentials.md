@@ -6,4 +6,4 @@ Keys must never be returned to Galileo, Alpha, Omega, Beta, Delta, browser stora
 
 The provider record stores an opaque credential reference and account ownership. Outbound provider calls resolve the reference inside AshatHub, apply account limits, and discard plaintext credentials after request completion.
 
-Rotation: replace `/etc/ashat-ai/provider-master.cred`, restart `ashat-hub-rust.service`, and re-encrypt stored provider payloads through the administrative rotation procedure. Do not place plaintext keys in deployment files or shell history.
+Rotation: replace `/etc/ashat-ai/provider-master.cred`, restart the active provider service, and re-encrypt stored provider payloads through the administrative rotation procedure. Do not place plaintext keys in deployment files or shell history.

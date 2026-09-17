@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Python API seam with the Paws OIDC issuer migrated first; other routes proxy to Rust."""
+"""Python API for the retained Ashat Hub surface."""
 from base64 import urlsafe_b64encode, urlsafe_b64decode
 from hashlib import sha256
-from http.client import HTTPConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import urlopen
@@ -12,7 +11,6 @@ import pymysql
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 
-UPSTREAM = os.environ.get("LEGACY_API", "127.0.0.1:3100")
 ISSUER = os.environ.get("OIDC_ISSUER", "https://www.agpstudios.org/api/oauth")
 KEY_FILE = os.environ.get("ASHAT_OIDC_PRIVATE_KEY_FILE", "")
 CODES = {}

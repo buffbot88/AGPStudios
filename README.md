@@ -11,7 +11,8 @@ Alpha Rust agent runtime → Omega inference host
 ```
 
 - `apps/ashat-hub-web/` — Ashat Hub web and Admin CP.
-- `crates/ashat-hub/` — durable platform, authentication, projects, deployments, and admin APIs.
+- `services/python-api/` — active authentication, member, support, OIDC, and admin APIs.
+- `archive/retired-rust/ashat-hub/` — preserved Rust implementation for historical rollback only.
 - `crates/alpha-common/` — Alpha request and event types.
 - `crates/alpha-core/` — Alpha admission, routing, and Omega proxy logic.
 - `crates/alpha-server/` — Alpha gateway (`:3000`).
