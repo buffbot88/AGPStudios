@@ -36,7 +36,7 @@ def key():
 
 
 def oidc_json(handler, value, status=200):
-    body = json.dumps(value, separators=(",", ":")).encode()
+    body = json.dumps(value, separators=(",", ":"), default=str).encode()
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json")
     handler.send_header("Content-Length", str(len(body)))
@@ -89,6 +89,8 @@ class Proxy(BaseHTTPRequestHandler):
             return self.auth_session()
         if urlparse(self.path).path == "/api/game-status":
             return self.game_status()
+        if urlparse(self.path).path == "/api/portal-data":
+            return self.portal_data()
         if urlparse(self.path).path == "/api/auth/verify-email":
             return self.verify_email(parse_qs(urlparse(self.path).query).get('token', [''])[0])
         if urlparse(self.path).path.startswith("/api/admin/"):
@@ -177,6 +179,10 @@ class Proxy(BaseHTTPRequestHandler):
                     cur.execute("INSERT INTO admin_audit_events (actor_id,actor_name,action,target_type,target_id,detail,created_at) VALUES (%s,%s,%s,'user',%s,%s,UNIX_TIMESTAMP())",(user['id'],user['username'],action,form.get('user_id',''),json.dumps(form)))
             return oidc_json(self,{"ok":True})
         except Exception as exc: return error(self,f"admin unavailable: {exc}",503)
+
+    def portal_data(self):
+        health=self.game_status_value()
+        return oidc_json(self, {"health":health,"players_online":None,"server_metrics":None,"season":None,"character":None,"news":[],"regions":[]})
 
     def game_status(self):
         try:

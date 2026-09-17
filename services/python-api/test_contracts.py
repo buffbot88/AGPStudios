@@ -35,6 +35,9 @@ def main():
     status = json.loads(body)
     assert status["source"] == "paws-and-parcels"
     assert isinstance(status["online"], bool)
+    _, _, body = get("/api/portal-data")
+    portal = json.loads(body)
+    assert set(("health", "players_online", "server_metrics", "season", "character", "news", "regions")) <= set(portal)
 
     status, headers, body = get("/api/support", expected=401)
     assert json.loads(body)["error"]["code"] == "authentication_required"
