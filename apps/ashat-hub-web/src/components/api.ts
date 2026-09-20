@@ -17,10 +17,11 @@ export class TransientError extends Error {
 }
 
 export function csrfToken(): string {
+  // The API sets the CSRF token in the `ashat_csrf` cookie at login.
   const cookie = document.cookie
     .split('; ')
-    .find((value) => value.startsWith('ashat_rust_csrf='));
-  return cookie ? decodeURIComponent(cookie.slice('ashat_rust_csrf='.length)) : '';
+    .find((value) => value.startsWith('ashat_csrf='));
+  return cookie ? decodeURIComponent(cookie.slice('ashat_csrf='.length)) : '';
 }
 
 /**

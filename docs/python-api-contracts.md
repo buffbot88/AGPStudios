@@ -8,6 +8,8 @@ The Python service is the public API at `/api/*`; Rust is not part of the contra
 | Method | Path | Success | Purpose |
 |---|---|---:|---|
 | GET | `/api/game-status` | 200 | Paws health projection: `online`, `source`, `health` |
+| GET | `/api/games` | 200/503 | Public homepage games list: `{games: [{slug, title, summary, status, tags, url, poster, featured}]}` sorted by `sort_order` |
+| GET | `/api/news` | 200/503 | Public homepage studio news: `{news: [{id, title, summary, url, published_at}]}` newest first |
 | GET | `/api/auth/session` | 200 | `{authenticated: boolean, user?: User}` |
 | POST | `/api/auth/login` | 200 | JSON `{identifier, password}`; returns `{user}` and secure session cookie |
 | POST | `/api/auth/register` | 201 | JSON `{username, email, password, display_name}`; activates the account immediately |

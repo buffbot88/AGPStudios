@@ -1,45 +1,234 @@
 import { useEffect, useState } from 'react';
-import type { FormEvent, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import './styles.css';
+import { fetchGames, fetchNews, FEATURED_GAME, type Game, type NewsItem } from './content';
+import { SiteHeader } from './components/home/SiteHeader';
+import { HeroSection } from './components/home/HeroSection';
+import { QuickInfoCard } from './components/home/QuickInfoCard';
+import { GameCard } from './components/home/GameCard';
+import { SectionHeader } from './components/home/primitives';
+import { SiteFooter } from './components/home/SiteFooter';
+import { MemberSurfaces } from './components/MemberSurfaces';
+import { AdminSurface } from './components/AdminSurface';
+import { AuthPanel } from './components/AuthPanel';
+import { getSession, onSessionChange, peekSession, setSessionUser } from './components/session';
+import { ToastHost, toast } from './components/toast';
 
-type Region = { name: string; kind: string; description: string; state?: string };
-type User = { id: string; username: string; email: string; display_name: string; role: string; diamonds?: number };
-const regions: Region[] = [
-  { name: 'Clover Village', kind: 'Starting Zone', description: 'A warm and friendly home for new adventurers.' },
-  { name: 'Happy Valley', kind: 'Adventure Zone', description: 'New lands, new people, new deliveries.' },
-  { name: 'Void Desert', kind: 'High-Level Zone', description: 'Secrets await in the sands.', state: 'locked' },
-];
+type User = {
+  id: string;
+  username: string;
+  email: string;
+  display_name: string;
+  role: string;
+};
+
+function GameIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden>
+      <path d="M6 9h12a4 4 0 0 1 4 4v2a3 3 0 0 1-5.6 1.5L15.5 15h-7l-.9 1.5A3 3 0 0 1 2 15v-2a4 4 0 0 1 4-4Z" strokeLinejoin="round" />
+      <path d="M8 12.2v2.2M6.9 13.3h2.2" strokeLinecap="round" />
+      <circle cx="15.5" cy="12.4" r=".9" fill="currentColor" stroke="none" />
+      <circle cx="17.6" cy="14.2" r=".9" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+function NewsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden>
+      <rect x="4" y="4.5" width="16" height="15" rx="2.5" />
+      <path d="M8 9h8M8 12.5h8M8 16h5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function AccountIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden>
+      <circle cx="12" cy="8.5" r="3.5" />
+      <path d="M5 19.5a7 7 0 0 1 14 0" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+type Route = 'home' | 'account' | 'support' | 'admin';
+
+function routeFromHash(): Route {
+  switch (window.location.hash) {
+    case '#account':
+      return 'account';
+    case '#support':
+      return 'support';
+    case '#admin':
+      return 'admin';
+    default:
+      return 'home';
+  }
+}
 
 function App() {
-  const [user, setUser] = useState<User | null>(null);
-  const [online, setOnline] = useState<boolean | null>(null);
-  const [portalData, setPortalData] = useState<any>(null);
-  const [loginOpen, setLoginOpen] = useState(false);
-  const [adminOpen, setAdminOpen] = useState(false);
-  const [route, setRoute] = useState(window.location.hash);
-  useEffect(() => { const onHash=()=>{setRoute(window.location.hash);setLoginOpen(window.location.hash==='#login')}; window.addEventListener('hashchange',onHash); if(window.location.hash==='#login')setLoginOpen(true); return()=>window.removeEventListener('hashchange',onHash); }, []);
-  useEffect(() => { fetch('/api/auth/session', { credentials: 'same-origin' }).then(r => r.json()).then(d => setUser(d.authenticated ? d.user : null)).catch(() => {}); fetch('/api/portal-data').then(r => r.json()).then(d => { setPortalData(d); setOnline(d.health?.status === 'ok'); }).catch(() => setOnline(false)); }, []);
-  const logout = () => fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }).then(() => { setUser(null); window.location.assign('/'); });
-  return <div className="portal">
-    <header className="nav"><a className="wordmark" href="#top"><b>AGP</b> STUDIOS</a><nav><a href="#top">Home</a><a href="#world">Games</a><a href="#news">News</a><a href="#community">Community</a><a href="#support-page">Support</a>{user&&<a href="#account">Account</a>}{user?.role?.toLowerCase()==='admin'&&<button className="profile" onClick={() => setAdminOpen(true)}>Admin</button>}</nav><div className="nav-tools"><button aria-label="Search">⌕</button><button aria-label="Notifications">♢</button>{user && <span className="diamonds" title="Diamonds">◇ {user.diamonds ?? 0}</span>}{user ? <button className="profile" onClick={logout}>{user.display_name || user.username} · Sign out</button> : <button className="profile" onClick={() => setLoginOpen(true)}>◎ Sign in</button>}<a className="play-button" href={user?'https://pawsandparcels.agpstudios.org/?auth=1':'#login'} onClick={e=>{if(!user){e.preventDefault();setLoginOpen(true);window.location.hash='login'}}}>PLAY</a></div></header>
-    {loginOpen && <Login onClose={() => setLoginOpen(false)} onUser={(next) => { setUser(next); setLoginOpen(false); }} />}
-    {adminOpen && user?.role?.toLowerCase()==='admin' && <AdminOverlay onClose={() => setAdminOpen(false)} />}
-    <main id="top">
-      {user && (route==='#account'||route==='#support-page') && <MemberPanel user={user} route={route} />}
-      <section className="hero"><div className="hero-art" /><div className="hero-copy"><span className="kicker">AGP STUDIOS PRESENTS</span><h1>PAWS<br /><em>&amp; PARCELS</em></h1><p className="tagline">Deliver. Explore. Make Clover Village feel like home.</p><div className="actions"><a className="primary" href={user?'https://pawsandparcels.agpstudios.org/?auth=1':'#login'} onClick={e=>{if(!user){e.preventDefault();setLoginOpen(true);window.location.hash='login'}}}>PLAY NOW</a><a className="secondary" href="#world">⌖ EXPLORE THE WORLD</a></div><p className="online"><i /> {online === null ? 'CHECKING STATUS' : online ? 'ONLINE' : 'OFFLINE'} <span>•</span> SEASON DATA UNAVAILABLE</p></div><div className="hero-sign">✦<small>WELCOME<br />COURIER</small></div></section>
-      <section className="dashboard"><Card title="LIVE STATUS"><div className={`status ${online === false ? 'offline' : ''}`}><i /> <strong>{online === null ? 'CHECKING' : online ? 'ONLINE' : 'OFFLINE'}</strong></div><p>{online ? 'The world is open and waiting.' : 'Live game status is currently unavailable.'}</p><div className="stats"><Stat value={portalData?.players_online ?? 'Unavailable'} label="Players Online" /><Stat value={portalData?.server_metrics?.exp_rate ?? 'Unavailable'} label="Server EXP Rate" /><Stat value={portalData?.health?.timestamp ? new Date(portalData.health.timestamp).toLocaleTimeString() : 'Unavailable'} label="Last Health Check" /></div></Card><Card title="CURRENT SEASON"><h3>LIVE DATA UNAVAILABLE</h3><p>Season information will appear when the game service publishes it.</p><div className="empty-progress" /><small>No fabricated progress shown</small></Card><Card title={user ? `WELCOME BACK, ${user.display_name || user.username}` : 'PLAYER PROFILE'}>{user ? <><div className="player"><span className="avatar">🐾</span><div><strong>{user.display_name || user.username}</strong><small>{user.role}</small></div></div><div className="player-meta"><span>Email<b>{user.email}</b></span><span>Account<b>Active</b></span></div><button className="card-action" onClick={logout}>SIGN OUT →</button></> : <><p>Sign in to view your member profile.</p><button className="card-action" onClick={() => setLoginOpen(true)}>SIGN IN →</button></>}</Card></section>
-      <section className="section" id="world"><SectionHead title="EXPLORE THE WORLD" text="Three unique regions. Countless stories. Where will your next delivery take you?" action="VIEW WORLD MAP →" /><div className="regions">{regions.map((region) => <article className={`region ${region.state || ''}`} key={region.name}><div className="region-art" /><div className="region-copy"><span>{region.kind}</span><h3>{region.name}</h3><p>{region.description}</p><b>{region.state ? '🔒 LOCKED' : 'STATUS UNAVAILABLE'}</b></div></article>)}</div></section>
-      <section className="section" id="news"><SectionHead title="LATEST FROM PAWS & PARCELS" action="VIEW ALL NEWS →" /><div className="news-grid"><article className="featured"><div className="news-art" /><div><span className="badge gold">GAME UPDATE</span><h3>LIVE NEWS UNAVAILABLE</h3><p>News will be published here when the game service provides it.</p><small>News feed unavailable</small></div></article><div className="news-list"><News title="News feed unavailable" type="LIVE DATA" /><News title="News feed unavailable" type="LIVE DATA" /><News title="News feed unavailable" type="LIVE DATA" /></div></div></section>
-      <section className="section" id="community"><SectionHead title="OUR GAMES" text="New adventures are on the horizon." /><div className="games"><article><span className="game-logo">PAWS<br /><em>&amp; PARCELS</em></span><div><h3>Paws &amp; Parcels</h3><p>Deliver, explore, and make Clover Village feel like home.</p><a className="primary" href={user?'https://pawsandparcels.agpstudios.org/?auth=1':'#login'} onClick={e=>{if(!user){e.preventDefault();setLoginOpen(true);window.location.hash='login'}}}>PLAY NOW</a></div></article><article className="coming"><span>✦</span><h3>More Worlds Coming Soon</h3><p>New adventures are on the horizon.</p></article></div></section>
-    </main><footer id="support"><div><a className="wordmark" href="#top"><b>AGP</b> STUDIOS</a><p>Games, worlds, and stories built with purpose.</p></div><div><b>EXPLORE</b><a href="#world">Games</a><a href="#news">News</a></div><div><b>SUPPORT</b><a href="mailto:support@agpstudios.org">Contact us</a><a href="#top">Privacy</a></div><small>© 2026 AGP Studios</small></footer>
-  </div>;
+  // Initialize from the hydrated cache so a signed-in visitor rendering
+  // #admin/#account on a warm load isn't bounced before the store resolves.
+  const [user, setUser] = useState<User | null>(() => peekSession() ?? null);
+  const [route, setRoute] = useState<Route>(() => routeFromHash());
+  const [games, setGames] = useState<Game[] | null>(null);
+  const [news, setNews] = useState<NewsItem[] | null>(null);
+  const sessionResolved = peekSession() !== undefined;
+
+  useEffect(() => {
+    const onHash = () => {
+      setRoute(routeFromHash());
+      window.scrollTo(0, 0);
+    };
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+
+  // One shared session fetch for the whole app; stay in sync with
+  // login/logout and with background revalidation of a hydrated session.
+  useEffect(() => {
+    void getSession();
+    return onSessionChange(setUser);
+  }, []);
+
+  useEffect(() => {
+    void fetchGames().then(({ games: next }) => setGames(next));
+    void fetchNews().then(({ news: next }) => setNews(next));
+  }, []);
+
+  // Route guards: #account requires a session, #admin requires the admin role.
+  // Guard only after the session has resolved so a signed-in admin visiting
+  // #admin directly isn't bounced by the initial null user.
+  useEffect(() => {
+    if (!sessionResolved) return;
+    if (route === 'admin' && user?.role?.toLowerCase() !== 'admin') {
+      toast(user ? 'Administrator access required.' : 'Sign in with an administrator account to view the admin panel.');
+      window.location.hash = '#top';
+      setRoute('home');
+    } else if (route === 'account' && !user) {
+      toast('Sign in to view your account.');
+      window.location.hash = '#top';
+      setRoute('home');
+    }
+  }, [route, user, sessionResolved]);
+
+  const logout = () =>
+    fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }).then(() => {
+      setSessionUser(null);
+      setUser(null);
+      window.location.assign('/');
+    });
+
+  const featuredGame = games?.find((game) => game.status === 'live') ?? games?.[0] ?? FEATURED_GAME;
+  const latestNews = news?.[0] ?? {
+    title: 'A New Chapter Ahead',
+    summary: 'We\'re working on new worlds, new ideas, and more ways to play together.',
+    url: '#news',
+  };
+  const newsList = news ?? [
+    {
+      title: 'A New Chapter Ahead',
+      summary: 'We\'re working on new worlds, new ideas, and more ways to play together.',
+      url: '#news',
+    },
+  ];
+
+  return (
+    <div className="portal" id="top">
+      <SiteHeader user={user} onUserChange={setUser} />
+      <main>
+        {route === 'admin' && <AdminSurface user={user} />}
+        {route === 'account' &&
+          (user ? (
+            <MemberSurfaces user={user} initialTab="account" />
+          ) : (
+            <section className="member-section workspace-locked">
+              <span className="eyebrow">AGP Studios Member</span>
+              <h2>Sign in to manage your account</h2>
+              <p>Your account, preferences, and community tools live here.</p>
+              <AuthPanel embedded onChange={setSessionUser} />
+            </section>
+          ))}
+        {route === 'support' && <MemberSurfaces user={user} initialTab="support" />}
+        {route === 'home' && (
+          <>
+        <HeroSection games={games ?? [FEATURED_GAME]} user={user} />
+
+        <section className="quick-row" aria-label="Highlights">
+          <QuickInfoCard
+            icon={<GameIcon />}
+            eyebrow="Featured Game"
+            title={featuredGame.title}
+            description={featuredGame.summary}
+            link="Play Now"
+            href={user ? `${featuredGame.url}/?auth=1` : featuredGame.url}
+          />
+          <QuickInfoCard
+            icon={<NewsIcon />}
+            eyebrow="Studio News"
+            title={latestNews.title}
+            description={latestNews.summary}
+            link="Read the Latest"
+            href={latestNews.url}
+          />
+          <QuickInfoCard
+            icon={<AccountIcon />}
+            eyebrow="Your Account"
+            title={user ? `Welcome back, ${user.display_name || user.username}` : 'Your Account'}
+            description={
+              user
+                ? 'Manage your account, preferences, and more.'
+                : 'Sign in to access your account, updates, and community tools.'
+            }
+            link={user ? 'Go to Account' : 'Sign In'}
+            href={user ? '#account' : '#top'}
+            onAction={user ? undefined : () => window.dispatchEvent(new CustomEvent('agp:signin'))}
+          />
+          {user && (
+            <button type="button" className="link-action signout-link" onClick={logout}>
+              Sign out
+            </button>
+          )}
+        </section>
+
+        <section className="section" id="games" aria-labelledby="games-title">
+          <SectionHeader title="Our Games" text="Different worlds. A shared home." action="View All Games" href="#games" />
+          <div className="games-grid">
+            {(games ?? [FEATURED_GAME]).map((game) => (
+              <GameCard key={game.slug} game={game} />
+            ))}
+          </div>
+        </section>
+
+        <section className="section" id="news" aria-labelledby="news-title">
+          <SectionHeader title="Studio News" text="Updates from across the studio." action="View All News" href="#news" />
+          <div className="news-list-panel">
+            {newsList.map((item, index) => (
+              <article className="news-panel" key={`${item.title}-${index}`}>
+                {index === 0 && <span className="eyebrow">Latest</span>}
+                <h3>{item.title}</h3>
+                <p>{item.summary}</p>
+                <a className="link-action" href={item.url}>
+                  Read the Latest <span aria-hidden>→</span>
+                </a>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="section" id="community" aria-labelledby="community-title">
+          <SectionHeader title="Community" text="Play together. A brighter tomorrow." />
+          <p className="community-note">
+            Community spaces are opening soon. Sign in and stay tuned — {user ? 'see you in the worlds.' : 'more is on the way.'}
+          </p>
+        </section>
+          </>
+        )}
+      </main>
+      <SiteFooter />
+      <ToastHost />
+    </div>
+  );
 }
-function Login({ onClose, onUser }: { onClose: () => void; onUser: (user: User) => void }) { const [register,setRegister]=useState(false); const [identifier,setIdentifier]=useState(''); const [email,setEmail]=useState(''); const [password,setPassword]=useState(''); const [error,setError]=useState(''); async function submit(e:FormEvent){e.preventDefault(); const path=register?'/api/auth/register':'/api/auth/login'; const body=register?{username:identifier,email,password,display_name:identifier}:{identifier,password}; const r=await fetch(path,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); const d=await r.json(); if(!r.ok){setError(d.error?.message||d.error||'Request failed');return} if(register){setRegister(false);setError('Account created. Sign in below.');return} onUser(d.user)} return <div className="login-backdrop"><form className="login" onSubmit={submit}><button type="button" className="close" onClick={onClose}>×</button><span className="kicker">AGP STUDIOS MEMBER</span><h2>{register?'Create account':'Sign in'}</h2><input value={identifier} onChange={e=>setIdentifier(e.target.value)} placeholder={register?'Username':'Username or email'} required />{register&&<input value={email} onChange={e=>setEmail(e.target.value)} placeholder="Email" type="email" required />}<input value={password} onChange={e=>setPassword(e.target.value)} placeholder="Password" type="password" required /><button className="primary" type="submit">{register?'CREATE ACCOUNT':'SIGN IN'}</button><button type="button" className="mode-switch" onClick={()=>{setRegister(!register);setError('')}}>{register?'Already a member? Sign in':'Create a member account'}</button>{error && <small className="error">{error}</small>}</form></div> }
-function MemberPanel({user,route}:{user:User;route:string}) { const [data,setData]=useState<any>(null); const [error,setError]=useState(''); const [busy,setBusy]=useState(false); const [form,setForm]=useState({username:user.username,email:user.email,display_name:user.display_name}); const csrf=()=>document.cookie.split('; ').find(x=>x.startsWith('ashat_csrf='))?.split('=')[1]||''; const request=(path:string,options?:RequestInit)=>fetch(path,{credentials:'same-origin',...options,headers:{'Content-Type':'application/json','X-CSRF-Token':csrf(),...(options?.headers||{})}}).then(async r=>{const d=await r.json();if(!r.ok)throw Error(d.error?.message||'Request failed');return d}); useEffect(()=>{setData(null);setError('');request(route==='#account'?'/api/account/summary':'/api/support').then(setData).catch(e=>setError(e.message))},[route]); async function save(e:FormEvent){e.preventDefault();setBusy(true);try{const d=await request('/api/account',{method:'PUT',body:JSON.stringify(form)});setData({...data,user:d.user});}catch(e){setError((e as Error).message)}finally{setBusy(false)}} async function create(e:FormEvent){e.preventDefault();setBusy(true);const f=e.currentTarget as HTMLFormElement;const body=Object.fromEntries(new FormData(f));try{const d=await request('/api/support',{method:'POST',body:JSON.stringify(body)});setData({...data,tickets:[...(data?.tickets||[]),{id:d.id,subject:body.subject,status:'open',priority:body.priority}]});f.reset()}catch(e){setError((e as Error).message)}finally{setBusy(false)}} if(error)return <section className="member-page"><h2>Member area unavailable</h2><p className="error">{error}</p></section>; if(!data)return <section className="member-page"><p>Loading member data…</p></section>; return <section className="member-page" id={route.slice(1)}><SectionHead title={route==='#account'?'ACCOUNT':'SUPPORT'} text={route==='#account'?'Manage your Hub profile.':'Create and track support requests.'}/>{route==='#account'?<form className="member-form" onSubmit={save}><input value={form.username} onChange={e=>setForm({...form,username:e.target.value})} placeholder="Username" required/><input value={form.display_name} onChange={e=>setForm({...form,display_name:e.target.value})} placeholder="Display name" required/><input value={form.email} onChange={e=>setForm({...form,email:e.target.value})} type="email" placeholder="Email" required/><button className="primary" disabled={busy}>{busy?'Saving…':'Save account'}</button><p>Support tickets: {data.stats?.support_tickets ?? 0}</p></form>:<><form className="member-form" onSubmit={create}><input name="subject" placeholder="Subject" required/><select name="category" defaultValue="other"><option>other</option><option>bug</option><option>account</option><option>feature</option></select><select name="priority" defaultValue="normal"><option>normal</option><option>high</option><option>urgent</option></select><textarea name="message" placeholder="Describe the issue" rows={5} required/><button className="primary" disabled={busy}>Create ticket</button></form><div className="ticket-list">{(data.tickets||[]).map((t:any)=><article className="ticket" key={t.id}><b>{t.subject}</b><span>{t.status} · {t.priority}</span></article>)}{!data.tickets?.length&&<p>No support tickets yet.</p>}</div></>}</section>; }
-function AdminOverlay({ onClose }: { onClose: () => void }) { const [tab,setTab]=useState<'overview'|'members'|'prune'>('overview'); const [data,setData]=useState<any>({}); const [pruneData,setPruneData]=useState<any>({}); const [deleteConfirm,setDeleteConfirm]=useState<string|null>(null); const [pruneConfirm,setPruneConfirm]=useState<number|null>(null); const [error,setError]=useState(''); const csrf=()=>document.cookie.split('; ').find(x=>x.startsWith('ashat_csrf='))?.split('=')[1]||''; const loadAll=()=>Promise.all(['/api/admin/summary','/api/admin/users','/api/admin/support','/api/admin/health','/api/admin/audit'].map(path=>fetch(path,{credentials:'same-origin'}).then(r=>r.ok?r.json():Promise.reject(r.status)))).then(([summary,users,support,health,audit])=>setData({summary,users,support,health,audit})).catch(e=>setError(`Admin unavailable (${e})`)); const loadPrune=()=>fetch('/api/admin/audit',{credentials:'same-origin'}).then(r=>r.ok?r.json():Promise.reject(r.status)).then(d=>setPruneData(d)).catch(e=>setError(`Audit unavailable (${e})`)); useEffect(()=>{void loadAll()},[]); useEffect(()=>{if(tab==='prune')void loadPrune()},[tab]); const adminDelete=async(path:string,body?:object)=>{const r=await fetch(path,{method:'DELETE',credentials:'same-origin',headers:{'X-CSRF-Token':csrf()}});if(!r.ok)setError(`Delete failed (${r.status})`);else loadAll()}; async function update(path:string,body:object){const r=await fetch(path,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf()},body:JSON.stringify(body)});if(!r.ok)setError(`Update failed (${r.status})`);else loadAll()} async function pruneAudit(before:number){setError('');try{const r=await fetch('/api/admin/audit/prune',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf()},body:JSON.stringify({before_id:before})});if(!r.ok)setError(`Prune failed (${r.status})`);else{setPruneConfirm(null);loadPrune();loadAll()}}catch(e){setError((e as Error).message)}} return <div className="admin-backdrop"><div className="admin-panel" role="dialog" aria-modal="true"><button className="admin-close" onClick={onClose}>×</button><div className="admin-layout"><aside className="admin-menu"><b>ADMIN CONTROL</b><button className={`admin-menu-btn${tab==='overview'?' active':''}`} onClick={()=>setTab('overview')}>Overview</button><button className={`admin-menu-btn${tab==='members'?' active':''}`} onClick={()=>setTab('members')}>Members</button><button className={`admin-menu-btn${tab==='prune'?' active':''}`} onClick={()=>setTab('prune')}>Prune Log</button></aside><div className="admin-content"><SectionHeadActions title="ADMIN CONTROL" text="Python operations surface" action="REFRESH" onAction={()=>{loadAll();if(tab==='prune')loadPrune()}}/>{error&&<p className="error">{error}</p>}{tab==='overview'&&<><div className="admin-cards">{Object.entries(data.summary||{}).filter(([k])=>['users','active_users','open_tickets'].includes(k)).map(([k,v])=><Card key={k} title={k.replace('_',' ').toUpperCase()}><strong className="admin-value">{String(v)}</strong></Card>)}</div><div className="admin-columns"><Card title="SUPPORT QUEUE"><div className="admin-list">{(data.support?.tickets||[]).map((t:any)=><div className="admin-row" key={t.id}><span><b>{t.subject}</b><small>{t.status} · {t.priority}</small></span></div>)}</div></Card><Card title="SYSTEM HEALTH"><pre>{JSON.stringify(data.health||{},null,2)}</pre></Card></div></>}{tab==='members'&&<Card title="USERS"><div className="admin-list">{(data.users?.users||[]).map((u:any)=><div className="admin-row" key={u.id}><span><b>{u.username}</b><small>{u.email} · ◇ {u.diamonds ?? 0}</small></span><select value={u.role} onChange={e=>update('/api/admin/users/role',{user_id:u.id,role:e.target.value})}><option>Member</option><option>Pro</option><option>Admin</option></select><button onClick={()=>update('/api/admin/users/status',{user_id:u.id,status:u.is_active?'disabled':'active'})}>{u.is_active?'Disable':'Enable'}</button>{deleteConfirm===u.id?<span className="admin-confirm">Delete permanently? <button className="admin-confirm-yes" onClick={()=>{adminDelete(`/api/admin/users/${u.id}`);setDeleteConfirm(null)}}>Yes, delete</button> <button className="admin-confirm-no" onClick={()=>setDeleteConfirm(null)}>Cancel</button></span>:<button className="admin-delete" onClick={()=>setDeleteConfirm(u.id)}>Delete</button>}</div>)}{(data.users?.users||[]).length===0&&<p>No users found.</p>}</div></Card>}{tab==='prune'&&<><Card title="AUDIT LOG"><div className="admin-list">{(pruneData?.events||[]).map((e:any)=><div className="admin-row" key={e.id}><span><b>{e.action}</b><small>{e.actor_name} · {e.target_id}</small></span>{pruneConfirm===e.id?<span className="admin-confirm">Prune all older events? <button className="admin-confirm-yes" onClick={()=>pruneAudit(e.id)}>Yes, prune</button> <button className="admin-confirm-no" onClick={()=>setPruneConfirm(null)}>Cancel</button></span>:<button className="admin-delete" onClick={()=>setPruneConfirm(e.id)}>Prune</button>}</div>)}{(pruneData?.events||[]).length===0&&<p>No audit events.</p>}</div></Card><p className="admin-hint">Prune removes every audit event older than the selected one. This cannot be undone.</p></>}</div></div></div></div>; }
-function Card({title, children}: {title: string; children: ReactNode}) { return <article className="card"><span className="card-title">{title}</span>{children}</article>; }
-function Stat({value,label}: {value:string;label:string}) { return <span><strong>{value}</strong><small>{label}</small></span>; }
-function SectionHead({title,text,action}: {title:string;text?:string;action?:string}) { return <div className="section-head"><div><span className="kicker">AGP STUDIOS</span><h2>{title}</h2>{text && <p>{text}</p>}</div>{action && <a href="#world">{action}</a>}</div>; }
-function SectionHeadActions({title,text,action,onAction}: {title:string;text?:string;action?:string;onAction?:(()=>void)|undefined}) { return <div className="section-head"><div><span className="kicker">AGP STUDIOS</span><h2>{title}</h2>{text && <p>{text}</p>}</div>{action && <button className="refresh-action" onClick={onAction}>{action}</button>}</div>; }
-function News({title,type}: {title:string;type:string}) { return <article className="news-item"><div className="thumb" /><div><span className="badge">{type}</span><h3>{title}</h3><small>Awaiting live feed</small></div></article>; }
+
 export default App;

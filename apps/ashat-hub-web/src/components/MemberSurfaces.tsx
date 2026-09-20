@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { API, request } from './api';
+import { confirmToast, toast } from './toast';
 
 type User = { id: string; username: string; email: string; display_name: string; tag_name?: string | null; discord_tag?: string | null; location?: string | null; interests?: string | null; role: string };
 export type MemberTab = 'support' | 'account';
@@ -146,9 +147,9 @@ function AccountForm({ user, githubLinked, onSaved, onGithubChange, onDeleted }:
     finally { setBusy(false); }
   }
   async function deleteAccount() {
-    if (!window.confirm('Are you sure you want to permanently delete your Ashat account and all associated data? This cannot be undone.')) return;
+    if (!(await confirmToast({ message: 'Permanently delete your account and all associated data? This cannot be undone.', confirmLabel: 'Delete permanently', danger: true }))) return;
     setBusy(true); setError('');
-    try { await request(`${API}/account`, { method: 'DELETE' }); onDeleted(); }
+    try { await request(`${API}/account`, { method: 'DELETE' }); toast('Your account has been deleted.'); onDeleted(); }
     catch (reason) { setError(reason instanceof Error ? reason.message : 'Unable to delete account'); }
     finally { setBusy(false); }
   }
@@ -163,6 +164,6 @@ function AccountForm({ user, githubLinked, onSaved, onGithubChange, onDeleted }:
   return <form className="member-form account-form" onSubmit={(event) => void save(event)}><span className="eyebrow">Account details</span><div className="form-row"><input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} placeholder="Username" required /><input value={form.tag_name} onChange={(e) => setForm({ ...form, tag_name: e.target.value })} placeholder="Tag name" required /></div><input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="Email" type="email" required /><div className="form-row"><input value={form.discord_tag} onChange={(e) => setForm({ ...form, discord_tag: e.target.value })} placeholder="Discord tag (optional)" /><input value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} placeholder="Location (optional)" /></div><textarea value={form.interests} onChange={(e) => setForm({ ...form, interests: e.target.value })} placeholder="Interests (optional)" rows={3} /><button type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save account'}</button><div className="account-danger"><strong>GitHub connection</strong><span>{githubLinked ? 'GitHub account linked.' : 'No GitHub account linked.'}</span>{githubLinked ? <button type="button" className="secondary-button" onClick={() => void unlinkGithub()} disabled={busy}>Unlink GitHub</button> : <a className="secondary-button" href={`${API}/auth/github`}>Link GitHub account</a>}</div><button type="button" className="delete-account-button" onClick={() => void deleteAccount()} disabled={busy}>Delete account and all data</button>{message && <small className="auth-success">{message}</small>}{error && <small className="auth-error">{error}</small>}</form>;
 }
 
-function Metric({ label, value }: { label: string; value: number }) {
-  return <div className="account-stat"><span>{label}</span><strong>{value.toLocaleString()}</strong></div>;
+function Metric({ label, value }: { label: string; value: number | undefined }) {
+  return <div className="account-stat"><span>{label}</span><strong>{(value ?? 0).toLocaleString()}</strong></div>;
 }

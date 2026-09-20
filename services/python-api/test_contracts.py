@@ -39,6 +39,20 @@ def main():
     portal = json.loads(body)
     assert set(("health", "players_online", "server_metrics", "season", "character", "news", "regions")) <= set(portal)
 
+    _, _, body = get("/api/games")
+    games = json.loads(body)["games"]
+    assert isinstance(games, list)
+    for game in games:
+        assert set(("slug", "title", "summary", "status", "tags", "url", "poster", "featured")) <= set(game)
+        assert game["status"] in ("live", "in-development", "coming-soon")
+        assert isinstance(game["tags"], list)
+
+    _, _, body = get("/api/news")
+    news = json.loads(body)["news"]
+    assert isinstance(news, list)
+    for item in news:
+        assert set(("id", "title", "summary", "url", "published_at")) <= set(item)
+
     status, headers, body = get("/api/support", expected=401)
     assert json.loads(body)["error"]["code"] == "authentication_required"
     get("/api/account/summary", expected=401)

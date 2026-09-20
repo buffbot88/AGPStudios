@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { API, request } from './api';
+import { confirmToast, toast } from './toast';
 
 type User = { id: string; username: string; email: string; display_name: string; role: string };
 type AdminUser = { id: string; username: string; email: string; display_name: string; role: string; is_active: number; banned_at?: number | null; email_verified_at?: string | null };
@@ -90,9 +91,9 @@ export function AdminSurface({ user }: { user: User | null }) {
   const loadOmegaServers = useCallback(async () => { try { const data = await request<{ servers: OmegaServer[] }>(`${API}/admin/omega/servers`); setOmegaServers(data.servers); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Omega status unavailable'); } }, []);
   useEffect(() => { if (tab === 'telemetry') { void loadTelemetry(); void loadOmegaServers(); } }, [tab, loadTelemetry, loadOmegaServers]);
   async function telemetryAction(action: 'refresh' | 'clear') { setBusy(true); setError(null); try { await request(`${API}/admin/telemetry/${action}`, { method: 'POST' }); await loadTelemetry(); await loadOmegaServers(); } catch (reason) { setError(reason instanceof Error ? reason.message : `Telemetry ${action} failed`); } finally { setBusy(false); } }
-  async function pushGithub() { if (!window.confirm('Push committed Ashat Hub changes to GitHub main?')) return; setBusy(true); setError(null); try { await request(`${API}/admin/github/push`, { method: 'POST' }); } catch (reason) { setError(reason instanceof Error ? reason.message : 'GitHub push failed'); } finally { setBusy(false); } }
-  async function systemUpdate() { if (!window.confirm('Pull main, rebuild Ashat Hub, and restart the live service?')) return; setBusy(true); setError(null); try { const result = await request<{ commit: string }>(`${API}/admin/system/update`, { method: 'POST' }); window.alert(`System updated to ${result.commit}. Reloading Admin CP…`); window.setTimeout(() => window.location.reload(), 2500); } catch (reason) { setError(reason instanceof Error ? reason.message : 'System update failed'); } finally { setBusy(false); } }
-  async function codingAgentsUpdate() { if (!window.confirm('Launch the Omega coding agent?')) return; setBusy(true); setError(null); try { await request(`${API}/admin/omega/launch`, { method: 'POST' }); window.alert('Omega coding agent launched.'); await loadTelemetry(); await loadOmegaServers(); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Omega launch failed'); } finally { setBusy(false); } }
+  async function pushGithub() { if (!(await confirmToast({ message: 'Push committed Ashat Hub changes to GitHub main?', confirmLabel: 'Push' }))) return; setBusy(true); setError(null); try { await request(`${API}/admin/github/push`, { method: 'POST' }); toast('Changes pushed to GitHub.', 'success'); } catch (reason) { setError(reason instanceof Error ? reason.message : 'GitHub push failed'); } finally { setBusy(false); } }
+  async function systemUpdate() { if (!(await confirmToast({ message: 'Pull main, rebuild Ashat Hub, and restart the live service?', confirmLabel: 'Update & restart', danger: true }))) return; setBusy(true); setError(null); try { const result = await request<{ commit: string }>(`${API}/admin/system/update`, { method: 'POST' }); toast(`System updated to ${result.commit}. Reloading Admin CP…`); window.setTimeout(() => window.location.reload(), 2500); } catch (reason) { setError(reason instanceof Error ? reason.message : 'System update failed'); } finally { setBusy(false); } }
+  async function codingAgentsUpdate() { if (!(await confirmToast({ message: 'Launch the Omega coding agent?', confirmLabel: 'Launch' }))) return; setBusy(true); setError(null); try { await request(`${API}/admin/omega/launch`, { method: 'POST' }); toast('Omega coding agent launched.', 'success'); await loadTelemetry(); await loadOmegaServers(); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Omega launch failed'); } finally { setBusy(false); } }
 
   async function updateUser(userId: string, body: { role?: string; is_active?: boolean }) {
     setBusy(true); setError(null);
@@ -110,7 +111,7 @@ export function AdminSurface({ user }: { user: User | null }) {
 
   async function banUser(userId: string, banned: boolean) {
     const action = banned ? 'Ban' : 'Unban';
-    if (!window.confirm(`${action} this user? ${banned ? 'They will be logged out immediately.' : ''}`)) return;
+    if (!(await confirmToast({ message: `${action} this user?${banned ? ' They will be logged out immediately.' : ''}`, confirmLabel: action, danger: banned }))) return;
     setBusy(true); setError(null);
     try {
       await request(`${API}/admin/users/ban`, { method: 'POST', body: JSON.stringify({ user_id: userId, banned }) });
@@ -125,7 +126,7 @@ export function AdminSurface({ user }: { user: User | null }) {
   }
 
   async function deleteUser(userId: string) {
-    if (!window.confirm('PERMANENTLY DELETE this user? This cannot be undone. All their projects, deployments, and data will be removed.')) return;
+    if (!(await confirmToast({ message: 'PERMANENTLY DELETE this user? This cannot be undone. All their projects, deployments, and data will be removed.', confirmLabel: 'Delete permanently', danger: true }))) return;
     setBusy(true); setError(null);
     try {
       await request(`${API}/admin/users/${userId}`, { method: 'DELETE' });

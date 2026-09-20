@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" role="img" aria-label="Paws and Parcels poster art">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0d2b3a"/>
+      <stop offset=".55" stop-color="#123a44"/>
+      <stop offset="1" stop-color="#1c4a4c"/>
+    </linearGradient>
+    <linearGradient id="lamp" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f6d16b"/>
+      <stop offset="1" stop-color="#d99f35"/>
+    </linearGradient>
+    <radialGradient id="glow" cx=".5" cy=".45" r=".6">
+      <stop offset="0" stop-color="#f6d16b" stop-opacity=".55"/>
+      <stop offset="1" stop-color="#f6d16b" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="400" height="300" fill="url(#sky)"/>
+  <circle cx="268" cy="118" r="130" fill="url(#glow)"/>
+  <!-- rooftops -->
+  <g fill="#0a2230">
+    <path d="M0 236 L60 200 L120 236 L120 300 L0 300 Z"/>
+    <path d="M110 244 L180 210 L250 244 L250 300 L110 300 Z"/>
+  </g>
+  <g fill="#0e2e3c">
+    <path d="M230 228 L300 188 L370 228 L370 300 L230 300 Z"/>
+    <path d="M330 244 L400 214 L400 300 L330 300 Z"/>
+  </g>
+  <!-- hanging sign post -->
+  <g>
+    <rect x="176" y="86" width="4" height="150" rx="2" fill="#3a2a18"/>
+    <rect x="150" y="96" width="56" height="4" rx="2" fill="#3a2a18"/>
+    <line x1="158" y1="100" x2="158" y2="118" stroke="#3a2a18" stroke-width="2"/>
+    <line x1="198" y1="100" x2="198" y2="118" stroke="#3a2a18" stroke-width="2"/>
+    <rect x="146" y="118" width="64" height="56" rx="10" fill="#1a120a" stroke="#d99f35" stroke-width="2"/>
+    <!-- paw print -->
+    <g fill="url(#lamp)">
+      <ellipse cx="178" cy="152" rx="11" ry="9"/>
+      <ellipse cx="166" cy="138" rx="4.5" ry="6"/>
+      <ellipse cx="175" cy="133" rx="4.5" ry="6"/>
+      <ellipse cx="184" cy="135" rx="4.5" ry="6"/>
+      <ellipse cx="191" cy="142" rx="4" ry="5.5"/>
+    </g>
+  </g>
+  <!-- lantern -->
+  <g>
+    <rect x="296" y="150" width="3" height="70" fill="#3a2a18"/>
+    <rect x="288" y="140" width="19" height="24" rx="5" fill="#2a1c0e" stroke="#3a2a18" stroke-width="2"/>
+    <rect x="291" y="144" width="13" height="16" rx="3" fill="url(#lamp)" opacity=".9"/>
+  </g>
+  <text x="30" y="272" font-family="Georgia, 'Times New Roman', serif" font-style="italic" font-size="30" fill="#f6d16b">Paws &amp; Parcels</text>
+  <text x="31" y="288" font-family="Verdana, Geneva, sans-serif" font-size="8" letter-spacing="2" fill="#c9b28a">SMALL DELIVERIES · BRIGHTER DAYS</text>
+</svg>

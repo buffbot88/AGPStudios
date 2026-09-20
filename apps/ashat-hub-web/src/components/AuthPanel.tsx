@@ -1,8 +1,11 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import { API, csrfToken, errorMessage, type ApiError } from './api';
+import { getSession, onSessionChange, setSessionUser, type SessionUser } from './session';
 
-type User = { id: string; username: string; email: string; display_name: string; role: string };
+type User = SessionUser;
 type AuthMode = 'login' | 'register' | 'reset-request';
+
+export type AuthUser = User;
 
 export function AuthPanel({ onChange, onNavigate, embedded = false }: { onChange: (user: User | null) => void; onNavigate?: (path: string) => void; embedded?: boolean }) {
   const [user, setUser] = useState<User | null>(null);
@@ -17,15 +20,24 @@ export function AuthPanel({ onChange, onNavigate, embedded = false }: { onChange
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDetailsElement>(null);
 
+  // Subscribe to the shared session store: one network fetch app-wide,
+  // and local state follows any login/logout that happens anywhere.
   useEffect(() => {
-    fetch(`${API}/auth/session`, { credentials: 'same-origin' })
-      .then((response) => response.json())
-      .then((data: { authenticated?: boolean; user?: User }) => {
-        const next = data.authenticated ? data.user || null : null;
-        setUser(next);
-        onChange(next);
-      })
-      .catch(() => setError('Authentication service unavailable'));
+    let mounted = true;
+    void getSession().then((next) => {
+      if (!mounted) return;
+      setUser(next);
+      onChange(next);
+    });
+    const unsubscribe = onSessionChange((next) => {
+      if (!mounted) return;
+      setUser(next);
+      onChange(next);
+    });
+    return () => {
+      mounted = false;
+      unsubscribe();
+    };
   }, [onChange]);
 
   useEffect(() => {
@@ -34,6 +46,15 @@ export function AuthPanel({ onChange, onNavigate, embedded = false }: { onChange
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [isOpen]);
+
+  useEffect(() => {
+    const open = () => {
+      openMode('login');
+      setIsOpen(true);
+    };
+    window.addEventListener('agp:signin', open);
+    return () => window.removeEventListener('agp:signin', open);
+  }, []);
 
   function openMode(nextMode: AuthMode) {
     setMode(nextMode);
@@ -108,6 +129,7 @@ export function AuthPanel({ onChange, onNavigate, embedded = false }: { onChange
         return;
       }
       setUser(data.user);
+      setSessionUser(data.user);
       onChange(data.user);
       setIsOpen(false);
     } catch {
@@ -138,8 +160,15 @@ export function AuthPanel({ onChange, onNavigate, embedded = false }: { onChange
     }
   }
 
+  /** Navigate the studio SPA. Paths map to hash routes; account is the menu itself. */
   function navigateFromMenu(path: string) {
-    onNavigate?.(path);
+    const target = path === '/community' ? '#community' : path === '/admin' ? '#admin' : '#account';
+    onNavigate?.(target);
+    if (window.location.hash === target) {
+      window.dispatchEvent(new HashChangeEvent('hashchange'));
+    } else {
+      window.location.hash = target;
+    }
     menuRef.current?.removeAttribute('open');
   }
 
@@ -148,7 +177,9 @@ export function AuthPanel({ onChange, onNavigate, embedded = false }: { onChange
     try {
       const response = await fetch(`${API}/auth/logout`, { method: 'POST', credentials: 'same-origin', headers: { 'X-CSRF-Token': csrfToken() } });
       if (!response.ok) throw new Error('Logout failed');
-      setUser(null); onChange(null);
+      setUser(null);
+      setSessionUser(null);
+      onChange(null);
     } catch { setError('Logout failed'); }
     finally { setBusy(false); }
   }

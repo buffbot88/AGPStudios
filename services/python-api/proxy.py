@@ -89,6 +89,10 @@ class Proxy(BaseHTTPRequestHandler):
             return self.game_status()
         if urlparse(self.path).path == "/api/portal-data":
             return self.portal_data()
+        if urlparse(self.path).path == "/api/games":
+            return self.games_list()
+        if urlparse(self.path).path == "/api/news":
+            return self.news_list()
         if urlparse(self.path).path == "/api/auth/verify-email":
             return self.verify_email(parse_qs(urlparse(self.path).query).get('token', [''])[0])
         if urlparse(self.path).path.startswith("/api/admin/"):
@@ -217,6 +221,51 @@ class Proxy(BaseHTTPRequestHandler):
     def portal_data(self):
         health=self.game_status_value()
         return oidc_json(self, {"health":health,"players_online":None,"server_metrics":None,"season":None,"character":None,"news":[],"regions":[]})
+
+    def games_list(self):
+        """Public read-only list of studio games for the homepage."""
+        try:
+            with db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT slug,title,summary,status,tags,url,poster,featured FROM games ORDER BY sort_order,created_at")
+                    rows = cur.fetchall()
+            games = []
+            for row in rows:
+                try:
+                    tags = json.loads(row.get("tags") or "[]")
+                except Exception:
+                    tags = []
+                games.append({
+                    "slug": row["slug"],
+                    "title": row["title"],
+                    "summary": row["summary"],
+                    "status": row["status"],
+                    "tags": tags,
+                    "url": row["url"],
+                    "poster": row["poster"] or None,
+                    "featured": bool(row["featured"]),
+                })
+            return oidc_json(self, {"games": games})
+        except Exception as exc:
+            return error(self, f"games unavailable: {exc}", 503)
+
+    def news_list(self):
+        """Public read-only list of studio news for the homepage."""
+        try:
+            with db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT id,title,summary,url,published_at FROM studio_news ORDER BY published_at DESC LIMIT 20")
+                    rows = cur.fetchall()
+            news = [{
+                "id": row["id"],
+                "title": row["title"],
+                "summary": row["summary"],
+                "url": row["url"] or "#news",
+                "published_at": row["published_at"],
+            } for row in rows]
+            return oidc_json(self, {"news": news})
+        except Exception as exc:
+            return error(self, f"news unavailable: {exc}", 503)
 
     def game_status(self):
         try:
