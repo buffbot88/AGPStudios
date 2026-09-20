@@ -52,7 +52,7 @@ GAMES = {"games": [
     {"slug": "world-of-ra-horizon", "title": "The World of Ra - Horizon - Season 1",
      "summary": "A new world is taking shape.",
      "status": "in-development", "tags": ["Exploration"], "url": "",
-     "poster": None, "featured": False},
+     "poster": "/world-of-ra-poster.svg", "featured": False},
 ]}
 NEWS = {"news": [
     {"id": "n1", "title": "A New Chapter Ahead",
@@ -140,13 +140,13 @@ class Handler(BaseHTTPRequestHandler):
             _, user, failure = self.require_auth()
             if failure:
                 return self.reply(*failure)
-            return self.reply(200, {"user": public(user), "stats": {"support_tickets": len([t for t in TICKETS if t["user_id"] == user["id"]])}})
+            return self.reply(200, {"user": None, "stats": {"conversation_messages": None, "support_tickets": "not-a-number"}})
         if path == "/api/support":
             _, user, failure = self.require_auth()
             if failure:
                 return self.reply(*failure)
             mine = [{k: v for k, v in t.items() if k != "replies"} for t in TICKETS if t["user_id"] == user["id"]]
-            return self.reply(200, {"tickets": mine})
+            return self.reply(200, {"tickets": "oops-not-a-list"})
         if path.startswith("/api/support/"):
             _, user, failure = self.require_auth()
             if failure:
@@ -155,6 +155,10 @@ class Handler(BaseHTTPRequestHandler):
             ticket = next((t for t in TICKETS if t["id"] == ticket_id and t["user_id"] == user["id"]), None)
             if not ticket:
                 return self.reply(*err("ticket not found", 404))
+            # Detail shape carries the full `message` (list view has `preview`),
+            # matching the real API's SELECT column list.
+            ticket = dict(ticket, message=ticket.get("preview", ""), preview=None)
+            del ticket["preview"]
             body = {k: v for k, v in ticket.items() if k != "replies"}
             return self.reply(200, {"ticket": body, "replies": ticket.get("replies", [])})
         if path == "/api/games":
@@ -167,8 +171,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(*failure)
             if user["role"].lower() != "admin":
                 return self.reply(*err("admin authentication required", 403))
-            return self.reply(200, {"users": len(USERS), "active_users": len(USERS),
-                                    "disabled_users": 0, "open_tickets": len(TICKETS),
+            return self.reply(200, {"users": None, "active_users": "12",
+                                    "disabled_users": None, "open_tickets": {"bad": True},
                                     "active_projects": 0, "active_deploys": 0})
 
         if path == "/api/admin/users":
@@ -184,7 +188,7 @@ class Handler(BaseHTTPRequestHandler):
                      email_verified_at=int(time.time()) if u["verified"] else None)
                 for u in USERS.values()
             ]
-            return self.reply(200, {"users": listing, "page": 1, "page_size": 50})
+            return self.reply(200, {"users": [None, {"id": None, "username": 123, "display_name": None, "role": None, "is_active": "yes", "banned_at": 5, "email_verified_at": None}]})
 
         if path == "/api/admin/settings":
             _, user, failure = self.require_auth()
@@ -354,7 +358,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, {"ok": True})
 
         if path == "/api/admin/users/ban":
-            # Real API always bans on this path (it never reads a `banned` field).
+            # Real API now accepts {user_id, banned: bool} — default true for
+            # backward compatibility with callers that omit the field.
             _, user, failure = self.require_auth()
             if failure:
                 return self.reply(*failure)
@@ -363,8 +368,12 @@ class Handler(BaseHTTPRequestHandler):
             target = USERS.get(str(form.get("user_id", "")))
             if not target:
                 return self.reply(*err("user not found", 404))
-            target["status_override"] = False
-            target["banned_at"] = int(time.time())
+            if form.get("banned", True):
+                target["status_override"] = False
+                target["banned_at"] = int(time.time())
+            else:
+                target["status_override"] = True
+                target["banned_at"] = None
             return self.reply(200, {"ok": True})
 
         if path == "/api/admin/telemetry/refresh" or path == "/api/admin/telemetry/clear":
@@ -440,6 +449,7 @@ class Handler(BaseHTTPRequestHandler):
                 CSRF.pop(token, None)
             return self.reply(200, {"deleted": True}, [
                 ("Set-Cookie", "ashat_rust_sid=; Path=/; Max-Age=0"),
+                ("Set-Cookie", "ashat_csrf=; Path=/; Max-Age=0"),
             ])
         return self.reply(404, {"error": {"code": "not_found", "message": "unknown endpoint"}})
 

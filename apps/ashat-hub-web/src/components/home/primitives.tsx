@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import type { Game } from '../../content';
+import { safeList, safeText } from '../api';
 
 export type User = {
   id: string;
@@ -22,15 +23,16 @@ export function Pill({ variant, children }: { variant?: 'live' | 'accent' | 'com
 export function statusPill(game: Game) {
   return (
     <Pill variant={game.status === 'live' ? 'live' : game.status === 'coming-soon' ? 'coming' : undefined}>
-      {game.statusLabel}
+      {safeText(game.statusLabel, safeText(game.status))}
     </Pill>
   );
 }
 
-export function GameTags({ tags }: { tags: readonly string[] }) {
+export function GameTags({ tags }: { tags?: readonly string[] }) {
+  // API-derived: a null/non-array tags field must not throw (safeList).
   return (
     <div className="pill-row">
-      {tags.map((tag) => (
+      {safeList<string>(tags).map((tag) => (
         <Pill key={tag}>{tag}</Pill>
       ))}
     </div>

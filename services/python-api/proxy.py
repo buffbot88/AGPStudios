@@ -176,10 +176,19 @@ class Proxy(BaseHTTPRequestHandler):
                         if form.get('role') not in ('Member','Pro','Admin'): return error(self,'invalid role')
                         cur.execute("UPDATE users SET role=%s,updated_at=UTC_TIMESTAMP() WHERE id=%s",(form['role'],form.get('user_id'))); action='user.role.updated'
                     elif path in ('/api/admin/users/status','/api/admin/users/ban'):
-                        status='banned' if path.endswith('/ban') else form.get('status','active')
-                        if status == 'banned': cur.execute("UPDATE users SET is_active=0,banned_at=UNIX_TIMESTAMP(),updated_at=UTC_TIMESTAMP() WHERE id=%s",(form.get('user_id'),))
-                        else: cur.execute("UPDATE users SET is_active=%s,banned_at=NULL,updated_at=UTC_TIMESTAMP() WHERE id=%s",(0 if status=='disabled' else 1,form.get('user_id')))
-                        action='user.status.updated'
+                        if path.endswith('/ban'):
+                            # POST /api/admin/users/ban accepts {user_id, banned: bool}.
+                            # `banned` defaults to true so older callers that omit it
+                            # (or sent only user_id) keep the original ban behavior.
+                            banned=bool(form.get('banned', True))
+                            if banned: cur.execute("UPDATE users SET is_active=0,banned_at=UNIX_TIMESTAMP(),updated_at=UTC_TIMESTAMP() WHERE id=%s",(form.get('user_id'),))
+                            else: cur.execute("UPDATE users SET is_active=1,banned_at=NULL,updated_at=UTC_TIMESTAMP() WHERE id=%s",(form.get('user_id'),))
+                            action='user.banned' if banned else 'user.unbanned'
+                        else:
+                            status=form.get('status','active')
+                            if status == 'banned': cur.execute("UPDATE users SET is_active=0,banned_at=UNIX_TIMESTAMP(),updated_at=UTC_TIMESTAMP() WHERE id=%s",(form.get('user_id'),))
+                            else: cur.execute("UPDATE users SET is_active=%s,banned_at=NULL,updated_at=UTC_TIMESTAMP() WHERE id=%s",(0 if status=='disabled' else 1,form.get('user_id')))
+                            action='user.status.updated'
                     else: return error(self,'admin endpoint not found',404)
                     cur.execute("INSERT INTO admin_audit_events (actor_id,actor_name,action,target_type,target_id,detail,created_at) VALUES (%s,%s,%s,'user',%s,%s,UNIX_TIMESTAMP())",(user['id'],user['username'],action,form.get('user_id',''),json.dumps(form)))
             return oidc_json(self,{"ok":True})
@@ -357,10 +366,21 @@ class Proxy(BaseHTTPRequestHandler):
         try:
             with db() as conn:
                 with conn.cursor() as cur:
-                    for table in ('support_ticket_replies','support_tickets','rust_sessions','email_verifications'):
+                    for table in ('support_ticket_replies','support_tickets','rust_sessions','sessions','email_verifications'):
                         cur.execute(f"DELETE FROM {table} WHERE user_id=%s",(user['id'],))
                     cur.execute("DELETE FROM users WHERE id=%s",(user['id'],))
-            return oidc_json(self,{"deleted":True})
+            # Session cleanup: the DB rows are gone, but the browser still holds
+            # ashat_rust_sid/ashat_csrf. Expire both cookies so the deleted
+            # account's session is fully gone client-side too (and so a stale
+            # sid can't be replayed against a future account reusing the row).
+            body=json.dumps({"deleted":True}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type","application/json")
+            self.send_header("Set-Cookie","ashat_rust_sid=; Domain=agpstudios.org; Path=/; Max-Age=0; HttpOnly; SameSite=Lax; Secure")
+            self.send_header("Set-Cookie","ashat_csrf=; Domain=agpstudios.org; Path=/; Max-Age=0; SameSite=Lax; Secure")
+            self.send_header("Content-Length",str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
         except Exception as exc: return error(self,f"account deletion unavailable: {exc}",503)
 
     def auth_logout(self):

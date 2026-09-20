@@ -17,8 +17,9 @@ The Python service is the public API at `/api/*`; Rust is not part of the contra
 | GET | `/api/auth/verify-email?token=...` | 200 | Verifies a single-use email token |
 | POST | `/api/auth/verify-email/resend` | 202 | JSON `{identifier}`; sends a fresh verification mail |
 | GET | `/api/auth/me` | 200/401 | Alias of session for authenticated callers |
-| GET | `/api/account/summary` | 200/401 | Authenticated account and support summary |
-| PUT | `/api/account` | 200/401 | Authenticated `{username, email, display_name}` update |
+| GET | `/api/account/summary` | 200/401 | Authenticated account and support summary; shape documented below |
+| PUT | `/api/account` | 200/401 | Authenticated account update; requirements documented below |
+| DELETE | `/api/account` | 200/401 | Authenticated account self-deletion. JSON body `{confirm: 'DELETE'}` required (400 otherwise). Deletes the user row, all associated data and sessions, and expires the `ashat_rust_sid` and `ashat_csrf` cookies in the response. |
 | GET | `/api/support` | 200/401 | Authenticated ticket list |
 | POST | `/api/support` | 201/401 | Authenticated ticket creation |
 | GET | `/api/support/:id` | 200/401/404 | Authenticated ticket and replies |
@@ -29,7 +30,86 @@ The Python service is the public API at `/api/*`; Rust is not part of the contra
 | Method | Path | Success | Purpose |
 |---|---|---:|---|
 | POST | `/api/admin/audit/prune` | 200 | JSON `{before_id: int}`; deletes all audit events with `id < before_id`, then records an `admin.audit.pruned` event. Returns `{ok, deleted}`. |
+| POST | `/api/admin/users/role` | 200 | JSON `{user_id, role}`; see request-body reference below |
+| POST | `/api/admin/users/ban` | 200 | JSON `{user_id, banned: bool}`; see request-body reference below |
+| POST | `/api/admin/users/status` | 200 | JSON `{user_id, status}`; see request-body reference below |
 | DELETE | `/api/admin/users/:id` | 200 | Permanently deletes a member: ticket replies, tickets, sessions, email verifications, then the user row. Self-delete returns 409. Audit event `admin.user.deleted` is recorded. |
+
+### Request-body reference
+
+All admin user mutations require the CSRF header (`X-CSRF-Token`) in addition to the
+admin session; a missing/mismatched token returns 403 `csrf token required`.
+
+#### POST `/api/admin/users/role`
+
+```json
+{ "user_id": "string", "role": "Member" | "Pro" | "Admin" }
+```
+
+Any other `role` value returns 400 `invalid role`. Audit event: `user.role.updated`.
+
+#### POST `/api/admin/users/status`
+
+```json
+{ "user_id": "string", "status": "active" | "disabled" | "banned" }
+```
+
+- `active`: `is_active=1`, `banned_at` cleared.
+- `disabled`: `is_active=0`, `banned_at` cleared.
+- `banned`: `is_active=0`, `banned_at` set.
+
+A bare `is_active` boolean is **not** read by this endpoint — the field is `status`.
+Unknown values fall back to `active`. Audit event: `user.status.updated`.
+
+#### POST `/api/admin/users/ban`
+
+```json
+{ "user_id": "string", "banned": true | false }
+```
+
+`banned` defaults to `true` for callers that omit it, so a body of only `{"user_id"}`
+still bans. `true` bans (`is_active=0`, `banned_at` set); `false` unbans
+(`is_active=1`, `banned_at` cleared). Audit event: `user.banned` / `user.unbanned`.
+This is the endpoint for both ban and unban — there is no separate unban route.
+
+### Account endpoint shapes
+
+#### GET `/api/account/summary`
+
+Requires an authenticated session (401 otherwise). Returns the user plus a stats
+object keyed by what the API actually tracks:
+
+```json
+{
+  "user": { "id", "username", "email", "display_name", "role", "diamonds" },
+  "stats": { "support_tickets": 0 }
+}
+```
+
+`stats.support_tickets` counts the member's support tickets. Fields the frontend
+previously assumed here — `projects`, `deployments`, `conversation_messages` —
+are **not** part of this response; consuming them crashes on `undefined`.
+
+#### PUT `/api/account`
+
+Requires an authenticated session and the CSRF header. Body must contain all three
+required fields — omitted/blank fields return 400 `username, email, and display_name
+are required`:
+
+```json
+{ "username": "string", "email": "string", "display_name": "string" }
+```
+
+An **absent** `display_name` key falls back to the current value; a **blank**
+`display_name` (or blank `username`/`email`) returns 400. Extra fields (e.g. a
+tag name shown in the UI) are accepted but ignored. Behavior:
+
+- `username` and `email` are unique-checked against other users; a collision
+  returns 409 `username or email already in use`.
+- On success returns `{ "user": { ...updated safe user... } }` — the caller should
+  replace its session-cached user with this value.
+- The API does not expose GitHub unlinking; only linking exists, so a
+  `POST /api/account/github` currently returns 404.
 
 ## OIDC issuer
 

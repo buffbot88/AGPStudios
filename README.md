@@ -6,7 +6,9 @@ AGP Studios is the web portal and Python API project for AGP Studios.
 
 - `apps/ashat-hub-web/` — Vite + React portal. Public site, member area, and admin UI.
 - `services/python-api/` — Python API service. Serves the public `/api/*` surface: auth,
-  OIDC, account, support, and admin endpoints.
+  OIDC, account, support, and admin endpoints. SQL migrations for its MySQL schema
+  live in `services/python-api/migrations/` and are applied manually in filename
+  order (`0001`, `0002`, ...); each file is idempotent, so re-running is safe.
 - `docs/system-architecture.md` — what the active system is and its request boundary.
 - `docs/python-api-contracts.md` — the public API contract source of truth.
 - `docs/retired-components.md` — what was removed and where archival material lives.
@@ -50,6 +52,32 @@ npm run dev:mock -- --no-verification   # register activates immediately (E2E st
 on Windows (where `cmd & cmd &` backgrounding doesn't work). When the real
 `services/python-api` is running instead, just use `npm run dev` — vite proxies
 `/api/*` to `127.0.0.1:3110` either way.
+
+### Frontend contract tests
+
+`tests/test_frontend_contracts.py` asserts every API response shape the portal
+reads (mirroring the frontend's TypeScript types against the documented
+contracts). It exists so shape drift — like the `conversation_messages`
+account-stats bug that crashed the whole app — fails in CI instead of in
+production. With the mock running:
+
+```bash
+cd apps/ashat-hub-web && npm run test:contracts
+# or point at a live deployment:
+ASHAT_TEST_BASE=https://www.agpstudios.org python3 tests/test_frontend_contracts.py
+```
+
+The suite registers its own throwaway member, exercises member + admin flows
+(reads, tickets, role/status/ban, PUT/DELETE account), and cleans up after
+itself. It must pass against both the mock and the live API — if a shape only
+passes on one, the mock has drifted and should be fixed to mirror reality.
+
+### Database migrations
+
+SQL migrations live in `services/python-api/migrations/` and are applied manually in
+filename order against the production MySQL database. Each file is written to be
+idempotent and safe to run on databases in any prior state — re-running a migration
+converges to the same schema and seed data instead of failing or duplicating rows.
 
 Production services and environment configuration are runtime-managed. Credentials, service
 environment files, logs, databases, `node_modules/`, and generated runtime data must not be

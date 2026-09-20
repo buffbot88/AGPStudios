@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
-import { API, csrfToken, errorMessage, type ApiError } from './api';
+import { API, csrfToken, errorMessage, safeText, type ApiError } from './api';
 import { getSession, onSessionChange, setSessionUser, type SessionUser } from './session';
 
 type User = SessionUser;
@@ -183,9 +183,9 @@ export function AuthPanel({ onChange, onNavigate, embedded = false }: { onChange
   if (user) {
     return (
       <details ref={menuRef} className="auth-menu">
-        <summary className="auth-menu-trigger"><span>{user.display_name || user.username}</span>{user.role?.toLowerCase() === 'admin' && <span className="auth-role-badge">Admin</span>}<span className="auth-menu-chevron">⌄</span></summary>
+        <summary className="auth-menu-trigger"><span>{safeText(user.display_name) || safeText(user.username)}</span>{safeText(user.role).toLowerCase() === 'admin' && <span className="auth-role-badge">Admin</span>}<span className="auth-menu-chevron">⌄</span></summary>
         <div className="auth-menu-panel">
-          <span className="auth-menu-email">{user.email}</span>
+          <span className="auth-menu-email">{safeText(user.email)}</span>
           {onNavigate && <nav className="auth-menu-links" aria-label="Account navigation">
             <button type="button" className="auth-menu-link" onClick={() => navigateFromMenu('/community')}>Community</button>
             {user.role.toLowerCase() === 'admin' && <button type="button" className="auth-menu-link" onClick={() => navigateFromMenu('/admin')}>Admin</button>}

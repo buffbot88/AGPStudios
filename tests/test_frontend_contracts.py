@@ -1,0 +1,297 @@
+#!/usr/bin/env python3
+"""Frontend contract tests: assert the API response shapes the portal reads.
+
+Every assertion here mirrors a TypeScript type the frontend actually consumes
+(the `request<T>` / `fetch` call sites in apps/ashat-hub-web/src). When the API
+drifts from those shapes — e.g. the `conversation_messages` account-stats bug
+that crashed the whole app — these tests fail in CI instead of in production.
+
+Runs against scripts/mock-api.py by default (contract-mirrored to proxy.py,
+so passing here means the real API satisfies the same shapes). To point at a
+live deployment instead:
+
+    ASHAT_TEST_BASE=https://www.agpstudios.org python3 tests/test_frontend_contracts.py
+
+Read-only plus self-contained mutations: registers its own throwaway member
+(`contract-shape-*`) and admin-session flows via the seeded admin, and cleans
+up what it creates. Requires the mock (or a live env) to be running.
+"""
+import json
+import os
+import secrets
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from http.cookiejar import CookieJar
+
+BASE = os.environ.get("ASHAT_TEST_BASE", "http://127.0.0.1:3110")
+
+failures: list[str] = []
+passed = 0
+
+
+def check(condition, label, detail=""):
+    global passed
+    if condition:
+        passed += 1
+    else:
+        failures.append(f"{label}{f' — {detail}' if detail else ''}")
+        print(f"  FAIL: {label}{f' — {detail}' if detail else ''}")
+
+
+class Client:
+    """A cookie-carrying HTTP client (one per identity)."""
+
+    def __init__(self):
+        self.jar = CookieJar()
+        self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.jar))
+
+    def req(self, path, method="GET", body=None, headers=None):
+        data = json.dumps(body).encode() if body is not None else None
+        headers = dict(headers or {})
+        # Mirror the frontend's request() helper: mutations carry the CSRF token.
+        if method in ("POST", "PUT", "DELETE"):
+            headers.setdefault("X-CSRF-Token", self.csrf())
+        request = urllib.request.Request(
+            BASE + path, data=data, method=method,
+            headers={"Content-Type": "application/json", **headers},
+        )
+        try:
+            response = self.opener.open(request, timeout=15)
+            raw = response.read()
+        except urllib.error.HTTPError as exc:
+            raw = exc.read()
+            return exc.code, (json.loads(raw) if raw else None)
+        return response.status, (json.loads(raw) if raw else None)
+
+    def csrf(self):
+        for cookie in self.jar:
+            if cookie.name == "ashat_csrf":
+                return cookie.value
+        return ""
+
+
+def is_str(v): return isinstance(v, str)
+def is_num(v): return isinstance(v, (int, float)) and not isinstance(v, bool)
+def is_bool(v): return isinstance(v, bool)
+
+
+# ---- shapes the frontend declares (mirrored from the TS types) --------------
+
+def check_user_shape(user, label):
+    check(isinstance(user, dict) and all(is_str(user.get(k)) for k in ("id", "username", "email", "display_name", "role")),
+          f"{label}: user has string id/username/email/display_name/role", repr(user)[:120])
+
+
+def check_ticket_summary(t, label):
+    ok = isinstance(t, dict) and all(is_str(t.get(k)) for k in ("id", "subject", "status", "priority", "category", "preview", "created_at", "updated_at")) or \
+         isinstance(t, dict) and all(k in t for k in ("id", "subject", "status", "priority", "category", "preview", "created_at", "updated_at"))
+    check(ok, f"{label}: ticket summary has id/subject/status/priority/category/preview/created_at/updated_at", repr(t)[:120])
+
+
+def check_admin_user(u, label):
+    ok = isinstance(u, dict) and all(is_str(u.get(k)) for k in ("id", "username", "email", "display_name", "role"))
+    check(ok, f"{label}: admin user row has string id/username/email/display_name/role", repr(u)[:120])
+    check("is_active" in u and (is_num(u["is_active"]) or is_bool(u["is_active"])),
+          f"{label}: admin user row has is_active (the frontend's enable/disable toggles on it)", repr(u)[:120])
+    check("banned_at" in u, f"{label}: admin user row has banned_at key", repr(u)[:120])
+
+
+def run():
+    member, admin = Client(), Client()
+    username = f"contract-shape-{secrets.token_hex(4)}"
+
+    # -- public homepage content (content.ts fetchers) ------------------------
+    code, body = member.req("/api/games")
+    check(code == 200, "/api/games returns 200", str(code))
+    games = (body or {}).get("games")
+    check(isinstance(games, list) and games, "/api/games: games is a non-empty list")
+    for g in games or []:
+        ok = all(k in g for k in ("slug", "title", "summary", "status", "tags", "url", "poster", "featured"))
+        check(ok, "/api/games: game has slug/title/summary/status/tags/url/poster/featured", repr(g)[:120])
+        check(g.get("status") in ("live", "in-development", "coming-soon"), "/api/games: status is a known GameStatus", repr(g.get("status")))
+        check(isinstance(g.get("tags"), list), "/api/games: tags is an array", repr(g.get("tags")))
+
+    code, body = member.req("/api/news")
+    check(code == 200, "/api/news returns 200", str(code))
+    for n in (body or {}).get("news", []):
+        check(all(k in n for k in ("id", "title", "summary", "url", "published_at")),
+              "/api/news: item has id/title/summary/url/published_at", repr(n)[:120])
+
+    # -- session (session.ts fetch) -------------------------------------------
+    code, body = member.req("/api/auth/session")
+    check(code == 200 and body == {"authenticated": False},
+          "/api/auth/session: signed-out shape is exactly {authenticated:false}", repr(body))
+
+    # -- register + login (AuthPanel submit) ----------------------------------
+    code, body = member.req("/api/auth/register", "POST", {
+        "username": username, "email": f"{username}@example.test",
+        "password": "contract-pass-1", "display_name": "Contract Shape",
+    })
+    check(code == 201, "register returns 201", f"{code} {repr(body)[:120]}")
+    check(body.get("registered") is True, "register: registered=true", repr(body)[:120])
+    if body.get("verification_required"):
+        check("email" in body, "register: verification path returns email")
+        print("  note: verification required; member-scoped shape checks limited")
+    else:
+        check_user_shape(body.get("user") or {}, "register")
+        check(body["user"]["role"] == "Member", "register: new member role is Member")
+
+    code, body = member.req("/api/auth/login", "POST", {"identifier": username, "password": "contract-pass-1"})
+    check(code == 200 and isinstance(body.get("user"), dict), "login returns {user}", repr(body)[:120])
+    check_user_shape(body.get("user") or {}, "login")
+
+    # wrong-password shape (AuthPanel error handling)
+    code, body = Client().req("/api/auth/login", "POST", {"identifier": username, "password": "wrong"})
+    check(code == 401 and isinstance(body.get("error"), dict) and "code" in body["error"],
+          "login failure: {error:{code,message}} with 401", repr(body)[:120])
+
+    # -- member surfaces (MemberSurfaces request<T> call sites) ---------------
+    code, body = member.req("/api/account/summary")
+    check(code == 200, "/api/account/summary returns 200", str(code))
+    stats = (body or {}).get("stats")
+    check(isinstance(stats, dict), "/api/account/summary: stats is an object", repr(stats))
+    # THE regression: frontend reads stats.support_tickets; conversation_messages crashed the app
+    check(isinstance(stats, dict) and is_num(stats.get("support_tickets")),
+          "/api/account/summary: stats.support_tickets is a number (the conversation_messages regression)", repr(stats))
+    check_user_shape((body or {}).get("user") or {}, "account summary")
+
+    code, body = member.req("/api/support")
+    check(code == 200 and isinstance((body or {}).get("tickets"), list),
+          "/api/support: {tickets: [...]}")
+    for t in (body or {}).get("tickets", []):
+        check_ticket_summary(t, "/api/support")
+
+    code, body = member.req("/api/support", "POST", {
+        "subject": "Contract shape ticket", "message": "Checking the ticket shape.",
+        "category": "other", "priority": "normal",
+    })
+    check(code == 201 and is_str((body or {}).get("id")),
+          "ticket creation: 201 {id}", f"{code} {repr(body)[:120]}")
+    ticket_id = (body or {}).get("id")
+
+    code, body = member.req(f"/api/support/{ticket_id}")
+    check(code == 200 and isinstance((body or {}).get("ticket"), dict) and isinstance((body or {}).get("replies"), list),
+          "/api/support/:id: {ticket, replies[]}", repr(body)[:160])
+    t = (body or {}).get("ticket") or {}
+    check(all(k in t for k in ("id", "user_id", "subject", "status", "priority", "category", "message", "created_at", "updated_at")),
+          "/api/support/:id: ticket has all detail fields", repr(t)[:120])
+
+    code, body = member.req(f"/api/support/{ticket_id}/reply", "POST", {"message": "shape-check reply"})
+    check(code == 200 and is_str((body or {}).get("id")), "reply: 200 {id}", f"{code} {repr(body)[:120]}")
+
+    code, body = member.req(f"/api/support/{ticket_id}")
+    replies = (body or {}).get("replies") or []
+    check(bool(replies), "reply appears in ticket detail")
+    r = replies[0] if replies else {}
+    check(all(k in r for k in ("id", "ticket_id", "message", "is_staff", "created_at")),
+          "ticket replies carry id/ticket_id/message/is_staff/created_at", repr(r)[:120])
+
+    # PUT /api/account — full required body (MemberSurfaces AccountForm)
+    code, body = member.req("/api/account", "PUT", {
+        "username": username, "email": f"{username}@example.test",
+        "display_name": "Contract Shape Updated",
+    })
+    check(code == 200 and isinstance((body or {}).get("user"), dict),
+          "PUT /api/account: 200 {user}", f"{code} {repr(body)[:120]}")
+    check_user_shape((body or {}).get("user") or {}, "PUT /api/account")
+
+    # PUT /api/account — a BLANK display_name must be rejected (400). (An absent
+    # key falls back to the current display_name and succeeds, per proxy.py.)
+    code, body = member.req("/api/account", "PUT", {"username": username, "email": f"{username}@example.test", "display_name": ""})
+    check(code == 400, "PUT /api/account: blank display_name returns 400", str(code))
+
+    # account summary after update reflects new display_name
+    _, body = member.req("/api/account/summary")
+    check((body or {}).get("user", {}).get("display_name") == "Contract Shape Updated",
+          "PUT /api/account: update is reflected in subsequent reads")
+
+    # -- admin surfaces (AdminSurface call sites) -----------------------------
+    code, body = admin.req("/api/auth/login", "POST", {"identifier": "boss", "password": "admin-pass-1"})
+    check(code == 200, "seeded admin login (mock) returns 200", str(code))
+    admin_csrf = {"X-CSRF-Token": admin.csrf()}
+    check(bool(admin.csrf()), "admin has CSRF cookie after login")
+
+    code, body = admin.req("/api/admin/summary")
+    check(code == 200, "/api/admin/summary returns 200", str(code))
+    s = body or {}
+    check(all(k in s for k in ("users", "active_users", "disabled_users", "open_tickets", "active_deploys", "active_projects")),
+          "/api/admin/summary: has all AdminSummary fields", repr(s)[:160])
+
+    code, body = admin.req("/api/admin/users?q=contract-shape")
+    check(code == 200 and isinstance((body or {}).get("users"), list),
+          "/api/admin/users: {users: [...]}", str(code))
+    rows = (body or {}).get("users") or []
+    target = next((u for u in rows if u.get("username") == username), None)
+    check(target is not None, "/api/admin/users?q= finds the registered member")
+    if target:
+        check_admin_user(target, "/api/admin/users")
+
+    code, body = admin.req("/api/admin/database/status")
+    d = body or {}
+    check("database" in d and "version" in d, "/api/admin/database/status: has database+version", repr(d)[:120])
+
+    code, body = admin.req("/api/admin/settings")
+    check(code == 200 and isinstance(body, dict), "/api/admin/settings: 200 object", str(code))
+
+    # role change (AdminSurface updateUser)
+    if target:
+        uid = target["id"]
+        code, body = admin.req("/api/admin/users/role", "POST", {"user_id": uid, "role": "Pro"}, admin_csrf)
+        check(code == 200 and (body or {}).get("ok") is True, "role change: {ok:true}", f"{code} {repr(body)[:120]}")
+        _, body = admin.req(f"/api/admin/users?q={username}")
+        _, body = admin.req(f"/api/admin/users?q={username}")
+        row = next((u for u in (body or {}).get("users", []) if u.get("username") == username), {})
+        check(row.get("role") == "Pro", "role change persisted", repr(row)[:120])
+
+        # status: disable then enable — THE is_active regression
+        code, body = admin.req("/api/admin/users/status", "POST", {"user_id": uid, "status": "disabled"}, admin_csrf)
+        check(code == 200, "status disable accepted", str(code))
+        _, body = admin.req(f"/api/admin/users?q={username}")
+        row = next((u for u in (body or {}).get("users", []) if u.get("username") == username), {})
+        check(row.get("is_active") in (0, False),
+              "status disable actually disabled (the is_active regression)", repr(row)[:160])
+
+        code, body = admin.req("/api/admin/users/status", "POST", {"user_id": uid, "status": "active"}, admin_csrf)
+        _, body = admin.req(f"/api/admin/users?q={username}")
+        row = next((u for u in (body or {}).get("users", []) if u.get("username") == username), {})
+        check(row.get("is_active") in (1, True),
+              "status enable actually enabled (the is_active regression)", repr(row)[:160])
+
+        # ban / unban via /ban with banned flag
+        code, body = admin.req("/api/admin/users/ban", "POST", {"user_id": uid, "banned": True}, admin_csrf)
+        _, body = admin.req(f"/api/admin/users?q={username}")
+        row = next((u for u in (body or {}).get("users", []) if u.get("username") == username), {})
+        check(row.get("is_active") in (0, False) and row.get("banned_at"),
+              "ban sets is_active=0 and banned_at", repr(row)[:160])
+
+        code, body = admin.req("/api/admin/users/ban", "POST", {"user_id": uid, "banned": False}, admin_csrf)
+        _, body = admin.req(f"/api/admin/users?q={username}")
+        row = next((u for u in (body or {}).get("users", []) if u.get("username") == username), {})
+        check(row.get("is_active") in (1, True) and not row.get("banned_at"),
+              "unban via banned:false clears is_active and banned_at (the always-bans regression)", repr(row)[:160])
+
+    # -- non-admin boundary (guards) -------------------------------------------
+    code, body = member.req("/api/admin/users")
+    check(code == 403, "member blocked from admin endpoints (403)", str(code))
+
+    # -- member self-delete + session cleanup ----------------------------------
+    code, body = member.req("/api/account", "DELETE", {"confirm": "DELETE"})
+    check(code == 200 and (body or {}).get("deleted") is True,
+          "DELETE /api/account: {deleted:true}", f"{code} {repr(body)[:120]}")
+    code, body = member.req("/api/auth/session")
+    check(body == {"authenticated": False},
+          "session dead after account deletion (cookie expiry works)", repr(body))
+
+    print()
+    if failures:
+        print(f"frontend contract tests: {len(failures)} FAILED, {passed} passed")
+        for f in failures:
+            print(f"  - {f}")
+        sys.exit(1)
+    print(f"frontend contract tests: PASS ({passed} checks)")
+
+
+if __name__ == "__main__":
+    run()

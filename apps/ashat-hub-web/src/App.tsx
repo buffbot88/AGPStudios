@@ -14,6 +14,7 @@ import { SurfaceErrorBoundary } from './components/SurfaceErrorBoundary';
 import { AuthPanel } from './components/AuthPanel';
 import { getSession, onSessionChange, onSessionExpired, peekSession, setSessionUser } from './components/session';
 import { ToastHost, toast } from './components/toast';
+import { safeText } from './components/api';
 
 type User = {
   id: string;
@@ -187,8 +188,8 @@ function App() {
           <QuickInfoCard
             icon={<GameIcon />}
             eyebrow="Featured Game"
-            title={featuredGame.title}
-            description={featuredGame.summary}
+            title={safeText(featuredGame.title)}
+            description={safeText(featuredGame.summary)}
             link="Play Now"
             href={user ? `${featuredGame.url}/?auth=1` : featuredGame.url}
           />
@@ -203,7 +204,7 @@ function App() {
           <QuickInfoCard
             icon={<AccountIcon />}
             eyebrow="Your Account"
-            title={user ? `Welcome back, ${user.display_name || user.username}` : 'Your Account'}
+            title={user ? `Welcome back, ${safeText(user.display_name) || safeText(user.username)}` : 'Your Account'}
             description={
               user
                 ? 'Manage your account, preferences, and more.'
@@ -224,7 +225,7 @@ function App() {
           <SectionHeader title="Our Games" text="Different worlds. A shared home." action="View All Games" href="#games" />
           <div className="games-grid">
             {(games ?? [FEATURED_GAME]).map((game) => (
-              <GameCard key={game.slug} game={game} />
+              <GameCard key={safeText(game.slug)} game={game} />
             ))}
           </div>
         </section>
@@ -233,11 +234,11 @@ function App() {
           <SectionHeader title="Studio News" text="Updates from across the studio." action="View All News" href="#news" />
           <div className="news-list-panel">
             {newsList.map((item, index) => (
-              <article className="news-panel" key={`${item.title}-${index}`}>
+              <article className="news-panel" key={`${safeText(item.title)}-${index}`}>
                 {index === 0 && <span className="eyebrow">Latest</span>}
-                <h3>{item.title}</h3>
-                <p>{item.summary}</p>
-                <a className="link-action" href={item.url}>
+                <h3>{safeText(item.title)}</h3>
+                <p>{safeText(item.summary)}</p>
+                <a className="link-action" href={safeText(item.url, '#news')}>
                   Read the Latest <span aria-hidden>→</span>
                 </a>
               </article>

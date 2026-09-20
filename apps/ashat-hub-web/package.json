@@ -7,6 +7,7 @@
     "dev": "vite",
     "dev:mock": "python3 ../../scripts/dev.py",
     "mock-api": "python3 ../../scripts/mock-api.py",
+    "test:contracts": "python3 ../../tests/test_frontend_contracts.py",
     "build": "tsc -b && vite build",
     "preview": "vite preview"
   },

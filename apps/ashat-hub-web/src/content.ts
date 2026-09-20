@@ -59,6 +59,8 @@ export const GAMES: Game[] = [
     statusLabel: 'In Development',
     tags: ['Exploration'],
     url: '#news',
+    poster: '/world-of-ra-poster.svg',
+    posterAlt: 'The World of Ra poster art',
   },
   {
     slug: 'more-titles',

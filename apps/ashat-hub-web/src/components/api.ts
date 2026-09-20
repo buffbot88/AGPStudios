@@ -32,6 +32,46 @@ export function errorMessage(error: ApiError | undefined, fallback: string): str
   return error?.message || error?.code || fallback;
 }
 
+/* ------------------------------------------------------------------ */
+/* Safe field accessors                                                */
+/*                                                                     */
+/* The conversation_messages incident: a surface rendered a stats field */
+/* the API doesn't return and `undefined.toLocaleString()` unmounted    */
+/* the whole app. These helpers make every API-derived render a         */
+/* non-throw: shape drift degrades to a blank/0/placeholder instead.    */
+/* Use them for any value that came from an API response.               */
+/* ------------------------------------------------------------------ */
+
+/** Coerce an API value to a displayable string; anything non-string (or null) falls back. */
+export function safeText(value: unknown, fallback = ''): string {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'bigint') return String(value);
+  return fallback;
+}
+
+/** Coerce an API value to a finite number; anything else falls back (default 0). */
+export function safeNumber(value: unknown, fallback = 0): number {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : fallback;
+  if (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value))) {
+    return Number(value);
+  }
+  return fallback;
+}
+
+/** Coerce an API value to a real array; anything non-array falls back to []. */
+export function safeList<T = unknown>(value: unknown): T[] {
+  return Array.isArray(value) ? (value as T[]) : [];
+}
+
+/**
+ * Format an API timestamp (unix seconds or ISO string) for display;
+ * unparseable/missing values degrade to the fallback text.
+ */
+export function safeTime(value: unknown, fallback = 'Unknown time'): string {
+  const date = typeof value === 'number' ? new Date(value * 1000) : new Date(safeText(value));
+  return Number.isNaN(date.getTime()) ? fallback : date.toLocaleString();
+}
+
 /**
  * Encode a file path for use in a URL, preserving slashes between segments.
  */

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { API, request } from './api';
+import { API, request, safeList, safeNumber, safeText, safeTime } from './api';
 import { confirmModal, confirmToast, toast } from './toast';
 
 type User = { id: string; username: string; email: string; display_name: string; role: string };
@@ -78,7 +78,7 @@ export function AdminSurface({ user }: { user: User | null }) {
         request<RepoStatus>(`${API}/admin/repo-status`),
       ]);
       if (summaryResult.status === 'fulfilled') setSummary(summaryResult.value);
-      if (usersResult.status === 'fulfilled') setUsers(usersResult.value.users);
+      if (usersResult.status === 'fulfilled') setUsers(safeList(usersResult.value.users));
       if (databaseResult.status === 'fulfilled') setDatabase(databaseResult.value);
       if (settingsResult.status === 'fulfilled') setSettings(settingsResult.value);
       if (repoResult.status === 'fulfilled') setRepoStatus(repoResult.value);
@@ -96,7 +96,7 @@ export function AdminSurface({ user }: { user: User | null }) {
 
   useEffect(() => { void load(); }, [load]);
   const loadTelemetry = useCallback(async () => { try { setTelemetry(await request<AdminTelemetry>(`${API}/admin/telemetry`)); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Telemetry unavailable'); } }, []);
-  const loadOmegaServers = useCallback(async () => { try { const data = await request<{ servers: OmegaServer[] }>(`${API}/admin/omega/servers`); setOmegaServers(data.servers); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Omega status unavailable'); } }, []);
+  const loadOmegaServers = useCallback(async () => { try { const data = await request<{ servers: OmegaServer[] }>(`${API}/admin/omega/servers`); setOmegaServers(safeList<OmegaServer>(data.servers)); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Omega status unavailable'); } }, []);
   useEffect(() => { if (tab === 'telemetry') { void loadTelemetry(); void loadOmegaServers(); } }, [tab, loadTelemetry, loadOmegaServers]);
   async function telemetryAction(action: 'refresh' | 'clear') { setBusy(true); setError(null); try { await request(`${API}/admin/telemetry/${action}`, { method: 'POST' }); await loadTelemetry(); await loadOmegaServers(); toast(action === 'refresh' ? 'Telemetry refreshed.' : 'Server cache cleared.', 'success'); } catch (reason) { setError(reason instanceof Error ? reason.message : `Telemetry ${action} failed`); } finally { setBusy(false); } }
   async function pushGithub() { if (!(await confirmToast({ message: 'Push committed Ashat Hub changes to GitHub main?', confirmLabel: 'Push' }))) return; setBusy(true); setError(null); try { await request(`${API}/admin/github/push`, { method: 'POST' }); toast('Changes pushed to GitHub.', 'success'); } catch (reason) { setError(reason instanceof Error ? reason.message : 'GitHub push failed'); } finally { setBusy(false); } }
@@ -132,13 +132,9 @@ export function AdminSurface({ user }: { user: User | null }) {
     if (!(await confirmToast({ message: `${action} this user?${banned ? ' They will be logged out immediately.' : ''}`, confirmLabel: action, danger: banned }))) return;
     setBusy(true); setError(null);
     try {
-      // API semantics: POST /users/ban always bans (it never reads a `banned`
-      // field), so unban must go through /users/status with status 'active'.
-      if (banned) {
-        await request(`${API}/admin/users/ban`, { method: 'POST', body: JSON.stringify({ user_id: userId }) });
-      } else {
-        await request(`${API}/admin/users/status`, { method: 'POST', body: JSON.stringify({ user_id: userId, status: 'active' }) });
-      }
+      // API now accepts {user_id, banned: bool} on POST /users/ban for both
+      // ban and unban — no need to route unban through /users/status.
+      await request(`${API}/admin/users/ban`, { method: 'POST', body: JSON.stringify({ user_id: userId, banned }) });
       toast(banned ? 'User banned.' : 'User unbanned.', banned ? 'error' : 'success');
       await load();
       if (selectedUser && selectedUser.id === userId) {
@@ -202,8 +198,8 @@ function TelemetryTab({ telemetry, servers, busy, onAction, onUpdate }: { teleme
   return <div className="adm-telemetry-page">
     <section className="adm-update-card"><div className="adm-update-card-copy"><span className="eyebrow">Omega Inference</span><h3>Qwen + Vision</h3><p>Omega hosts Qwen for coding and the 450M VL worker for image understanding. Alpha runs the agent runtime only.</p><div className="adm-agent-flow"><span>Qwen · coding</span><b>→</b><span>Vision · 450M VL</span><b>→</b><span>Alpha · tools</span></div></div><div className="adm-update-card-actions"><button type="button" className="primary-button" onClick={onUpdate} disabled={busy}>{busy ? 'Starting…' : 'Ensure Omega is running'}</button></div></section>
     
-    <div className="adm-toolbar adm-telemetry-toolbar"><button type="button" className="secondary-button" onClick={() => onAction('refresh')} disabled={busy}>Refresh telemetry</button><button type="button" className="secondary-button" onClick={() => onAction('clear')} disabled={busy}>Clear server cache</button><span className="refresh-state">{telemetry ? `Updated ${new Date(telemetry.updated_at * 1000).toLocaleTimeString()}` : 'Loading…'}</span></div>
-    <div className="admin-telemetry-grid">{servers.map((server) => <div className={`admin-server ${server.online ? 'online' : 'offline'}`} key={server.id}><div className="admin-server-heading"><strong>{server.label}</strong><span className="admin-server-status">{server.online ? '● Online' : '○ Offline'}</span></div><small>{server.ready ? 'Ready' : 'Not ready'} · {server.workers ?? 0}/{server.max_workers} workers</small><small>Omega managed by Ashat Hub SSH provisioning</small></div>)}</div>
+    <div className="adm-toolbar adm-telemetry-toolbar"><button type="button" className="secondary-button" onClick={() => onAction('refresh')} disabled={busy}>Refresh telemetry</button><button type="button" className="secondary-button" onClick={() => onAction('clear')} disabled={busy}>Clear server cache</button><span className="refresh-state">{telemetry ? `Updated ${safeTime(telemetry.updated_at * 1000).split(', ').pop() ?? ''}` : 'Loading…'}</span></div>
+    <div className="admin-telemetry-grid">{safeList<OmegaServer>(servers).map((server) => <div className={`admin-server ${server.online ? 'online' : 'offline'}`} key={safeText(server.id)}><div className="admin-server-heading"><strong>{safeText(server.label)}</strong><span className="admin-server-status">{server.online ? '● Online' : '○ Offline'}</span></div><small>{server.ready ? 'Ready' : 'Not ready'} · {safeNumber(server.workers)}/{safeNumber(server.max_workers)} workers</small><small>Omega managed by Ashat Hub SSH provisioning</small></div>)}</div>
   </div>;
 }
 
@@ -215,18 +211,18 @@ function OverviewTab({ summary, onNavigate }: { summary: AdminSummary | null; on
       <div className="adm-metric-cards">
         <div className="adm-metric-card">
           <span className="adm-metric-label">Total Users</span>
-          <strong className="adm-metric-value">{summary?.users ?? '—'}</strong>
-          <small className="adm-metric-sub">{summary?.active_users ?? 0} active · {summary?.disabled_users ?? 0} disabled</small>
+          <strong className="adm-metric-value">{summary ? safeNumber(summary.users).toLocaleString() : '—'}</strong>
+          <small className="adm-metric-sub">{safeNumber(summary?.active_users)} active · {safeNumber(summary?.disabled_users)} disabled</small>
         </div>
         <div className="adm-metric-card">
           <span className="adm-metric-label">Live Deployments</span>
-          <strong className="adm-metric-value">{summary?.active_deploys ?? '—'}</strong>
-          <small className="adm-metric-sub">{summary?.active_projects ?? 0} projects</small>
+          <strong className="adm-metric-value">{summary ? safeNumber(summary.active_deploys).toLocaleString() : '—'}</strong>
+          <small className="adm-metric-sub">{safeNumber(summary?.active_projects)} projects</small>
         </div>
         <div className="adm-metric-card">
           <span className="adm-metric-label">Open Tickets</span>
-          <strong className="adm-metric-value">{summary?.open_tickets ?? '—'}</strong>
-          <small className="adm-metric-sub">{summary?.open_tickets === 0 ? 'All clear' : 'Needs attention'}</small>
+          <strong className="adm-metric-value">{summary ? safeNumber(summary.open_tickets).toLocaleString() : '—'}</strong>
+          <small className="adm-metric-sub">{safeNumber(summary?.open_tickets) === 0 ? 'All clear' : 'Needs attention'}</small>
         </div>
       </div>
       <div className="adm-overview-actions">
@@ -255,13 +251,13 @@ function UsersTab({ users, query, onQueryChange, onSearch, onSelectUser, selecte
           <button type="button" className="secondary-button" onClick={onSearch}>Search</button>
         </div>
         <div className="adm-user-list">
-          {users.map((u) => (
-            <button key={u.id} type="button" className={selectedUser?.id === u.id ? 'adm-user-row selected' : 'adm-user-row'} onClick={() => onSelectUser(u)}>
+          {safeList<AdminUser>(users).map((u) => (
+            <button key={safeText(u.id)} type="button" className={selectedUser?.id === u.id ? 'adm-user-row selected' : 'adm-user-row'} onClick={() => onSelectUser(u)}>
               <div className="adm-user-row-info">
-                <strong>{u.display_name || u.username}</strong>
-                <small>@{u.username} · {u.email}</small>
+                <strong>{safeText(u.display_name) || safeText(u.username)}</strong>
+                <small>@{safeText(u.username)} · {safeText(u.email)}</small>
               </div>
-              <span className="adm-user-role">{u.role}</span>
+              <span className="adm-user-role">{safeText(u.role)}</span>
               <span className={u.is_active ? 'adm-status-dot active' : 'adm-status-dot disabled'} />
             </button>
           ))}
@@ -281,20 +277,20 @@ function UserDetailPanel({ user: u, busy, currentUser, onUpdate, onBan, onDelete
   return (
     <div className="adm-detail-panel">
       <div className="adm-detail-header">
-        <h3>{u.display_name || u.username}</h3>
+        <h3>{safeText(u.display_name) || safeText(u.username)}</h3>
         <button type="button" className="adm-close-btn" onClick={onClose}>×</button>
       </div>
-      <p className="adm-detail-email">{u.email}</p>
+      <p className="adm-detail-email">{safeText(u.email)}</p>
       <div className="adm-detail-fields">
         <div className="adm-field"><span className="adm-field-label">Status</span><span className={!u.is_active || isBanned ? 'adm-badge err' : 'adm-badge ok'}>{isBanned ? '⊘ Banned' : u.is_active ? '● Active' : '○ Disabled'}</span></div>
         <div className="adm-field"><span className="adm-field-label">Role</span>
-          <select value={u.role} disabled={busy || u.id === currentUser.id} onChange={(e) => void onUpdate(u.id, { role: e.target.value })}>
+          <select value={safeText(u.role)} disabled={busy || u.id === currentUser.id} onChange={(e) => void onUpdate(u.id, { role: e.target.value })}>
             <option>Member</option><option>Pro</option><option>Admin</option>
           </select>
         </div>
-        <div className="adm-field"><span className="adm-field-label">Username</span><span className="adm-field-value mono">@{u.username}</span></div>
-        <div className="adm-field"><span className="adm-field-label">User ID</span><span className="adm-field-value mono">{u.id}</span></div>
-        {u.email_verified_at && <div className="adm-field"><span className="adm-field-label">Email Verified</span><span className="adm-field-value">{u.email_verified_at}</span></div>}
+        <div className="adm-field"><span className="adm-field-label">Username</span><span className="adm-field-value mono">@{safeText(u.username)}</span></div>
+        <div className="adm-field"><span className="adm-field-label">User ID</span><span className="adm-field-value mono">{safeText(u.id)}</span></div>
+        {u.email_verified_at && <div className="adm-field"><span className="adm-field-label">Email Verified</span><span className="adm-field-value">{safeTime(u.email_verified_at)}</span></div>}
       </div>
       <div className="adm-detail-actions">
         <button type="button" className={u.is_active ? 'adm-btn-danger' : 'adm-btn-ok'} disabled={busy || u.id === currentUser.id} onClick={() => void onUpdate(u.id, { is_active: !Boolean(u.is_active) })}>
@@ -321,17 +317,17 @@ function SystemTab({ database, settings, onPush, onUpdate, status }: { database:
       <div className="adm-system-grid">
         <section className="adm-panel">
           <span className="eyebrow">Database</span>
-          <h3>{database?.version || 'Loading...'}</h3><p className="system-status-ok">● Connected</p>
+          <h3>{safeText(database?.version) || 'Loading...'}</h3><p className="system-status-ok">● Connected</p>
           <span className="eyebrow">Database Management</span>
-          <div className="adm-field"><span className="adm-field-label">Backend</span><span className="adm-field-value">{database?.database || 'Unknown'}</span></div>
+          <div className="adm-field"><span className="adm-field-label">Backend</span><span className="adm-field-value">{safeText(database?.database) || 'Unknown'}</span></div>
           <div className="adm-field"><span className="adm-field-label">Update Method</span><span className="adm-field-value">Versioned</span></div>
           <div className="adm-field"><span className="adm-field-label">Direct SQL Console</span><span className="adm-field-value">Disabled</span></div>
-          {database?.paws && <div className="adm-field"><span className="adm-field-label">Paws & Parcels</span><span className="adm-field-value">{database.paws.status || 'unknown'}</span></div>}
+          {database?.paws && <div className="adm-field"><span className="adm-field-label">Paws & Parcels</span><span className="adm-field-value">{safeText(database.paws.status) || 'unknown'}</span></div>}
         </section>
         <section className="adm-panel">
           <span className="eyebrow">Application Runtime</span>
           <h3>Services</h3><div className="adm-field"><span className="adm-field-label">Backend</span><span className="adm-field-value">Rust · <b className="system-status-ok">● Running</b></span></div><div className="adm-field"><span className="adm-field-label">Frontend</span><span className="adm-field-value">Vite · <b className="system-status-ok">● Available</b></span></div><span className="eyebrow">Security & Configuration</span>
-          <div className={`adm-system-updates adm-repo-${status?.ashathub?.state || 'unknown'}`}><span className="adm-field-label">System Updates</span><div className="adm-commit-comparison"><div><span>Live commit</span><code>{status?.ashathub?.live?.slice(0, 8) || '—'}</code></div><div><span>Repo commit</span><code>{status?.ashathub?.repo?.slice(0, 8) || '—'}</code></div></div><div className="adm-system-update-actions"><button type="button" className="secondary-button" onClick={onPush}>Push Changes to GitHub</button><button type="button" className="secondary-button" onClick={onUpdate}>Pull, Build & Restart</button></div></div>
+          <div className={`adm-system-updates adm-repo-${safeText(status?.ashathub?.state) || 'unknown'}`}><span className="adm-field-label">System Updates</span><div className="adm-commit-comparison"><div><span>Live commit</span><code>{safeText(status?.ashathub?.live).slice(0, 8) || '—'}</code></div><div><span>Repo commit</span><code>{safeText(status?.ashathub?.repo).slice(0, 8) || '—'}</code></div></div><div className="adm-system-update-actions"><button type="button" className="secondary-button" onClick={onPush}>Push Changes to GitHub</button><button type="button" className="secondary-button" onClick={onUpdate}>Pull, Build & Restart</button></div></div>
           {settings && Object.entries(settings)
             .filter(([key]) => key !== 'backend') // internal value, not a user-facing setting
             .map(([key, value]) => (

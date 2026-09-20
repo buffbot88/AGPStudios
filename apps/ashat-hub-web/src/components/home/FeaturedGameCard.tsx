@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { Game } from '../../content';
 import { statusPill, GameTags, type User } from './primitives';
+import { safeText } from '../api';
 
 const AUTO_ADVANCE_MS = 8000;
 
@@ -39,8 +40,8 @@ export function FeaturedGameCard({ games, user }: { games: Game[]; user: User | 
 
   if (!game) return null;
 
-  const playHref = user ? `${game.url}/?auth=1` : undefined;
-  const target = (playHref ?? game.url).startsWith('http') ? '_blank' : undefined;
+  const playHref = user ? `${safeText(game.url, '#games')}/?auth=1` : undefined;
+  const target = (playHref ?? safeText(game.url)).startsWith('http') ? '_blank' : undefined;
 
   return (
     <article
@@ -65,26 +66,26 @@ export function FeaturedGameCard({ games, user }: { games: Game[]; user: User | 
             </span>
           )}
         </div>
-        <div className="featured-slide" key={game.slug}>
+        <div className="featured-slide" key={safeText(game.slug)}>
           <div className={`featured-poster${game.poster ? '' : ' no-art'}`}>
             {game.poster ? (
-              <img src={game.poster} alt={game.posterAlt ?? `${game.title} poster`} />
+              <img src={game.poster} alt={game.posterAlt ?? `${safeText(game.title)} poster`} />
             ) : (
               <div className="poster-fallback" aria-hidden>
-                <span>{game.title}</span>
+                <span>{safeText(game.title)}</span>
               </div>
             )}
           </div>
           <div className="featured-body">
-            <h2>{game.title}</h2>
-            <p className="featured-summary">{game.summary}</p>
+            <h2>{safeText(game.title)}</h2>
+            <p className="featured-summary">{safeText(game.summary)}</p>
             <div className="pill-row">
               {statusPill(game)}
               <GameTags tags={game.tags} />
             </div>
             <a
               className="primary-button"
-              href={playHref ?? game.url}
+              href={playHref ?? safeText(game.url, '#games')}
               target={target}
               rel={target ? 'noreferrer' : undefined}
               onClick={(event) => {

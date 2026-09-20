@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
-import { API, request } from './api';
+import { API, request, safeList, safeNumber, safeText, safeTime } from './api';
 import { confirmModal, toast } from './toast';
 
 type User = { id: string; username: string; email: string; display_name: string; tag_name?: string | null; discord_tag?: string | null; location?: string | null; interests?: string | null; role: string };
@@ -31,10 +31,7 @@ type AccountSummary = { user: User; github_linked?: boolean; stats: { support_ti
 
 const categories = ['all', 'tools', 'ai', 'pipeline', 'games', 'general'];
 
-function formatDate(value: string | number): string {
-  const date = typeof value === 'number' ? new Date(value * 1000) : new Date(value);
-  return Number.isNaN(date.getTime()) ? 'Unknown time' : date.toLocaleString();
-}
+// formatDate replaced by safeTime from ./api (drift-proof)
 
 export function MemberSurfaces({ user, initialTab = 'support' }: { user: User | null; initialTab?: MemberTab }) {
   const [tab, setTab] = useState<MemberTab>(initialTab);
@@ -62,7 +59,7 @@ export function MemberSurfaces({ user, initialTab = 'support' }: { user: User | 
     if (!user) return;
     try {
       const data = await request<{ tickets: TicketSummary[] }>(`${API}/support`);
-      setTickets(data.tickets);
+      setTickets(safeList<TicketSummary>(data.tickets));
       setError(null);
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Support unavailable'); }
   }, [user]);
@@ -127,9 +124,9 @@ export function MemberSurfaces({ user, initialTab = 'support' }: { user: User | 
       </nav>
       {error && <p className="workspace-error" role="alert">{error}</p>}
 
-      {tab === 'support' && <div className="member-panel support-layout">{!user ? <div className="tool-empty"><p>Sign in to create and view support tickets.</p></div> : <><div className="support-sidebar"><div className="member-toolbar"><span className="eyebrow">Your tickets</span><button type="button" className="secondary-button" onClick={() => setSelectedTicket(null)}>New</button></div>{tickets.map((ticket) => <button type="button" className={selectedTicket?.ticket.id === ticket.id ? 'ticket-row selected' : 'ticket-row'} key={ticket.id} onClick={() => void showTicket(ticket.id)}><strong>{ticket.subject}</strong><small>{ticket.status} · {ticket.priority}</small></button>)}{!tickets.length && <p className="muted">No tickets yet.</p>}</div><div className="support-detail">{selectedTicket ? <><button type="button" className="back-button" onClick={() => setSelectedTicket(null)}>← New ticket</button><span className="eyebrow">{selectedTicket.ticket.status} · {selectedTicket.ticket.priority}</span><h3>{selectedTicket.ticket.subject}</h3><p className="ticket-message">{selectedTicket.ticket.message}</p><div className="ticket-replies">{selectedTicket.replies.map((item) => <article className={item.is_staff ? 'ticket-reply staff' : 'ticket-reply'} key={item.id}><small>{item.display_name || item.username || 'Member'} · {formatDate(item.created_at)}</small><p>{item.message}</p></article>)}</div><form className="member-form" onSubmit={(event) => void sendReply(event)}><textarea value={reply} onChange={(event) => setReply(event.target.value)} placeholder="Reply to this ticket" rows={3} required /><button type="submit" disabled={busy}>Reply</button></form></> : <form className="member-form" onSubmit={(event) => void createTicket(event)}><span className="eyebrow">New support ticket</span><input value={supportSubject} onChange={(event) => setSupportSubject(event.target.value)} placeholder="Subject" required /><div className="form-row"><select value={supportCategory} onChange={(event) => setSupportCategory(event.target.value)}><option value="bug">Bug</option><option value="feature">Feature</option><option value="account">Account</option><option value="billing">Billing</option><option value="other">Other</option></select><select value={supportPriority} onChange={(event) => setSupportPriority(event.target.value)}><option value="low">Low</option><option value="normal">Normal</option><option value="high">High</option><option value="urgent">Urgent</option></select></div><textarea value={supportMessage} onChange={(event) => setSupportMessage(event.target.value)} placeholder="Describe the issue or request" rows={7} required /><button type="submit" disabled={busy}>Create ticket</button></form>}</div></>}</div>}
+      {tab === 'support' && <div className="member-panel support-layout">{!user ? <div className="tool-empty"><p>Sign in to create and view support tickets.</p></div> : <><div className="support-sidebar"><div className="member-toolbar"><span className="eyebrow">Your tickets</span><button type="button" className="secondary-button" onClick={() => setSelectedTicket(null)}>New</button></div>{tickets.map((ticket) => <button type="button" className={selectedTicket?.ticket.id === ticket.id ? 'ticket-row selected' : 'ticket-row'} key={safeText(ticket.id)} onClick={() => void showTicket(safeText(ticket.id))}><strong>{safeText(ticket.subject)}</strong><small>{safeText(ticket.status)} · {safeText(ticket.priority)}</small></button>)}{!tickets.length && <p className="muted">No tickets yet.</p>}</div><div className="support-detail">{selectedTicket ? <><button type="button" className="back-button" onClick={() => setSelectedTicket(null)}>← New ticket</button><span className="eyebrow">{safeText(selectedTicket.ticket.status)} · {safeText(selectedTicket.ticket.priority)}</span><h3>{safeText(selectedTicket.ticket.subject)}</h3><p className="ticket-message">{safeText(selectedTicket.ticket.message)}</p><div className="ticket-replies">{safeList<TicketReply>(selectedTicket.replies).map((item) => <article className={item.is_staff ? 'ticket-reply staff' : 'ticket-reply'} key={safeText(item.id)}><small>{safeText(item.display_name) || safeText(item.username) || 'Member'} · {safeTime(item.created_at)}</small><p>{safeText(item.message)}</p></article>)}</div><form className="member-form" onSubmit={(event) => void sendReply(event)}><textarea value={reply} onChange={(event) => setReply(event.target.value)} placeholder="Reply to this ticket" rows={3} required /><button type="submit" disabled={busy}>Reply</button></form></> : <form className="member-form" onSubmit={(event) => void createTicket(event)}><span className="eyebrow">New support ticket</span><input value={supportSubject} onChange={(event) => setSupportSubject(event.target.value)} placeholder="Subject" required /><div className="form-row"><select value={supportCategory} onChange={(event) => setSupportCategory(event.target.value)}><option value="bug">Bug</option><option value="feature">Feature</option><option value="account">Account</option><option value="billing">Billing</option><option value="other">Other</option></select><select value={supportPriority} onChange={(event) => setSupportPriority(event.target.value)}><option value="low">Low</option><option value="normal">Normal</option><option value="high">High</option><option value="urgent">Urgent</option></select></div><textarea value={supportMessage} onChange={(event) => setSupportMessage(event.target.value)} placeholder="Describe the issue or request" rows={7} required /><button type="submit" disabled={busy}>Create ticket</button></form>}</div></>}</div>}
 
-      {tab === 'account' && <div className="member-panel account-grid">{!user ? <div className="tool-empty"><p>Sign in to view your account.</p></div> : account ? <><AccountForm user={account.user} githubLinked={!!account.github_linked} onSaved={(next) => setAccount({ ...account, user: next })} onGithubChange={(linked) => setAccount({ ...account, github_linked: linked })} onDeleted={() => window.location.reload()} /><div className="account-stats"><Metric label="Support tickets" value={account.stats?.support_tickets} /></div></> : <div className="tool-empty"><p>Loading account...</p></div>}</div>}
+      {tab === 'account' && <div className="member-panel account-grid">{!user ? <div className="tool-empty"><p>Sign in to view your account.</p></div> : account ? <><AccountForm user={account.user} githubLinked={!!account.github_linked} onSaved={(next) => setAccount({ ...account, user: next })} onGithubChange={(linked) => setAccount({ ...account, github_linked: linked })} onDeleted={() => window.location.reload()} /><div className="account-stats"><Metric label="Support tickets" value={safeNumber(account.stats?.support_tickets)} /></div></> : <div className="tool-empty"><p>Loading account...</p></div>}</div>}
 
 
     </section>
@@ -139,7 +136,12 @@ export function MemberSurfaces({ user, initialTab = 'support' }: { user: User | 
 function AccountForm({ user, githubLinked, onSaved, onGithubChange, onDeleted }: { user: User; githubLinked: boolean; onSaved: (user: User) => void; onGithubChange: (linked: boolean) => void; onDeleted: () => void }) {
   // tag_name is the UI label for the API's display_name (PUT /api/account requires
   // {username, email, display_name}; discord_tag/location/interests are accepted extras).
-  const [form, setForm] = useState({ username: user.username, tag_name: user.display_name, email: user.email });
+  // safeText everywhere: a null/wrong-shape user object degrades to blank fields.
+  const [form, setForm] = useState({
+    username: safeText(user?.username),
+    tag_name: safeText(user?.display_name),
+    email: safeText(user?.email),
+  });
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -187,5 +189,7 @@ function AccountForm({ user, githubLinked, onSaved, onGithubChange, onDeleted }:
 }
 
 function Metric({ label, value }: { label: string; value: number | undefined }) {
-  return <div className="account-stat"><span>{label}</span><strong>{(value ?? 0).toLocaleString()}</strong></div>;
+  // value is already normalized via safeNumber at the call site; safeNumber
+  // again so a drift in the prop pipeline still can't throw.
+  return <div className="account-stat"><span>{label}</span><strong>{safeNumber(value).toLocaleString()}</strong></div>;
 }
