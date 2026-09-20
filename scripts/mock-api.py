@@ -1,13 +1,27 @@
 #!/usr/bin/env python3
-"""Contract-faithful mock of the AGP Studios Python API for local E2E testing.
+"""Contract-faithful mock of the AGP Studios Python API for local dev + E2E testing.
 
-Implements the endpoints from docs/python-api-contracts.md that the portal
-exercises: session, register (with optional email verification), login,
-logout, account summary, support, games, news, and admin summary.
+A documented dev utility, NOT a reference implementation. It implements the
+endpoints from docs/python-api-contracts.md that the portal consumes:
 
-In-memory state only; verification codes are printed to stdout so the E2E
-test can complete the verify flow. Listens on 127.0.0.1:3110 (the vite proxy
-target).
+  auth/session, register (with optional email verification), login, logout,
+  verify-email (+resend), account summary / PUT / DELETE, support tickets +
+  replies, games, news, and the admin surface (summary, users incl. role /
+  status / ban / delete, settings, database status, repo-status, telemetry,
+  omega).
+
+Behavior notes:
+- In-memory state only; everything is lost on restart. Pre-seeded admin:
+  username `boss`, password `admin-pass-1`.
+- Verification codes are printed to stdout so tests can complete the verify
+  flow; run with --no-verification to activate accounts immediately.
+- Listens on 127.0.0.1:3110 (the vite proxy target); request shapes mirror
+  services/python-api/proxy.py, including its quirks (POST /admin/users/ban
+  always bans; /admin/users/status takes {user_id, status}; PUT /api/account
+  requires username/email/display_name).
+
+Run via `npm run mock-api` (alone) or `npm run dev:mock` (alongside vite) from
+apps/ashat-hub-web. See the README's "Frontend with the mock API" section.
 """
 import json
 import secrets
@@ -35,7 +49,7 @@ GAMES = {"games": [
      "status": "live", "tags": ["Cozy", "Exploration", "Social"],
      "url": "https://pawsandparcels.agpstudios.org",
      "poster": "/paws-parcels-poster.svg", "featured": True},
-    {"slug": "project-horizon", "title": "Project Horizon",
+    {"slug": "world-of-ra-horizon", "title": "The World of Ra - Horizon - Season 1",
      "summary": "A new world is taking shape.",
      "status": "in-development", "tags": ["Exploration"], "url": "",
      "poster": None, "featured": False},
@@ -156,6 +170,45 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, {"users": len(USERS), "active_users": len(USERS),
                                     "disabled_users": 0, "open_tickets": len(TICKETS),
                                     "active_projects": 0, "active_deploys": 0})
+
+        if path == "/api/admin/users":
+            _, user, failure = self.require_auth()
+            if failure:
+                return self.reply(*failure)
+            if user["role"].lower() != "admin":
+                return self.reply(*err("admin authentication required", 403))
+            listing = [
+                dict(public(u),
+                     is_active=0 if u.get("status_override") is False else 1,
+                     banned_at=u.get("banned_at"),
+                     email_verified_at=int(time.time()) if u["verified"] else None)
+                for u in USERS.values()
+            ]
+            return self.reply(200, {"users": listing, "page": 1, "page_size": 50})
+
+        if path == "/api/admin/settings":
+            _, user, failure = self.require_auth()
+            if failure:
+                return self.reply(*failure)
+            if user["role"].lower() != "admin":
+                return self.reply(*err("admin authentication required", 403))
+            return self.reply(200, {"email_verification_enabled": CONFIG["verification_required"], "secure_cookie": False, "backend": "python"})
+
+        if path == "/api/admin/database/status":
+            _, user, failure = self.require_auth()
+            if failure:
+                return self.reply(*failure)
+            if user["role"].lower() != "admin":
+                return self.reply(*err("admin authentication required", 403))
+            return self.reply(200, {"database": "healthy", "version": "mock-8.0", "paws": {"status": "ok"}})
+
+        if path == "/api/admin/repo-status":
+            _, user, failure = self.require_auth()
+            if failure:
+                return self.reply(*failure)
+            if user["role"].lower() != "admin":
+                return self.reply(*err("admin authentication required", 403))
+            return self.reply(200, {"ashathub": {"live": "mock0001", "repo": "mock0001", "state": "current"}})
         return self.reply(404, {"error": {"code": "not_found", "message": "unknown endpoint"}})
 
     def do_POST(self):
@@ -266,10 +319,113 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(*err("admin authentication required", 403))
             return self.reply(200, {"ok": True})
 
+        if path == "/api/admin/users/role":
+            _, user, failure = self.require_auth()
+            if failure:
+                return self.reply(*failure)
+            if user["role"].lower() != "admin":
+                return self.reply(*err("admin authentication required", 403))
+            target = USERS.get(str(form.get("user_id", "")))
+            if not target or form.get("role") not in ("Member", "Pro", "Admin"):
+                return self.reply(*err("invalid role or user", 400))
+            target["role"] = form["role"]
+            return self.reply(200, {"ok": True})
+
+        if path == "/api/admin/users/status":
+            _, user, failure = self.require_auth()
+            if failure:
+                return self.reply(*failure)
+            if user["role"].lower() != "admin":
+                return self.reply(*err("admin authentication required", 403))
+            target = USERS.get(str(form.get("user_id", "")))
+            if not target:
+                return self.reply(*err("user not found", 404))
+            # Real API shape: {user_id, status: 'active'|'disabled'|'banned'}
+            status = form.get("status", "active")
+            if status == "banned":
+                target["status_override"] = False
+                target["banned_at"] = int(time.time())
+            elif status == "disabled":
+                target["status_override"] = False
+                target["banned_at"] = None
+            else:
+                target["status_override"] = True
+                target["banned_at"] = None
+            return self.reply(200, {"ok": True})
+
+        if path == "/api/admin/users/ban":
+            # Real API always bans on this path (it never reads a `banned` field).
+            _, user, failure = self.require_auth()
+            if failure:
+                return self.reply(*failure)
+            if user["role"].lower() != "admin":
+                return self.reply(*err("admin authentication required", 403))
+            target = USERS.get(str(form.get("user_id", "")))
+            if not target:
+                return self.reply(*err("user not found", 404))
+            target["status_override"] = False
+            target["banned_at"] = int(time.time())
+            return self.reply(200, {"ok": True})
+
+        if path == "/api/admin/telemetry/refresh" or path == "/api/admin/telemetry/clear":
+            _, user, failure = self.require_auth()
+            if failure:
+                return self.reply(*failure)
+            if user["role"].lower() != "admin":
+                return self.reply(*err("admin authentication required", 403))
+            return self.reply(200, {"ok": True})
+
+        if path == "/api/admin/telemetry":
+            _, user, failure = self.require_auth()
+            if failure:
+                return self.reply(*failure)
+            if user["role"].lower() != "admin":
+                return self.reply(*err("admin authentication required", 403))
+            return self.reply(200, {"servers": [], "updated_at": int(time.time())})
+
+        if path == "/api/admin/omega/servers":
+            _, user, failure = self.require_auth()
+            if failure:
+                return self.reply(*failure)
+            if user["role"].lower() != "admin":
+                return self.reply(*err("admin authentication required", 403))
+            return self.reply(200, {"servers": []})
+
+        return self.reply(404, {"error": {"code": "not_found", "message": "unknown endpoint"}})
+
+    def do_PUT(self):
+        path = urlparse(self.path).path
+        if path == "/api/account":
+            _, user, failure = self.require_auth()
+            if failure:
+                return self.reply(*failure)
+            form = self.body_json()
+            username = form.get("username", "").strip()
+            email = form.get("email", "").strip()
+            display = form.get("display_name", user["display_name"]).strip()
+            if not username or not email or not display:
+                return self.reply(*err("username, email, and display_name are required", 400))
+            if any(u["id"] != user["id"] and (u["username"] == username or u["email"] == email) for u in USERS.values()):
+                return self.reply(*err("username or email already in use", 409))
+            user["username"] = username
+            user["email"] = email
+            user["display_name"] = display
+            return self.reply(200, {"user": public(user)})
         return self.reply(404, {"error": {"code": "not_found", "message": "unknown endpoint"}})
 
     def do_DELETE(self):
         path = urlparse(self.path).path
+        if path.startswith("/api/admin/users/"):
+            _, user, failure = self.require_auth()
+            if failure:
+                return self.reply(*failure)
+            if user["role"].lower() != "admin":
+                return self.reply(*err("admin authentication required", 403))
+            target_id = path.rsplit("/", 1)[1]
+            if target_id not in USERS or target_id == user["id"]:
+                return self.reply(*err("user not found", 404))
+            del USERS[target_id]
+            return self.reply(200, {"ok": True, "deleted": target_id})
         if path == "/api/account":
             _, user, failure = self.require_auth()
             if failure:
@@ -277,8 +433,14 @@ class Handler(BaseHTTPRequestHandler):
             form = self.body_json()
             if form.get("confirm") != "DELETE":
                 return self.reply(*err("confirm DELETE to remove the account", 400))
+            token = cookies(self).get("ashat_rust_sid")
             del USERS[user["id"]]
-            return self.reply(200, {"deleted": True})
+            if token in SESSIONS:
+                del SESSIONS[token]
+                CSRF.pop(token, None)
+            return self.reply(200, {"deleted": True}, [
+                ("Set-Cookie", "ashat_rust_sid=; Path=/; Max-Age=0"),
+            ])
         return self.reply(404, {"error": {"code": "not_found", "message": "unknown endpoint"}})
 
 

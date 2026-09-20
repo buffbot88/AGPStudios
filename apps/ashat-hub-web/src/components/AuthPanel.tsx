@@ -20,24 +20,22 @@ export function AuthPanel({ onChange, onNavigate, embedded = false }: { onChange
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDetailsElement>(null);
 
-  // Subscribe to the shared session store: one network fetch app-wide,
-  // and local state follows any login/logout that happens anywhere.
+  // Subscribe to the shared session store: one network fetch app-wide, and
+  // local state follows any login/logout/expiry that happens anywhere. The
+  // store is the source of truth — onChange is only notified of changes.
+  const lastReported = useRef<User | null | undefined>(undefined);
   useEffect(() => {
     let mounted = true;
-    void getSession().then((next) => {
+    const sync = (next: User | null) => {
       if (!mounted) return;
       setUser(next);
-      onChange(next);
-    });
-    const unsubscribe = onSessionChange((next) => {
-      if (!mounted) return;
-      setUser(next);
-      onChange(next);
-    });
-    return () => {
-      mounted = false;
-      unsubscribe();
+      if (lastReported.current !== next) {
+        lastReported.current = next;
+        onChange(next);
+      }
     };
+    void getSession().then(sync);
+    return onSessionChange(sync);
   }, [onChange]);
 
   useEffect(() => {
@@ -129,8 +127,7 @@ export function AuthPanel({ onChange, onNavigate, embedded = false }: { onChange
         return;
       }
       setUser(data.user);
-      setSessionUser(data.user);
-      onChange(data.user);
+      setSessionUser(data.user); // store notifies subscribers; onChange fires via sync
       setIsOpen(false);
     } catch {
       setError('Authentication service unavailable');
@@ -178,8 +175,7 @@ export function AuthPanel({ onChange, onNavigate, embedded = false }: { onChange
       const response = await fetch(`${API}/auth/logout`, { method: 'POST', credentials: 'same-origin', headers: { 'X-CSRF-Token': csrfToken() } });
       if (!response.ok) throw new Error('Logout failed');
       setUser(null);
-      setSessionUser(null);
-      onChange(null);
+      setSessionUser(null); // store notifies subscribers; onChange fires via sync
     } catch { setError('Logout failed'); }
     finally { setBusy(false); }
   }
@@ -187,7 +183,7 @@ export function AuthPanel({ onChange, onNavigate, embedded = false }: { onChange
   if (user) {
     return (
       <details ref={menuRef} className="auth-menu">
-        <summary className="auth-menu-trigger"><span>{user.display_name || user.username}</span>{user.role === 'admin' && <span className="auth-role-badge">Admin</span>}<span className="auth-menu-chevron">⌄</span></summary>
+        <summary className="auth-menu-trigger"><span>{user.display_name || user.username}</span>{user.role?.toLowerCase() === 'admin' && <span className="auth-role-badge">Admin</span>}<span className="auth-menu-chevron">⌄</span></summary>
         <div className="auth-menu-panel">
           <span className="auth-menu-email">{user.email}</span>
           {onNavigate && <nav className="auth-menu-links" aria-label="Account navigation">

@@ -33,6 +33,7 @@ type FetchResult = SessionUser | null | 'offline';
 let cachedUser: SessionUser | null | undefined = readCached();
 let inFlight: Promise<SessionUser | null> | undefined;
 const listeners = new Set<Listener>();
+const expiryListeners = new Set<() => void>();
 
 function readCached(): SessionUser | null | undefined {
   try {
@@ -71,14 +72,24 @@ function apply(result: FetchResult): SessionUser | null {
     if (cachedUser === undefined) cachedUser = null;
     return cachedUser;
   }
+  // Detect a session that expired server-side (revalidation found the user
+  // gone) as opposed to an intentional local logout (setSessionUser(null)).
+  const expired = cachedUser !== null && cachedUser !== undefined && result === null;
   cachedUser = result;
   writeCached(result);
+  if (expired) expiryListeners.forEach((listener) => listener());
   notify(result);
   return result;
 }
 
 function notify(user: SessionUser | null) {
   for (const listener of listeners) listener(user);
+}
+
+/** Subscribe to session-expired events (server-side sign-out detected on revalidation). */
+export function onSessionExpired(listener: () => void): () => void {
+  expiryListeners.add(listener);
+  return () => expiryListeners.delete(listener);
 }
 
 /**

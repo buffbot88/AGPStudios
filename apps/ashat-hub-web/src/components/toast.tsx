@@ -1,12 +1,19 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 /**
- * Shared toast system.
+ * Shared toast + confirm system.
  *
  * `toast()` shows a transient notification. `confirmToast()` is the
- * non-blocking replacement for window.confirm: it shows a sticky toast with
- * Confirm/Cancel actions and resolves the promise with the answer. The
- * <ToastHost /> component renders the stack; mount it once near the app root.
+ * non-blocking replacement for window.confirm: a sticky toast with
+ * Confirm/Cancel actions. `confirmModal()` is the heavy-weight variant for
+ * destructive actions: a centered, focus-trapped alertdialog that must be
+ * answered.
+ *
+ * Accessibility: confirm toasts move focus to their Cancel button on appear,
+ * trap Tab within their actions, cancel on Escape, and restore focus to the
+ * previously focused element on close. Transient toasts stay polite and
+ * non-focusable. The <ToastHost /> renders everything; mount it once near the
+ * app root.
  */
 
 export type ToastKind = 'info' | 'success' | 'error';
@@ -21,14 +28,30 @@ type ToastItem = {
   duration: number;
 };
 
+type ModalItem = {
+  id: number;
+  title: string;
+  message: string;
+  confirmLabel: string;
+  cancelLabel: string;
+  requireText?: string;
+};
+
 let nextId = 1;
 let items: ToastItem[] = [];
+let modal: ModalItem | undefined;
 const resolvers = new Map<number, (value: boolean) => void>();
+const modalResolvers = new Map<number, (value: boolean) => void>();
 const listeners = new Set<(items: ToastItem[]) => void>();
+const modalListeners = new Set<(modal: ModalItem | undefined) => void>();
 
 function emit() {
   const snapshot = [...items];
   for (const listener of listeners) listener(snapshot);
+}
+
+function emitModal() {
+  for (const listener of modalListeners) listener(modal);
 }
 
 function dismiss(id: number) {
@@ -68,6 +91,7 @@ export function confirmToast(options: {
       if (settled) return;
       settled = true;
       resolvers.delete(id);
+      restoreFocus(id);
       dismiss(id);
       resolve(value);
     };
@@ -89,40 +113,224 @@ function answer(id: number, value: boolean) {
   resolvers.get(id)?.(value);
 }
 
-/** Renders every active toast. Mount once, near the app root. */
+/**
+ * Centered destructive-action confirmation. Unlike confirmToast, this dialog
+ * must be answered: no backdrop-dismiss, no Escape, no timeout. Optionally
+ * requires typing a phrase (e.g. DELETE) before Confirm enables.
+ */
+export function confirmModal(options: {
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  /** When set, Confirm stays disabled until the user types this phrase. */
+  requireText?: string;
+}): Promise<boolean> {
+  return new Promise((resolve) => {
+    const id = nextId++;
+    modalResolvers.set(id, resolve);
+    modal = {
+      id,
+      title: options.title,
+      message: options.message,
+      confirmLabel: options.confirmLabel ?? 'Confirm',
+      cancelLabel: options.cancelLabel ?? 'Cancel',
+      requireText: options.requireText,
+    };
+    emitModal();
+  });
+}
+
+function answerModal(id: number, value: boolean) {
+  if (modal?.id !== id) return;
+  modal = undefined;
+  modalResolvers.get(id)?.(value);
+  modalResolvers.delete(id);
+  emitModal();
+}
+
+// Focus bookkeeping shared by confirm toasts and the modal.
+const priorFocus = new Map<number, HTMLElement>();
+
+function rememberFocus(id: number) {
+  const active = document.activeElement;
+  if (active instanceof HTMLElement) priorFocus.set(id, active);
+}
+
+function restoreFocus(id: number) {
+  priorFocus.get(id)?.focus?.();
+  priorFocus.delete(id);
+}
+
+/** Renders toasts and the confirm modal. Mount once, near the app root. */
 export function ToastHost() {
   const [current, setCurrent] = useState<ToastItem[]>([]);
+  const [activeModal, setActiveModal] = useState<ModalItem | undefined>();
+  const [typed, setTyped] = useState('');
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     listeners.add(setCurrent);
+    modalListeners.add(setActiveModal);
     return () => {
       listeners.delete(setCurrent);
+      modalListeners.delete(setActiveModal);
     };
   }, []);
 
-  if (!current.length) return null;
+  // Modal focus management: capture prior focus, move focus to the Cancel
+  // button (destructive actions must never be one accidental Enter away),
+  // and restore focus when the dialog closes.
+  useEffect(() => {
+    if (!activeModal) {
+      setTyped('');
+      return;
+    }
+    rememberFocus(activeModal.id);
+    const focusTimer = window.setTimeout(() => {
+      dialogRef.current?.querySelector<HTMLButtonElement>('.confirm-cancel')?.focus();
+    });
+    return () => {
+      window.clearTimeout(focusTimer);
+      restoreFocus(activeModal.id);
+    };
+  }, [activeModal]);
+
+  if (!current.length && !activeModal) return null;
+
+  const typedOk = !activeModal?.requireText || typed === activeModal.requireText;
 
   return (
-    <div className="toast-stack" aria-live="polite">
-      {current.map((item) => (
-        <div key={item.id} className={`toast ${item.kind}`} role="status">
-          <span className="toast-message">{item.message}</span>
-          {item.actions && (
-            <span className="toast-actions">
-              {item.actions.map((action) => (
-                <button
-                  key={action.label}
-                  type="button"
-                  className={`toast-button${action.danger ? ' danger' : action.value ? ' primary' : ''}`}
-                  onClick={() => answer(item.id, action.value)}
-                >
-                  {action.label}
-                </button>
-              ))}
-            </span>
-          )}
+    <>
+      {activeModal && (
+        <div className="confirm-backdrop" role="presentation">
+          <div
+            ref={dialogRef}
+            className="confirm-modal"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="confirm-modal-title"
+            aria-describedby="confirm-modal-message"
+            onKeyDown={(event) => {
+              if (event.key === 'Tab') {
+                // Focus trap: keep Tab cycling among the dialog's controls.
+                const focusables = dialogRef.current?.querySelectorAll<HTMLElement>('button, input');
+                if (!focusables?.length) return;
+                const first = focusables[0];
+                const last = focusables[focusables.length - 1];
+                if (event.shiftKey && document.activeElement === first) {
+                  event.preventDefault();
+                  last.focus();
+                } else if (!event.shiftKey && document.activeElement === last) {
+                  event.preventDefault();
+                  first.focus();
+                }
+              }
+            }}
+          >
+            <h2 id="confirm-modal-title">{activeModal.title}</h2>
+            <p id="confirm-modal-message">{activeModal.message}</p>
+            {activeModal.requireText && (
+              <label className="confirm-type-field">
+                <span>
+                  Type <b>{activeModal.requireText}</b> to confirm
+                </span>
+                <input
+                  value={typed}
+                  onChange={(event) => setTyped(event.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </label>
+            )}
+            <div className="confirm-actions">
+              <button type="button" className="confirm-cancel" onClick={() => answerModal(activeModal.id, false)}>
+                {activeModal.cancelLabel}
+              </button>
+              <button
+                type="button"
+                className="confirm-delete"
+                disabled={!typedOk}
+                onClick={() => answerModal(activeModal.id, true)}
+              >
+                {activeModal.confirmLabel}
+              </button>
+            </div>
+          </div>
         </div>
-      ))}
-    </div>
+      )}
+      {current.length > 0 && (
+        <div className="toast-stack" aria-live="polite">
+          {current.map((item) => {
+            const isConfirm = Boolean(item.actions?.length);
+            return (
+              <div
+                key={item.id}
+                className={`toast ${item.kind}${isConfirm ? ' confirm' : ''}`}
+                role={isConfirm ? 'alertdialog' : 'status'}
+                aria-modal={isConfirm || undefined}
+                aria-label={isConfirm ? item.message : undefined}
+                tabIndex={isConfirm ? -1 : undefined}
+                ref={
+                  isConfirm
+                    ? (element) => {
+                        if (!element) return;
+                        rememberFocus(item.id);
+                        // Move focus to the cancel button (rendered last):
+                        // confirms must never sit one accidental Enter away
+                        // from their confirm action.
+                        requestAnimationFrame(() => {
+                          const buttons = element.querySelectorAll<HTMLButtonElement>('.toast-button');
+                          buttons[buttons.length - 1]?.focus();
+                        });
+                      }
+                    : undefined
+                }
+                onKeyDown={
+                  isConfirm
+                    ? (event) => {
+                        if (event.key === 'Escape') {
+                          event.stopPropagation();
+                          answer(item.id, false);
+                          return;
+                        }
+                        if (event.key === 'Tab') {
+                          const focusables = event.currentTarget.querySelectorAll<HTMLElement>('.toast-button');
+                          if (!focusables.length) return;
+                          const first = focusables[0];
+                          const last = focusables[focusables.length - 1];
+                          if (event.shiftKey && document.activeElement === first) {
+                            event.preventDefault();
+                            last.focus();
+                          } else if (!event.shiftKey && document.activeElement === last) {
+                            event.preventDefault();
+                            first.focus();
+                          }
+                        }
+                      }
+                    : undefined
+                }
+              >
+                <span className="toast-message">{item.message}</span>
+                {item.actions && (
+                  <span className="toast-actions">
+                    {item.actions.map((action) => (
+                      <button
+                        key={action.label}
+                        type="button"
+                        className={`toast-button${action.danger ? ' danger' : action.value ? ' primary' : ''}`}
+                        onClick={() => answer(item.id, action.value)}
+                      >
+                        {action.label}
+                      </button>
+                    ))}
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </>
   );
 }

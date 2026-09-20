@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { API, request } from './api';
-import { confirmToast, toast } from './toast';
+import { confirmModal, confirmToast, toast } from './toast';
 
 type User = { id: string; username: string; email: string; display_name: string; role: string };
 type AdminUser = { id: string; username: string; email: string; display_name: string; role: string; is_active: number; banned_at?: number | null; email_verified_at?: string | null };
@@ -9,7 +9,7 @@ type AdminSummary = {
   open_tickets: number; active_deploys: number; active_projects: number;
   database_manager: string;
 };
-type DatabaseStatus = { version: string; migrations: [number, string, boolean][]; maintenance: string; arbitrary_sql: string };
+type DatabaseStatus = { database: string; version: string; paws?: { status?: string } };
 type AdminTelemetry = { servers: { id: string; label: string; online: boolean; active_requests: number; requests_last_5m: number; generation_tokens_per_second: number; prompt_tokens_per_second: number; total_completion_tokens: number; queue_depth: number; queue_limit: number }[]; updated_at: number };
 type OmegaServer = { id: string; label: string; online: boolean; ready: boolean; workers?: number; max_workers: number };
 type AdminTab = 'overview' | 'users' | 'telemetry' | 'system';
@@ -70,19 +70,27 @@ export function AdminSurface({ user }: { user: User | null }) {
     if (!user || user.role.toLowerCase() !== 'admin') return;
     try {
       const search = query.trim() ? `?q=${encodeURIComponent(query.trim())}` : '';
-      const [nextSummary, nextUsers, nextDatabase, nextSettings, nextRepoStatus] = await Promise.all([
+      const [summaryResult, usersResult, databaseResult, settingsResult, repoResult] = await Promise.allSettled([
         request<AdminSummary>(`${API}/admin/summary`),
         request<{ users: AdminUser[] }>(`${API}/admin/users${search}`),
         request<DatabaseStatus>(`${API}/admin/database/status`),
         request<Record<string, string | boolean>>(`${API}/admin/settings`),
         request<RepoStatus>(`${API}/admin/repo-status`),
       ]);
-      setSummary(nextSummary);
-      setUsers(nextUsers.users);
-      setDatabase(nextDatabase);
-      setSettings(nextSettings);
-      setRepoStatus(nextRepoStatus);
-      setError(null);
+      if (summaryResult.status === 'fulfilled') setSummary(summaryResult.value);
+      if (usersResult.status === 'fulfilled') setUsers(usersResult.value.users);
+      if (databaseResult.status === 'fulfilled') setDatabase(databaseResult.value);
+      if (settingsResult.status === 'fulfilled') setSettings(settingsResult.value);
+      if (repoResult.status === 'fulfilled') setRepoStatus(repoResult.value);
+      const firstRejected = [summaryResult, usersResult, databaseResult, settingsResult, repoResult].find(
+        (outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected',
+      );
+      if (firstRejected) {
+        const reason = firstRejected.reason;
+        setError(reason instanceof Error ? reason.message : 'Admin data unavailable');
+      } else {
+        setError(null);
+      }
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Admin data unavailable'); }
   }, [query, user]);
 
@@ -90,7 +98,7 @@ export function AdminSurface({ user }: { user: User | null }) {
   const loadTelemetry = useCallback(async () => { try { setTelemetry(await request<AdminTelemetry>(`${API}/admin/telemetry`)); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Telemetry unavailable'); } }, []);
   const loadOmegaServers = useCallback(async () => { try { const data = await request<{ servers: OmegaServer[] }>(`${API}/admin/omega/servers`); setOmegaServers(data.servers); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Omega status unavailable'); } }, []);
   useEffect(() => { if (tab === 'telemetry') { void loadTelemetry(); void loadOmegaServers(); } }, [tab, loadTelemetry, loadOmegaServers]);
-  async function telemetryAction(action: 'refresh' | 'clear') { setBusy(true); setError(null); try { await request(`${API}/admin/telemetry/${action}`, { method: 'POST' }); await loadTelemetry(); await loadOmegaServers(); } catch (reason) { setError(reason instanceof Error ? reason.message : `Telemetry ${action} failed`); } finally { setBusy(false); } }
+  async function telemetryAction(action: 'refresh' | 'clear') { setBusy(true); setError(null); try { await request(`${API}/admin/telemetry/${action}`, { method: 'POST' }); await loadTelemetry(); await loadOmegaServers(); toast(action === 'refresh' ? 'Telemetry refreshed.' : 'Server cache cleared.', 'success'); } catch (reason) { setError(reason instanceof Error ? reason.message : `Telemetry ${action} failed`); } finally { setBusy(false); } }
   async function pushGithub() { if (!(await confirmToast({ message: 'Push committed Ashat Hub changes to GitHub main?', confirmLabel: 'Push' }))) return; setBusy(true); setError(null); try { await request(`${API}/admin/github/push`, { method: 'POST' }); toast('Changes pushed to GitHub.', 'success'); } catch (reason) { setError(reason instanceof Error ? reason.message : 'GitHub push failed'); } finally { setBusy(false); } }
   async function systemUpdate() { if (!(await confirmToast({ message: 'Pull main, rebuild Ashat Hub, and restart the live service?', confirmLabel: 'Update & restart', danger: true }))) return; setBusy(true); setError(null); try { const result = await request<{ commit: string }>(`${API}/admin/system/update`, { method: 'POST' }); toast(`System updated to ${result.commit}. Reloading Admin CP…`); window.setTimeout(() => window.location.reload(), 2500); } catch (reason) { setError(reason instanceof Error ? reason.message : 'System update failed'); } finally { setBusy(false); } }
   async function codingAgentsUpdate() { if (!(await confirmToast({ message: 'Launch the Omega coding agent?', confirmLabel: 'Launch' }))) return; setBusy(true); setError(null); try { await request(`${API}/admin/omega/launch`, { method: 'POST' }); toast('Omega coding agent launched.', 'success'); await loadTelemetry(); await loadOmegaServers(); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Omega launch failed'); } finally { setBusy(false); } }
@@ -98,7 +106,17 @@ export function AdminSurface({ user }: { user: User | null }) {
   async function updateUser(userId: string, body: { role?: string; is_active?: boolean }) {
     setBusy(true); setError(null);
     try {
-      await request(`${API}/admin/users/${body.role ? 'role' : 'status'}`, { method: 'POST', body: JSON.stringify(body.role ? { user_id: userId, role: body.role } : { user_id: userId, is_active: body.is_active }) });
+      // API shape: {user_id, status: 'active'|'disabled'} — a bare is_active boolean
+      // is read as `form.get('status','active')` by the API, so disable never sticks.
+      await request(`${API}/admin/users/status`, {
+        method: 'POST',
+        body: JSON.stringify(
+          body.role
+            ? { user_id: userId, role: body.role }
+            : { user_id: userId, status: body.is_active ? 'active' : 'disabled' },
+        ),
+      });
+      toast(body.role ? `Role updated to ${body.role}.` : body.is_active ? 'User enabled.' : 'User disabled.', 'success');
       await load();
       if (selectedUser && selectedUser.id === userId) {
         const updated = await request<{ users: AdminUser[] }>(`${API}/admin/users?q=${encodeURIComponent(userId)}`);
@@ -114,7 +132,14 @@ export function AdminSurface({ user }: { user: User | null }) {
     if (!(await confirmToast({ message: `${action} this user?${banned ? ' They will be logged out immediately.' : ''}`, confirmLabel: action, danger: banned }))) return;
     setBusy(true); setError(null);
     try {
-      await request(`${API}/admin/users/ban`, { method: 'POST', body: JSON.stringify({ user_id: userId, banned }) });
+      // API semantics: POST /users/ban always bans (it never reads a `banned`
+      // field), so unban must go through /users/status with status 'active'.
+      if (banned) {
+        await request(`${API}/admin/users/ban`, { method: 'POST', body: JSON.stringify({ user_id: userId }) });
+      } else {
+        await request(`${API}/admin/users/status`, { method: 'POST', body: JSON.stringify({ user_id: userId, status: 'active' }) });
+      }
+      toast(banned ? 'User banned.' : 'User unbanned.', banned ? 'error' : 'success');
       await load();
       if (selectedUser && selectedUser.id === userId) {
         const updated = await request<{ users: AdminUser[] }>(`${API}/admin/users?q=${encodeURIComponent(userId)}`);
@@ -126,10 +151,16 @@ export function AdminSurface({ user }: { user: User | null }) {
   }
 
   async function deleteUser(userId: string) {
-    if (!(await confirmToast({ message: 'PERMANENTLY DELETE this user? This cannot be undone. All their projects, deployments, and data will be removed.', confirmLabel: 'Delete permanently', danger: true }))) return;
+    if (!(await confirmModal({
+      title: 'Delete user permanently?',
+      message: 'This cannot be undone. All their projects, deployments, and data will be removed.',
+      confirmLabel: 'Delete user',
+      requireText: 'DELETE',
+    }))) return;
     setBusy(true); setError(null);
     try {
       await request(`${API}/admin/users/${userId}`, { method: 'DELETE' });
+      toast('User deleted permanently.', 'success');
       setSelectedUser(null);
       await load();
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Delete failed'); }
@@ -292,25 +323,20 @@ function SystemTab({ database, settings, onPush, onUpdate, status }: { database:
           <span className="eyebrow">Database</span>
           <h3>{database?.version || 'Loading...'}</h3><p className="system-status-ok">● Connected</p>
           <span className="eyebrow">Database Management</span>
-          <div className="adm-field"><span className="adm-field-label">Schema Revision</span><span className="adm-field-value">v{database?.migrations?.at(-1)?.[0] ?? '—'}</span></div>
-          <div className="adm-field"><span className="adm-field-label">Schema Updates</span><span className="adm-field-value">{database?.migrations?.length ?? 0} applied</span></div>
+          <div className="adm-field"><span className="adm-field-label">Backend</span><span className="adm-field-value">{database?.database || 'Unknown'}</span></div>
           <div className="adm-field"><span className="adm-field-label">Update Method</span><span className="adm-field-value">Versioned</span></div>
           <div className="adm-field"><span className="adm-field-label">Direct SQL Console</span><span className="adm-field-value">Disabled</span></div>
-          {database?.migrations && database.migrations.length > 0 && (<>
-            <span className="eyebrow">Recent Schema Updates</span><div className="adm-migration-list">
-              {database.migrations.slice(-5).reverse().map((m) => (
-                <span key={m[0]} className={m[2] ? 'adm-migration-ok' : 'adm-migration-fail'}>v{m[0]} · {m[1]}</span>
-              ))}
-            </div>
-          </>)}
+          {database?.paws && <div className="adm-field"><span className="adm-field-label">Paws & Parcels</span><span className="adm-field-value">{database.paws.status || 'unknown'}</span></div>}
         </section>
         <section className="adm-panel">
           <span className="eyebrow">Application Runtime</span>
           <h3>Services</h3><div className="adm-field"><span className="adm-field-label">Backend</span><span className="adm-field-value">Rust · <b className="system-status-ok">● Running</b></span></div><div className="adm-field"><span className="adm-field-label">Frontend</span><span className="adm-field-value">Vite · <b className="system-status-ok">● Available</b></span></div><span className="eyebrow">Security & Configuration</span>
           <div className={`adm-system-updates adm-repo-${status?.ashathub?.state || 'unknown'}`}><span className="adm-field-label">System Updates</span><div className="adm-commit-comparison"><div><span>Live commit</span><code>{status?.ashathub?.live?.slice(0, 8) || '—'}</code></div><div><span>Repo commit</span><code>{status?.ashathub?.repo?.slice(0, 8) || '—'}</code></div></div><div className="adm-system-update-actions"><button type="button" className="secondary-button" onClick={onPush}>Push Changes to GitHub</button><button type="button" className="secondary-button" onClick={onUpdate}>Pull, Build & Restart</button></div></div>
-          {settings && Object.entries(settings).map(([key, value]) => (
-            <div className="adm-setting-row" key={key}><span>{key.replace(/_/g, ' ')}</span><strong>{typeof value === 'boolean' ? (value ? '✓ Enabled' : '○ Disabled') : String(value)}</strong></div>
-          ))}
+          {settings && Object.entries(settings)
+            .filter(([key]) => key !== 'backend') // internal value, not a user-facing setting
+            .map(([key, value]) => (
+              <div className="adm-setting-row" key={key}><span>{key.replace(/_/g, ' ')}</span><strong>{typeof value === 'boolean' ? (value ? '✓ Enabled' : '○ Disabled') : String(value)}</strong></div>
+            ))}
         </section>
       </div>
     </div>

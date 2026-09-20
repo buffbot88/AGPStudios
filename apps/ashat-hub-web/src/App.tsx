@@ -10,8 +10,9 @@ import { SectionHeader } from './components/home/primitives';
 import { SiteFooter } from './components/home/SiteFooter';
 import { MemberSurfaces } from './components/MemberSurfaces';
 import { AdminSurface } from './components/AdminSurface';
+import { SurfaceErrorBoundary } from './components/SurfaceErrorBoundary';
 import { AuthPanel } from './components/AuthPanel';
-import { getSession, onSessionChange, peekSession, setSessionUser } from './components/session';
+import { getSession, onSessionChange, onSessionExpired, peekSession, setSessionUser } from './components/session';
 import { ToastHost, toast } from './components/toast';
 
 type User = {
@@ -54,6 +55,11 @@ function AccountIcon() {
 type Route = 'home' | 'account' | 'support' | 'admin';
 
 function routeFromHash(): Route {
+  // AdminSurface deep-links tabs as /admin#users etc.; the path, not just the
+  // hash, must keep the admin route across a reload.
+  if (window.location.pathname.replace(/\/+$/, '').endsWith('/admin')) {
+    return 'admin';
+  }
   switch (window.location.hash) {
     case '#account':
       return 'account';
@@ -91,6 +97,18 @@ function App() {
     return onSessionChange(setUser);
   }, []);
 
+  // If background revalidation discovers the session expired server-side,
+  // tell the user gently and land them somewhere safe.
+  useEffect(() => {
+    return onSessionExpired(() => {
+      toast('Your session has ended. Sign in again to continue.', 'info', 7000);
+      if (window.location.hash && window.location.hash !== '#top') {
+        window.location.hash = '#top';
+        setRoute('home');
+      }
+    });
+  }, []);
+
   useEffect(() => {
     void fetchGames().then(({ games: next }) => setGames(next));
     void fetchNews().then(({ news: next }) => setNews(next));
@@ -112,10 +130,11 @@ function App() {
     }
   }, [route, user, sessionResolved]);
 
+  // Sign out via the shared store: the API revokes the session, the store
+  // write notifies every subscriber (header, guards) in one place.
   const logout = () =>
     fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }).then(() => {
       setSessionUser(null);
-      setUser(null);
       window.location.assign('/');
     });
 
@@ -137,10 +156,16 @@ function App() {
     <div className="portal" id="top">
       <SiteHeader user={user} onUserChange={setUser} />
       <main>
-        {route === 'admin' && <AdminSurface user={user} />}
+        {route === 'admin' && (
+          <SurfaceErrorBoundary fallbackTitle="The admin panel couldn't load">
+            <AdminSurface user={user} />
+          </SurfaceErrorBoundary>
+        )}
         {route === 'account' &&
           (user ? (
-            <MemberSurfaces user={user} initialTab="account" />
+            <SurfaceErrorBoundary fallbackTitle="Your account couldn't load">
+              <MemberSurfaces user={user} initialTab="account" />
+            </SurfaceErrorBoundary>
           ) : (
             <section className="member-section workspace-locked">
               <span className="eyebrow">AGP Studios Member</span>
@@ -149,7 +174,11 @@ function App() {
               <AuthPanel embedded onChange={setSessionUser} />
             </section>
           ))}
-        {route === 'support' && <MemberSurfaces user={user} initialTab="support" />}
+        {route === 'support' && (
+          <SurfaceErrorBoundary fallbackTitle="Support couldn't load">
+            <MemberSurfaces user={user} initialTab="support" />
+          </SurfaceErrorBoundary>
+        )}
         {route === 'home' && (
           <>
         <HeroSection games={games ?? [FEATURED_GAME]} user={user} />

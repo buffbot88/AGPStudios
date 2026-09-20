@@ -52,8 +52,8 @@ export const FEATURED_GAME: Game = {
 export const GAMES: Game[] = [
   FEATURED_GAME,
   {
-    slug: 'project-horizon',
-    title: 'Project Horizon',
+    slug: 'world-of-ra-horizon',
+    title: 'The World of Ra - Horizon - Season 1',
     summary: 'A new world is taking shape.',
     status: 'in-development',
     statusLabel: 'In Development',

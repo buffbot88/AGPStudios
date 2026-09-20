@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:mock": "python3 ../../scripts/dev.py",
+    "mock-api": "python3 ../../scripts/mock-api.py",
     "build": "tsc -b && vite build",
     "preview": "vite preview"
   },
