@@ -269,6 +269,32 @@ def run():
     d = body or {}
     check("database" in d and "version" in d, "/api/admin/database/status: has database+version", repr(d)[:120])
 
+    # Migration panel reads its state from this same response (no extra fetch).
+    m = d.get("migrations")
+    check(isinstance(m, dict), "/api/admin/database/status: carries migrations summary", repr(m)[:160])
+    if isinstance(m, dict):
+        check(is_bool(m.get("tracked")), "migrations: tracked is a boolean", repr(m.get("tracked")))
+        check(is_str(m.get("tracking_table")), "migrations: tracking_table is a string", repr(m.get("tracking_table")))
+        check(m.get("current_revision") is None or is_str(m.get("current_revision")),
+              "migrations: current_revision is a string or null", repr(m.get("current_revision")))
+        check(isinstance(m.get("applied"), list) and isinstance(m.get("pending"), list),
+              "migrations: applied and pending are arrays", repr(m)[:160])
+        check(isinstance(m.get("drifted"), list) and isinstance(m.get("missing"), list),
+              "migrations: drifted and missing are arrays", repr(m)[:160])
+        for entry in m.get("applied") or []:
+            check(is_str(entry.get("filename")),
+                  "migrations: applied entry has a filename", repr(entry)[:120])
+        for entry in m.get("pending") or []:
+            check(is_str(entry.get("filename")),
+                  "migrations: pending entry has a filename", repr(entry)[:120])
+
+    code, body = admin.req("/api/admin/database/migrations/apply", "POST", {}, admin_csrf)
+    check(code == 200 and (body or {}).get("ok") is True and isinstance((body or {}).get("applied"), list),
+          "POST /api/admin/database/migrations/apply: {ok, applied[]}", f"{code} {repr(body)[:120]}")
+    code, body = admin.req("/api/admin/database/migrations/apply", "POST", {}, admin_csrf)
+    check((body or {}).get("applied") == [],
+          "apply is idempotent: a second run applies nothing", repr(body)[:120])
+
     code, body = admin.req("/api/admin/settings")
     check(code == 200 and isinstance(body, dict), "/api/admin/settings: 200 object", str(code))
 
