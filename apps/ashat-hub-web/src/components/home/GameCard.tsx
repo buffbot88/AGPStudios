@@ -1,6 +1,7 @@
 import type { Game } from '../../content';
 import { statusPill, GameTags } from './primitives';
 import { safeText } from '../api';
+import { PosterImage } from './PosterImage';
 
 /**
  * Game card for the Our Games grid. Data-driven; missing art falls back to a
@@ -15,13 +16,12 @@ export function GameCard({ game }: { game: Game }) {
       rel={safeText(game.url).startsWith('http') ? 'noreferrer' : undefined}
     >
       <div className={`game-thumb${game.poster ? '' : ` fallback-${safeText(game.status)}`}`}>
-        {game.poster ? (
-          <img src={game.poster} alt={game.posterAlt ?? `${safeText(game.title)} thumbnail`} />
-        ) : (
-          <span className="thumb-fallback" aria-hidden>
-            {game.status === 'coming-soon' ? '✦' : '◎'}
-          </span>
-        )}
+        <PosterImage
+          src={safeText(game.poster)}
+          alt={game.posterAlt ?? `${safeText(game.title)} thumbnail`}
+          fallbackClass={`thumb-fallback fallback-${safeText(game.status)}`}
+          fallback={<span aria-hidden>{game.status === 'coming-soon' ? '✦' : '◎'}</span>}
+        />
       </div>
       <div className="game-body">
         <h3>{safeText(game.title)}</h3>

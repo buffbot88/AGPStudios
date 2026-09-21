@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { Game } from '../../content';
 import { statusPill, GameTags, type User } from './primitives';
 import { safeText } from '../api';
+import { PosterImage } from './PosterImage';
 
 const AUTO_ADVANCE_MS = 8000;
 
@@ -68,13 +69,12 @@ export function FeaturedGameCard({ games, user }: { games: Game[]; user: User | 
         </div>
         <div className="featured-slide" key={safeText(game.slug)}>
           <div className={`featured-poster${game.poster ? '' : ' no-art'}`}>
-            {game.poster ? (
-              <img src={game.poster} alt={game.posterAlt ?? `${safeText(game.title)} poster`} />
-            ) : (
-              <div className="poster-fallback" aria-hidden>
-                <span>{safeText(game.title)}</span>
-              </div>
-            )}
+            <PosterImage
+              src={safeText(game.poster)}
+              alt={game.posterAlt ?? `${safeText(game.title)} poster`}
+              fallbackClass="poster-fallback no-art"
+              fallback={<span>{safeText(game.title)}</span>}
+            />
           </div>
           <div className="featured-body">
             <h2>{safeText(game.title)}</h2>

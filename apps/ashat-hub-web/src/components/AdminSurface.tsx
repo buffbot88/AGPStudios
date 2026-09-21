@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { API, request, safeList, safeNumber, safeText, safeTime } from './api';
 import { confirmModal, confirmToast, toast } from './toast';
 import { maybeCrash } from './devCrash';
+import { PosterImage } from './home/PosterImage';
 
 type User = { id: string; username: string; email: string; display_name: string; role: string };
 type AdminUser = { id: string; username: string; email: string; display_name: string; role: string; is_active: number; banned_at?: number | null; email_verified_at?: string | null };
@@ -254,7 +255,14 @@ function GamesTab({ games, busy, onUpdatePoster }: { games: AdminGame[]; busy: b
         <div className="adm-toolbar"><span className="eyebrow">Game art</span><span className="refresh-state">Poster URLs update live — no redeploy needed</span></div>
         {safeList<AdminGame>(games).filter(Boolean).map((game) => (
           <form className="adm-game-row" key={safeText(game.slug)} onSubmit={(e) => { e.preventDefault(); onUpdatePoster(safeText(game.slug), draft(safeText(game.slug), safeText(game.poster)).trim()); }}>
-            <img className="adm-game-thumb" src={draft(safeText(game.slug), safeText(game.poster)) || undefined} alt="" onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = 'hidden'; }} />
+            <div className="adm-game-thumb">
+              <PosterImage
+                src={draft(safeText(game.slug), safeText(game.poster))}
+                alt=""
+                fallbackClass="thumb-fallback fallback-in-development"
+                fallback={<span aria-hidden>◎</span>}
+              />
+            </div>
             <div className="adm-game-info">
               <strong>{safeText(game.title)}</strong>
               <small>{safeText(game.slug)} · {safeText(game.status)}{game.featured ? ' · featured' : ''}</small>
