@@ -226,6 +226,33 @@ def phase2():
         assert all(k in event for k in ("id", "user_id", "action", "actor_id", "actor_name", "detail", "created_at")), \
             ("event shape", event)
 
+    # -- Migration panel: status summary + apply (admin CP) -------------------
+    code, body = admin.req("/api/admin/database/status")
+    assert code == 200, ("database status", code)
+    summary = (body or {}).get("migrations")
+    assert isinstance(summary, dict), ("database/status carries migrations", repr(body)[:200])
+    for key in ("tracked", "tracking_table", "current_revision", "applied", "pending", "drifted", "missing"):
+        assert key in summary, ("migrations summary key", key)
+    assert isinstance(summary["applied"], list) and isinstance(summary["pending"], list), \
+        ("applied/pending are lists", summary)
+    for entry in summary["applied"]:
+        assert all(k in entry for k in ("filename", "applied_at", "statements")), ("applied entry shape", entry)
+    for entry in summary["pending"]:
+        assert "filename" in entry, ("pending entry shape", entry)
+
+    # Applying when nothing is pending must be a no-op, not an error
+    code, body = admin.req("/api/admin/database/migrations/apply", "POST", {})
+    assert code == 200 and (body or {}).get("ok") is True, ("apply migrations", code, body)
+    assert isinstance((body or {}).get("applied"), list), ("apply returns an applied list", body)
+    applied_now = body["applied"]
+    code, body = admin.req("/api/admin/database/migrations/apply", "POST", {})
+    assert code == 200 and (body or {}).get("applied") == [], \
+        ("second apply is idempotent (nothing pending)", body)
+    if applied_now:
+        code, body = admin.req("/api/admin/database/status")
+        summary_after = (body or {}).get("migrations", {})
+        assert not summary_after.get("pending"), ("pending cleared after apply", summary_after.get("pending"))
+
     # -- GET /api/admin/games + PUT /api/admin/games/:slug (poster swap) ------
     code, body = admin.req("/api/admin/games")
     assert code == 200 and isinstance((body or {}).get("games"), list) and body["games"], \

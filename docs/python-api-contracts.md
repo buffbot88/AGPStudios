@@ -39,7 +39,8 @@ The Python service is the public API at `/api/*`; Rust is not part of the contra
 | GET | `/api/admin/summary` | 200 | Admin overview counts |
 | GET | `/api/admin/users` | 200 | Filtered admin user list; optional `q` query |
 | GET | `/api/admin/users/:id/moderation` | 200 | Per-user moderation timeline; see shape reference below |
-| GET | `/api/admin/database/status` | 200 | Database and Paws health status |
+| GET | `/api/admin/database/status` | 200 | Database/Paws health plus the schema-migration summary |
+| POST | `/api/admin/database/migrations/apply` | 200 | Run pending migrations (or baseline existing ones) |
 | GET | `/api/admin/settings` | 200 | Runtime API settings |
 | GET | `/api/admin/repo-status` | 200 | Live/repository commit comparison |
 | GET | `/api/admin/telemetry` | 200 | Omega telemetry server status |
@@ -178,6 +179,65 @@ Field notes:
   rows.
 - Filtering: optional `?q=` does a `LIKE %q%` match against `username`, `email`,
   and `display_name` combined with OR; it is not an exact match.
+
+#### GET `/api/admin/database/status` — `migrations` object
+
+The existing database-status response carries the migration state, so the admin
+CP needs no extra request. (Migration files themselves are owned by the runner
+in `services/python-api/migrate.py`; this endpoint only reports and applies.)
+
+```json
+{
+  "database": "healthy",
+  "version": "8.0.36",
+  "paws": { "status": "ok" },
+  "migrations": {
+    "tracked": true,
+    "tracking_table": "schema_migrations",
+    "current_revision": "0004_user_moderation_history.sql",
+    "applied": [
+      { "filename": "0001_diamonds.sql", "applied_at": 1700000000, "statements": 1, "applied_by": "admin:boss" }
+    ],
+    "pending": [{ "filename": "0005_next.sql", "statements": 3 }],
+    "drifted": ["0002_homepage_content.sql"],
+    "missing": ["0099_removed.sql"]
+  }
+}
+```
+
+- `tracked` is `false` when the `schema_migrations` table doesn't exist yet — a
+  database migrated by hand before the runner existed. That is reported as
+  state, not an error; every file then shows as `pending`.
+- `applied` is in application order; `current_revision` is its last entry, or
+  `null` when nothing is recorded.
+- `drifted` lists applied files whose contents changed since they were applied
+  (checksum mismatch) — they are **not** re-run automatically.
+- `missing` lists recorded files that are no longer in the repository.
+
+#### POST `/api/admin/database/migrations/apply`
+
+Requires an admin session and the CSRF header.
+
+```json
+{ "baseline": false }
+```
+
+- Default (`baseline` omitted/false): executes every **pending** migration in
+  filename order and records each one only after all of its statements succeed.
+  Returns `{"ok": true, "baseline": false, "applied": ["0005_next.sql"]}`;
+  `applied` is empty when nothing was pending (safe to call repeatedly).
+- `{"baseline": true}`: records pending **and** drifted files as applied
+  **without executing them** — for a database migrated by hand, where re-running
+  `0001` (`ALTER TABLE ... ADD COLUMN`, not idempotent) would fail. Use it once;
+  prefer `migrate.py --baseline` on the host when you have shell access.
+- Audit events: `admin.migrations.applied` / `admin.migrations.baselined`,
+  `target_type='migrations'`, `detail={baseline, files}`.
+- DDL runs in the API process, so a migration that fails partway leaves the
+  statements before the failure applied and the file unrecorded (MySQL commits
+  DDL implicitly). Fix the file and call again; 503 `migration unavailable: …`
+  carries the driver message.
+- This is the convenience path. Deployments should still gate on
+  `services/python-api/migrate.py --check`.
 
 #### GET `/api/admin/users/:id/moderation`
 
