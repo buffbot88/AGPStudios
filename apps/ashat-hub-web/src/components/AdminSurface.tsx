@@ -489,10 +489,10 @@ function MigrationsPanel({ migrations, busy, onApplyMigrations }: {
       {migrations.error && <p className="workspace-error" role="alert">{migrations.error}</p>}
 
       {drifted.length > 0 && <p className="adm-migrations-note">
-        Changed on disk since they were applied (not re-run): {drifted.map(safeText).join(', ')}.
+        Changed on disk since they were applied (not re-run): {drifted.map((value) => safeText(value)).join(', ')}.
       </p>}
       {missing.length > 0 && <p className="adm-migrations-note">
-        Recorded but no longer in the repo: {missing.map(safeText).join(', ')}.
+        Recorded but no longer in the repo: {missing.map((value) => safeText(value)).join(', ')}.
       </p>}
 
       <div className="adm-migrations-actions">
