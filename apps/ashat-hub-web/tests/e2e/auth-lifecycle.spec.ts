@@ -61,6 +61,23 @@ async function registerMember(page: import('@playwright/test').Page) {
 
 const toast = (page: import('@playwright/test').Page) => page.locator('.toast-stack');
 
+/**
+ * Navigate to a guarded route the way a pasted URL would and assert the guard's
+ * toast.
+ *
+ * Polling the text, rather than waiting for `/api/auth/session` first, is
+ * deliberate on two counts: the second call in a test is a same-document hash
+ * change (the browser fires no new session request), and on a loaded machine a
+ * cold load of the dev app can take longer than the toast's own 8-second life,
+ * which a shorter poll would mistake for the guard never firing. The poll is
+ * live from before the guard can possibly have raised the toast, so a toast that
+ * appears and later dismisses is still observed.
+ */
+async function openGuardedRoute(page: import('@playwright/test').Page, hash: string, expectedToast: string) {
+  await page.goto(`/${hash}`);
+  await expect(toast(page)).toContainText(expectedToast, { timeout: 15_000 });
+}
+
 test.describe('auth lifecycle', () => {
   test('register, then sign in only after the emailed link is used', async ({ page, request }) => {
     const username = uniqueName('verify');
@@ -113,17 +130,16 @@ test.describe('auth lifecycle', () => {
   });
 
   test('a signed-out visitor is bounced from #account and #admin with a toast', async ({ page }) => {
+    test.slow(); // two guarded navigations, each waiting on a cold app load
     // Deep links, as if pasted into the address bar: the guard must wait for the
     // session to resolve before deciding, or it would bounce a real admin.
-    await page.goto('/#account');
+    await openGuardedRoute(page, '#account', 'Sign in to view your account.');
     await expect(page.locator('.account-grid')).toHaveCount(0);
     await expect(page.locator('.member-panel')).toHaveCount(0);
-    await expect(toast(page)).toContainText('Sign in to view your account.');
     expect(new URL(page.url()).hash, 'guard sends the visitor home').toBe('#top');
 
-    await page.goto('/#admin');
+    await openGuardedRoute(page, '#admin', 'Sign in with an administrator account to view the admin panel.');
     await expect(page.locator('.adm-surface')).toHaveCount(0);
-    await expect(toast(page)).toContainText('Sign in with an administrator account to view the admin panel.');
     expect(new URL(page.url()).hash).toBe('#top');
   });
 
@@ -170,8 +186,7 @@ test.describe('auth lifecycle', () => {
     expect(session.authenticated).toBe(false);
 
     // And the guard treats it as signed out again.
-    await page.goto('/#account');
-    await expect(toast(page)).toContainText('Sign in to view your account.');
+    await openGuardedRoute(page, '#account', 'Sign in to view your account.');
     await expect(page.locator('.account-grid')).toHaveCount(0);
   });
 });

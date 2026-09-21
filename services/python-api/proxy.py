@@ -246,10 +246,21 @@ class Proxy(BaseHTTPRequestHandler):
         if not user or str(user.get('role','')).lower() != 'admin': return None
         return user
 
-    def duplicate_submit(self, path, form):
-        """True when the same admin mutation for the same user arrived within
-        the idempotency window; records this attempt otherwise."""
-        key = (path, str(form.get("user_id", "")))
+    def duplicate_submit(self, path, form, intent=""):
+        """True when the same admin mutation for the same target arrived within
+        the idempotency window; records this attempt otherwise.
+
+        The target is read from `user_id` (user mutations) or `id` (client error
+        triage) — without the latter, every triage call would share one key and
+        a second error triaged seconds later would be rejected as a duplicate.
+
+        `intent` distinguishes *what* was asked of that target, and triage passes
+        it: resolving a report and immediately reopening it is a legitimate
+        change of mind, not a double-click, so those must not collide. User
+        mutations keep the original key (no intent) so their behavior is
+        unchanged.
+        """
+        key = (path, str(form.get("user_id") or form.get("id") or ""), str(intent))
         now = time.time()
         last = RECENT_MUTATIONS.get(key)
         RECENT_MUTATIONS[key] = now
@@ -285,7 +296,24 @@ class Proxy(BaseHTTPRequestHandler):
                     if path in ('/api/admin/health','/api/admin/database/status'):
                         cur.execute("SELECT VERSION() AS version"); return oidc_json(self,{"database":"healthy","version":cur.fetchone()['version'],"paws":self.game_status_value(),"migrations":self.migrations_summary(cur)})
                     if path == '/api/admin/client-errors':
-                        page=max(1,min(1000,int(query.get('page',['1'])[0]))); cur.execute("SELECT id,source,message,detail,path,count,occurrences,user_id,user_agent,created_at FROM client_error_log ORDER BY created_at DESC,id DESC LIMIT 50 OFFSET %s",((page-1)*50,)); return oidc_json(self,{"errors":cur.fetchall(),"page":page,"page_size":50})
+                        # `status` defaults to new so triaged rows stop appearing as new;
+                        # `all` and the explicit states are for reviewing what was done.
+                        status=query.get('status',['new'])[0]
+                        if status not in ('new','resolved','muted','all'): return error(self,'invalid status filter')
+                        page=max(1,min(1000,int(query.get('page',['1'])[0])))
+                        # Effective status: a message-wide mute wins over the row's own
+                        # state, because the message is the thing being muted.
+                        where="m.message_hash IS NULL AND COALESCE(t.status,'new')='new'" if status=='new' else ("m.message_hash IS NULL AND t.status='resolved'" if status=='resolved' else ("m.message_hash IS NOT NULL" if status=='muted' else '1=1'))
+                        cur.execute("SELECT e.id,e.source,e.message,e.detail,e.path,e.count,e.occurrences,e.user_id,e.user_agent,e.created_at,"
+                                    " SHA2(e.message,256) AS message_hash,"
+                                    " CASE WHEN m.message_hash IS NOT NULL THEN 'muted' ELSE COALESCE(t.status,'new') END AS triage_status,"
+                                    " COALESCE(t.triaged_at,0) AS triaged_at, COALESCE(t.triaged_by,'') AS triaged_by,"
+                                    " COALESCE(m.muted_at,0) AS muted_at, COALESCE(m.muted_by,'') AS muted_by"
+                                    " FROM client_error_log e"
+                                    " LEFT JOIN client_error_triage t ON t.error_id=e.id"
+                                    " LEFT JOIN client_error_mutes m ON m.message_hash=SHA2(e.message,256)"
+                                    f" WHERE {where} ORDER BY e.created_at DESC,e.id DESC LIMIT 50 OFFSET %s",((page-1)*50,))
+                        return oidc_json(self,{"errors":cur.fetchall(),"page":page,"page_size":50,"status":status})
                     if path == '/api/admin/audit':
                         page=max(1,min(1000,int(query.get('page',['1'])[0]))); cur.execute("SELECT id,actor_id,actor_name,action,target_type,target_id,detail,created_at FROM admin_audit_events ORDER BY created_at DESC,id DESC LIMIT 50 OFFSET %s",((page-1)*50,)); return oidc_json(self,{"events":cur.fetchall(),"page":page,"page_size":50})
                     if path == '/api/admin/settings': return oidc_json(self,{"email_verification_enabled":False,"secure_cookie":True,"backend":"python"})
@@ -309,6 +337,11 @@ class Proxy(BaseHTTPRequestHandler):
         if not user: return error(self,"admin authentication required",403)
         if not self.csrf_ok(user): return error(self,"csrf token required",403)
         path=urlparse(self.path).path; length=int(self.headers.get("Content-Length","0")); form=json.loads(self.rfile.read(length) or b'{}')
+        # Audit/context for the branches below. User mutations write a moderation
+        # timeline entry; client error triage has no user to attach one to, so it
+        # clears mod_detail and retargets the audit event instead.
+        audit_target_type='user'; audit_target_id=str(form.get('user_id',''))
+        log_moderation=True
         try:
             with db() as conn:
                 with conn.cursor() as cur:
@@ -335,11 +368,39 @@ class Proxy(BaseHTTPRequestHandler):
                             else: cur.execute("UPDATE users SET is_active=%s,banned_at=NULL,updated_at=UTC_TIMESTAMP() WHERE id=%s",(0 if status=='disabled' else 1,form.get('user_id')))
                             action='user.status.updated'
                             mod_detail='status: '+str(status)
+                    elif path == '/api/admin/client-errors/status':
+                        # Row-level triage: 'resolved' keeps the judgement,
+                        # 'new' removes it (reopening the report).
+                        if form.get('status') not in ('new','resolved'): return error(self,'invalid status')
+                        if self.duplicate_submit(path, form, form['status']): return error(self,"duplicate submission; retry shortly",409)
+                        try: error_id=int(form.get('id'))
+                        except (TypeError,ValueError): return error(self,'invalid client error id')
+                        cur.execute("SELECT id FROM client_error_log WHERE id=%s",(error_id,))
+                        if not cur.fetchone(): return error(self,'client error not found',404)
+                        if form['status'] == 'new': cur.execute("DELETE FROM client_error_triage WHERE error_id=%s",(error_id,))
+                        else: cur.execute("INSERT INTO client_error_triage (error_id,status,triaged_at,triaged_by) VALUES (%s,%s,UNIX_TIMESTAMP(),%s) ON DUPLICATE KEY UPDATE status=VALUES(status),triaged_at=VALUES(triaged_at),triaged_by=VALUES(triaged_by)",(error_id,form['status'],user['id']))
+                        action='client_error.status.updated'
+                        audit_target_type='client_error'; audit_target_id=str(error_id); log_moderation=False
+                    elif path == '/api/admin/client-errors/mute':
+                        # Message-level mute (migration 0006): the row identifies
+                        # which message, and the mute then covers every report of
+                        # it, past and future. {id, muted} mirrors /users/ban.
+                        muted=bool(form.get('muted', True))
+                        if self.duplicate_submit(path, form, 'muted' if muted else 'unmuted'): return error(self,"duplicate submission; retry shortly",409)
+                        try: error_id=int(form.get('id'))
+                        except (TypeError,ValueError): return error(self,'invalid client error id')
+                        cur.execute("SELECT message FROM client_error_log WHERE id=%s",(error_id,))
+                        row=cur.fetchone()
+                        if not row: return error(self,'client error not found',404)
+                        if muted: cur.execute("INSERT INTO client_error_mutes (message_hash,message,muted_at,muted_by) VALUES (SHA2(%s,256),%s,UNIX_TIMESTAMP(),%s) ON DUPLICATE KEY UPDATE message=VALUES(message),muted_at=VALUES(muted_at),muted_by=VALUES(muted_by)",(row['message'],row['message'][:400],user['id']))
+                        else: cur.execute("DELETE FROM client_error_mutes WHERE message_hash=SHA2(%s,256)",(row['message'],))
+                        action='client_error.message.muted' if muted else 'client_error.message.unmuted'
+                        audit_target_type='client_error'; audit_target_id=str(error_id); log_moderation=False
                     else: return error(self,'admin endpoint not found',404)
-                    cur.execute("INSERT INTO admin_audit_events (actor_id,actor_name,action,target_type,target_id,detail,created_at) VALUES (%s,%s,%s,'user',%s,%s,UNIX_TIMESTAMP())",(user['id'],user['username'],action,form.get('user_id',''),json.dumps(form)))
+                    cur.execute("INSERT INTO admin_audit_events (actor_id,actor_name,action,target_type,target_id,detail,created_at) VALUES (%s,%s,%s,%s,%s,%s,UNIX_TIMESTAMP())",(user['id'],user['username'],action,audit_target_type,audit_target_id,json.dumps(form)))
                     # Moderation timeline: append to the dedicated history table
                     # (migration 0004) so the admin CP can show per-user history.
-                    cur.execute("INSERT INTO user_moderation_history (user_id,action,actor_id,actor_name,detail,created_at) VALUES (%s,%s,%s,%s,%s,UNIX_TIMESTAMP())",(str(form.get('user_id','')),action,user['id'],user['username'],mod_detail))
+                    if log_moderation: cur.execute("INSERT INTO user_moderation_history (user_id,action,actor_id,actor_name,detail,created_at) VALUES (%s,%s,%s,%s,%s,UNIX_TIMESTAMP())",(str(form.get('user_id','')),action,user['id'],user['username'],mod_detail))
             return oidc_json(self,{"ok":True})
         except Exception as exc: return error(self,f"admin unavailable: {exc}",503)
 
@@ -632,6 +693,9 @@ class Proxy(BaseHTTPRequestHandler):
             return
         CLIENT_ERROR_PRUNED_AT = now
         cur.execute("DELETE FROM client_error_log WHERE created_at < UNIX_TIMESTAMP() - %s", (CLIENT_ERROR_RETENTION,))
+        # Triage rows for pruned reports have nothing left to describe. The mutes
+        # table is deliberately untouched: a muted message stays muted.
+        cur.execute("DELETE t FROM client_error_triage t LEFT JOIN client_error_log e ON e.id=t.error_id WHERE e.id IS NULL")
 
     def auth_session(self):
         cookies = {item.split('=', 1)[0]: item.split('=', 1)[1] for item in self.headers.get('Cookie', '').split('; ') if '=' in item}

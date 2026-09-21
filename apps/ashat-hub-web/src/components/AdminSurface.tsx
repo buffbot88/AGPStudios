@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { API, clearShapeDrifts, request, safeList, safeNumber, safeText, safeTime } from './api';
 import { confirmModal, confirmToast, toast } from './toast';
 import { maybeCrash } from './devCrash';
@@ -22,10 +22,19 @@ type DatabaseStatus = { database: string; version: string; paws?: { status?: str
 type AdminTelemetry = { servers: { id: string; label: string; online: boolean; active_requests: number; requests_last_5m: number; generation_tokens_per_second: number; prompt_tokens_per_second: number; total_completion_tokens: number; queue_depth: number; queue_limit: number }[]; updated_at: number };
 type OmegaServer = { id: string; label: string; online: boolean; ready: boolean; workers?: number; max_workers: number };
 type AdminGame = { slug: string; title: string; summary: string; status: string; tags: string[]; url: string; poster: string; featured: boolean; sort_order?: number };
+type ClientErrorStatus = 'new' | 'resolved' | 'muted';
 type ClientError = {
   id: number; source?: string; message?: string; detail?: string; path?: string;
   count?: number; occurrences?: string; user_id?: string; created_at?: number;
+  triage_status?: string; message_hash?: string; triaged_at?: number; triaged_by?: string;
+  muted_at?: number; muted_by?: string;
 };
+const CLIENT_ERROR_FILTERS: { id: ClientErrorStatus | 'all'; label: string }[] = [
+  { id: 'new', label: 'New' },
+  { id: 'resolved', label: 'Resolved' },
+  { id: 'muted', label: 'Muted' },
+  { id: 'all', label: 'All' },
+];
 type AdminTab = 'overview' | 'users' | 'games' | 'telemetry' | 'system';
 type RepoPair = { live: string; repo: string; state: string };
 type RepoStatus = { ashathub: RepoPair };
@@ -89,11 +98,18 @@ export function AdminSurface({ user }: { user: User | null }) {
   const [clientErrors, setClientErrors] = useState<ClientError[]>([]);
   const [clientErrorsError, setClientErrorsError] = useState<string | null>(null);
   const [clientErrorsBusy, setClientErrorsBusy] = useState(false);
+  // Which triage state the panel is showing. `new` is the default so triaged
+  // rows stop looking like fresh news.
+  const [clientErrorsFilter, setClientErrorsFilter] = useState<ClientErrorStatus | 'all'>('new');
+  // The big load() reads the filter through a ref: it must stay consistent with
+  // what the panel shows without re-running the whole admin fetch on every chip.
+  const clientErrorsFilterRef = useRef<ClientErrorStatus | 'all'>(clientErrorsFilter);
+  clientErrorsFilterRef.current = clientErrorsFilter;
 
-  const loadClientErrors = useCallback(async () => {
+  const loadClientErrors = useCallback(async (status: ClientErrorStatus | 'all' = clientErrorsFilterRef.current) => {
     setClientErrorsBusy(true);
     try {
-      const data = await request<{ errors: ClientError[] }>(`${API}/admin/client-errors`);
+      const data = await request<{ errors: ClientError[] }>(`${API}/admin/client-errors?status=${status}`);
       setClientErrors(safeList<ClientError>(data.errors));
       setClientErrorsError(null);
     } catch (reason) {
@@ -103,6 +119,35 @@ export function AdminSurface({ user }: { user: User | null }) {
       setClientErrorsBusy(false);
     }
   }, []);
+
+  useEffect(() => { const timer = window.setTimeout(() => { void loadClientErrors(clientErrorsFilter); }, 0); return () => window.clearTimeout(timer); }, [clientErrorsFilter, loadClientErrors]);
+
+  /** Row-level triage: 'resolved' records the judgement, 'new' reopens it. */
+  async function triageClientError(id: number, status: ClientErrorStatus) {
+    setClientErrorsBusy(true);
+    try {
+      await request(`${API}/admin/client-errors/status`, { method: 'POST', body: JSON.stringify({ id, status }) });
+      toast(status === 'resolved' ? 'Report marked resolved.' : 'Report reopened.', 'success');
+      await loadClientErrors();
+    } catch (reason) {
+      setClientErrorsError(reason instanceof Error ? reason.message : 'Unable to update the report');
+    } finally { setClientErrorsBusy(false); }
+  }
+
+  /**
+   * Message-level mute (migration 0006): covers every report of this message,
+   * including future ones. The row only identifies which message to mute.
+   */
+  async function muteClientErrorMessage(id: number, muted: boolean) {
+    setClientErrorsBusy(true);
+    try {
+      await request(`${API}/admin/client-errors/mute`, { method: 'POST', body: JSON.stringify({ id, muted }) });
+      toast(muted ? 'Message muted. Reports of it stay out of New.' : 'Message unmuted.', 'success');
+      await loadClientErrors();
+    } catch (reason) {
+      setClientErrorsError(reason instanceof Error ? reason.message : 'Unable to change the mute');
+    } finally { setClientErrorsBusy(false); }
+  }
 
   const loadModeration = useCallback(async (userId: string) => {
     try {
@@ -133,7 +178,7 @@ export function AdminSurface({ user }: { user: User | null }) {
         request<Record<string, string | boolean>>(`${API}/admin/settings`),
         request<RepoStatus>(`${API}/admin/repo-status`),
         request<{ games: AdminGame[] }>(`${API}/admin/games`),
-        request<{ errors: ClientError[] }>(`${API}/admin/client-errors`),
+        request<{ errors: ClientError[] }>(`${API}/admin/client-errors?status=${clientErrorsFilterRef.current}`),
       ]);
       // Fresh payload: the notice describes the latest response, not history
       // (including placeholders the loading render legitimately coerced).
@@ -289,7 +334,7 @@ export function AdminSurface({ user }: { user: User | null }) {
       {tab === 'users' && <UsersTab users={users} query={query} onQueryChange={setQuery} onSearch={load} onSelectUser={selectUser} selectedUser={selectedUser} busy={busy} currentUser={user} onUpdateUser={updateUser} onBanUser={banUser} onDeleteUser={deleteUser} moderation={moderation} moderationError={moderationError} onRefreshModeration={() => selectedUser && void loadModeration(selectedUser.id)} />}
       {tab === 'games' && <GamesTab games={games} busy={busy} onUpdatePoster={updateGamePoster} />}
       {tab === 'telemetry' && <TelemetryTab telemetry={telemetry} servers={omegaServers} busy={busy} onAction={telemetryAction} onUpdate={codingAgentsUpdate} />}
-      {tab === 'system' && <SystemTab loaded={loaded} database={database} settings={settings} onPush={pushGithub} onUpdate={systemUpdate} status={repoStatus} busy={busy} onApplyMigrations={applyMigrations} clientErrors={clientErrors} clientErrorsError={clientErrorsError} clientErrorsBusy={clientErrorsBusy} onRefreshClientErrors={loadClientErrors} />}
+      {tab === 'system' && <SystemTab loaded={loaded} database={database} settings={settings} onPush={pushGithub} onUpdate={systemUpdate} status={repoStatus} busy={busy} onApplyMigrations={applyMigrations} clientErrors={clientErrors} clientErrorsError={clientErrorsError} clientErrorsBusy={clientErrorsBusy} clientErrorsFilter={clientErrorsFilter} onFilterClientErrors={setClientErrorsFilter} onRefreshClientErrors={loadClientErrors} onTriageClientError={triageClientError} onMuteClientErrorMessage={muteClientErrorMessage} />}
     </section>
   );
 }
@@ -578,43 +623,80 @@ function MigrationsPanel({ loaded, migrations, busy, onApplyMigrations }: {
 /**
  * Uncaught browser failures reported by visitors. Reported by the client, so it is a signal to investigate, never a fact to trust.
  */
-function ClientErrorsPanel({ errors, error, busy, onRefresh }: {
-  errors: ClientError[]; error: string | null; busy: boolean; onRefresh: () => void;
+function ClientErrorsPanel({ errors, error, busy, status, onStatusChange, onRefresh, onTriage, onMute }: {
+  errors: ClientError[]; error: string | null; busy: boolean;
+  status: ClientErrorStatus | 'all'; onStatusChange: (status: ClientErrorStatus | 'all') => void;
+  onRefresh: () => void;
+  onTriage: (id: number, status: ClientErrorStatus) => void;
+  onMute: (id: number, muted: boolean) => void;
 }) {
+  const heading = status === 'all' ? `${errors.length} reported` : `${errors.length} ${status}`;
+  const empty = status === 'new' ? 'No new client errors reported.' : `Nothing ${status}.`;
   return (
     <section className="adm-panel adm-client-errors">
       <div className="adm-migrations-heading">
         <div>
           <span className="eyebrow">Client errors</span>
-          <h3>{errors.length ? `${errors.length} reported` : 'Nothing reported'}</h3>
+          <h3>{errors.length ? heading : empty.replace('.', '')}</h3>
         </div>
         <button type="button" className="secondary-button" onClick={onRefresh} disabled={busy}>
           {busy ? 'Refreshing…' : 'Refresh'}
         </button>
       </div>
+      <div className="adm-client-error-filters" role="tablist" aria-label="Client error triage state">
+        {CLIENT_ERROR_FILTERS.map((filter) => (
+          <button
+            key={filter.id}
+            type="button"
+            role="tab"
+            aria-selected={status === filter.id}
+            className={`adm-client-error-filter${status === filter.id ? ' selected' : ''}`}
+            onClick={() => onStatusChange(filter.id)}
+          >
+            {filter.label}
+          </button>
+        ))}
+      </div>
       <p className="adm-client-errors-note">
         Uncaught failures from visitors&apos; browsers, newest first. Entries are client-reported, so they may repeat
-        or be junk — the count shows how many occurrences arrived in one burst.
+        or be junk — the count shows how many occurrences arrived in one burst. Resolving covers this report;
+        muting covers every report of the same message, now and in future.
       </p>
       {error && <p className="workspace-error" role="alert">{error}</p>}
       <ul className="adm-client-error-list">
-        {errors.map((entry) => (
-          <li key={safeNumber(entry.id)}>
-            <div className="adm-client-error-head">
-              <span className={`adm-badge${safeText(entry.source) === 'boundary' ? ' err' : ''}`}>
-                {safeText(entry.source) || 'unknown'}
-              </span>
-              <strong>{safeText(entry.message)}</strong>
-              {safeNumber(entry.count) > 1 && <span className="adm-client-error-count">×{safeNumber(entry.count)}</span>}
-            </div>
-            {safeText(entry.detail) && <small className="adm-client-error-detail">{safeText(entry.detail)}</small>}
-            <small className="adm-moderation-meta">
-              {safeText(entry.path) || '/'} · {entry.created_at ? safeTime(entry.created_at) : 'unknown'}
-              {safeText(entry.user_id) ? ` · user ${safeText(entry.user_id)}` : ' · signed out'}
-            </small>
-          </li>
-        ))}
-        {errors.length === 0 && !error && <li className="adm-empty">No client errors reported.</li>}
+        {errors.map((entry) => {
+          const id = safeNumber(entry.id);
+          const triage = safeText(entry.triage_status) || 'new';
+          const muted = triage === 'muted';
+          return (
+            <li key={id}>
+              <div className="adm-client-error-head">
+                <span className={`adm-badge${safeText(entry.source) === 'boundary' ? ' err' : ''}`}>
+                  {safeText(entry.source) || 'unknown'}
+                </span>
+                <strong>{safeText(entry.message)}</strong>
+                {safeNumber(entry.count) > 1 && <span className="adm-client-error-count">×{safeNumber(entry.count)}</span>}
+                <span className={`adm-badge adm-triage-${triage}`}>{triage}</span>
+              </div>
+              {safeText(entry.detail) && <small className="adm-client-error-detail">{safeText(entry.detail)}</small>}
+              <small className="adm-moderation-meta">
+                {safeText(entry.path) || '/'} · {entry.created_at ? safeTime(entry.created_at) : 'unknown'}
+                {safeText(entry.user_id) ? ` · user ${safeText(entry.user_id)}` : ' · signed out'}
+                {safeNumber(entry.triaged_at) > 0 && ` · resolved by ${safeText(entry.triaged_by) || 'admin'} ${safeTime(safeNumber(entry.triaged_at))}`}
+                {muted && ` · message muted by ${safeText(entry.muted_by) || 'admin'}${safeNumber(entry.muted_at) > 0 ? ` ${safeTime(safeNumber(entry.muted_at))}` : ''}`}
+              </small>
+              <div className="adm-client-error-actions">
+                {triage === 'resolved'
+                  ? <button type="button" className="secondary-button" onClick={() => onTriage(id, 'new')} disabled={busy}>Reopen</button>
+                  : <button type="button" className="secondary-button" onClick={() => onTriage(id, 'resolved')} disabled={busy}>Mark resolved</button>}
+                {muted
+                  ? <button type="button" className="secondary-button" onClick={() => onMute(id, false)} disabled={busy}>Unmute message</button>
+                  : <button type="button" className="secondary-button" onClick={() => onMute(id, true)} disabled={busy}>Mute this message</button>}
+              </div>
+            </li>
+          );
+        })}
+        {errors.length === 0 && !error && <li className="adm-empty">{empty}</li>}
       </ul>
     </section>
   );
@@ -622,18 +704,22 @@ function ClientErrorsPanel({ errors, error, busy, onRefresh }: {
 
 // ── System Tab ──
 
-function SystemTab({ loaded, database, settings, onPush, onUpdate, status, busy, onApplyMigrations, clientErrors, clientErrorsError, clientErrorsBusy, onRefreshClientErrors }: {
+function SystemTab({ loaded, database, settings, onPush, onUpdate, status, busy, onApplyMigrations, clientErrors, clientErrorsError, clientErrorsBusy, clientErrorsFilter, onFilterClientErrors, onRefreshClientErrors, onTriageClientError, onMuteClientErrorMessage }: {
   loaded: boolean;
   database: DatabaseStatus | null; settings: Record<string, string | boolean> | null;
   onPush: () => void; onUpdate: () => void; status: RepoStatus | null;
   busy: boolean; onApplyMigrations: (baseline: boolean) => void;
   clientErrors: ClientError[]; clientErrorsError: string | null; clientErrorsBusy: boolean;
-  onRefreshClientErrors: () => void;
+  clientErrorsFilter: ClientErrorStatus | 'all';
+  onFilterClientErrors: (status: ClientErrorStatus | 'all') => void;
+  onRefreshClientErrors: (status?: ClientErrorStatus | 'all') => void;
+  onTriageClientError: (id: number, status: ClientErrorStatus) => void;
+  onMuteClientErrorMessage: (id: number, muted: boolean) => void;
 }) {
   return (
     <div className="adm-system">
       <MigrationsPanel loaded={loaded} migrations={database?.migrations} busy={busy} onApplyMigrations={onApplyMigrations} />
-      <ClientErrorsPanel errors={clientErrors} error={clientErrorsError} busy={clientErrorsBusy} onRefresh={onRefreshClientErrors} />
+      <ClientErrorsPanel errors={clientErrors} error={clientErrorsError} busy={clientErrorsBusy} status={clientErrorsFilter} onStatusChange={onFilterClientErrors} onRefresh={() => onRefreshClientErrors()} onTriage={onTriageClientError} onMute={onMuteClientErrorMessage} />
       <div className="adm-system-grid">
         <section className="adm-panel">
           <span className="eyebrow">Database</span>

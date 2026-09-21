@@ -2198,6 +2198,62 @@ h3 {
   line-height: 1.55;
 }
 
+/* Triage filter chips (New / Resolved / Muted / All). */
+.adm-client-error-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 12px;
+  padding: 4px;
+  background: rgba(9, 26, 37, 0.8);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  width: fit-content;
+}
+
+.adm-client-error-filter {
+  padding: 7px 14px;
+  background: none;
+  border: 0;
+  border-radius: calc(var(--radius-sm) - 2px);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+
+.adm-client-error-filter:hover {
+  color: var(--text);
+}
+
+.adm-client-error-filter.selected {
+  background: var(--surface-2);
+  color: var(--gold);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+
+.adm-client-error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.adm-client-error-actions .secondary-button {
+  padding: 5px 12px;
+  font-size: 0.78rem;
+}
+
+/* Triaged rows read quieter than new ones, without hiding them. */
+.adm-triage-resolved {
+  color: var(--text-muted);
+}
+
+.adm-triage-muted {
+  opacity: 0.75;
+}
+
 .adm-client-error-list {
   display: grid;
   gap: 10px;

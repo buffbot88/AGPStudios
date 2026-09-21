@@ -96,10 +96,10 @@ class Client:
         self.jar = CookieJar()
         self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.jar))
 
-    def req(self, path, method="GET", body=None):
+    def req(self, path, method="GET", body=None, csrf=True):
         data = json.dumps(body).encode() if body is not None else None
         headers = {"Content-Type": "application/json"}
-        if method in ("POST", "PUT", "DELETE"):
+        if csrf and method in ("POST", "PUT", "DELETE"):
             headers["X-CSRF-Token"] = self.csrf()
         request = urllib.request.Request(BASE + path, data=data, method=method, headers=headers)
         try:
@@ -343,6 +343,79 @@ def phase2():
     drift = next((row for row in rows if row.get("source") == "shape-drift"), None)
     assert drift and drift["path"] == "/" and drift["count"] == 2, \
         ("shape-drift source round-trips", drift)
+
+    # -- triage (migration 0006): row resolve + message-level mute ----------
+    error_id = first["id"]
+
+    code, body = admin.req("/api/admin/client-errors?status=resolved")
+    assert code == 200 and (body or {}).get("status") == "resolved", ("status filter echoes back", code, body)
+    assert not [row for row in (body or {}).get("errors") or [] if row["id"] == error_id], \
+        ("an untriaged report is not already resolved", body)
+
+    code, body = admin.req("/api/admin/client-errors?status=nonsense")
+    assert code == 400, ("unknown status filter is rejected", code, body)
+
+    code, body = admin.req("/api/admin/client-errors/status", "POST", {"id": error_id, "status": "resolved"})
+    assert code == 200 and (body or {}).get("status") == "resolved", ("resolve a report", code, body)
+
+    code, body = admin.req("/api/admin/client-errors?status=new")
+    assert not [row for row in (body or {}).get("errors") or [] if row["id"] == error_id], \
+        ("a resolved report leaves the new list", body)
+
+    code, body = admin.req("/api/admin/client-errors?status=resolved")
+    resolved = next((row for row in (body or {}).get("errors") or [] if row["id"] == error_id), None)
+    assert resolved and resolved["triage_status"] == "resolved", ("resolved report is listed", body)
+    assert resolved["triaged_by"] and resolved["triaged_at"] > 0, \
+        ("resolve records who judged it and when", resolved)
+
+    # Reopening removes the judgement entirely, rather than storing 'new'.
+    code, body = admin.req("/api/admin/client-errors/status", "POST", {"id": error_id, "status": "new"})
+    assert code == 200, ("reopen a report", code, body)
+    code, body = admin.req("/api/admin/client-errors?status=new")
+    assert any(row["id"] == error_id for row in (body or {}).get("errors") or []), \
+        ("a reopened report is new again", body)
+
+    # Validation and authorization on the triage writes.
+    code, body = admin.req("/api/admin/client-errors/status", "POST", {"id": error_id, "status": "muted"})
+    assert code == 400, ("row status is only new|resolved", code, body)
+    code, body = admin.req("/api/admin/client-errors/status", "POST", {"id": "not-a-number", "status": "resolved"})
+    assert code == 400, ("non-numeric id rejected", code, body)
+    code, body = admin.req("/api/admin/client-errors/status", "POST", {"id": 99999, "status": "resolved"})
+    assert code == 404, ("unknown report rejected", code, body)
+    code, body = member.req("/api/admin/client-errors/status", "POST", {"id": error_id, "status": "resolved"})
+    assert code == 403, ("members cannot triage reports", code, body)
+    code, body = admin.req("/api/admin/client-errors/status", "POST", {"id": error_id, "status": "resolved"}, csrf=False)
+    assert code == 403, ("triage requires the csrf header", code, body)
+
+    # Muting covers the message: the row already logged, and the next report.
+    code, body = admin.req("/api/admin/client-errors/mute", "POST", {"id": error_id, "muted": True})
+    assert code == 200 and (body or {}).get("message_hash"), ("mute a message", code, body)
+    message_hash = body["message_hash"]
+
+    code, body = admin.req("/api/admin/client-errors?status=muted")
+    assert any(row["id"] == error_id and row["message_hash"] == message_hash
+               for row in (body or {}).get("errors") or []), ("muted report is listed as muted", body)
+
+    code, body = admin.req("/api/admin/client-errors?status=new")
+    assert not [row for row in (body or {}).get("errors") or [] if row["message_hash"] == message_hash], \
+        ("nothing on a muted message shows as new", body)
+
+    # The point of muting: a burst arriving afterwards is muted on arrival.
+    guest.req("/api/telemetry/client-error", "POST", {"source": "boundary", "message": "contract telemetry boom",
+                                                      "detail": "later", "count": 1, "path": "/"})
+    code, body = admin.req("/api/admin/client-errors?status=muted")
+    assert len([row for row in (body or {}).get("errors") or [] if row["message_hash"] == message_hash]) >= 2, \
+        ("a later report of a muted message is muted too", body)
+    code, body = admin.req("/api/admin/client-errors?status=new")
+    assert not [row for row in (body or {}).get("errors") or [] if row["message_hash"] == message_hash], \
+        ("a later report of a muted message is not new", body)
+
+    # Unmuting brings the whole message back, not just the row it was set from.
+    code, body = admin.req("/api/admin/client-errors/mute", "POST", {"id": error_id, "muted": False})
+    assert code == 200 and (body or {}).get("muted") is False, ("unmute a message", code, body)
+    code, body = admin.req("/api/admin/client-errors?status=new")
+    assert [row for row in (body or {}).get("errors") or [] if row["message_hash"] == message_hash], \
+        ("unmuting returns the message to new", body)
 
     # Budget: the 21st report inside the window is refused (documented as 429).
     codes = [guest.req("/api/telemetry/client-error", "POST", {"message": "budget probe"})[0]

@@ -117,6 +117,8 @@ const migrationSummary = obj<{
 const clientError = obj<{
   id: number; source?: string; message?: string; detail?: string; path?: string;
   count?: number; occurrences?: string; user_id?: string; created_at?: number;
+  triage_status?: string; message_hash?: string; triaged_at?: number; triaged_by?: string;
+  muted_at?: number; muted_by?: string;
 }>({
   id: numish,
   source: optional(str, ''),
@@ -127,6 +129,14 @@ const clientError = obj<{
   occurrences: optional(str, '[]'),
   user_id: optional(str, ''),
   created_at: optional(numish, 0),
+  // Triage state (migration 0006). Optional so a server that predates the
+  // columns still validates: the panel falls back to treating rows as new.
+  triage_status: optional(str, 'new'),
+  message_hash: optional(str, ''),
+  triaged_at: optional(numish, 0),
+  triaged_by: optional(str, ''),
+  muted_at: optional(numish, 0),
+  muted_by: optional(str, ''),
 });
 
 /** Endpoints whose whole response shape is known. Keyed by path after `/api`. */
@@ -178,10 +188,11 @@ const byPath: Record<string, Schema<unknown>> = {
     migrations: optional(anyValue, undefined),
   }),
   '/admin/games': obj<{ games: unknown[] }>({ games: list(game) }),
-  '/admin/client-errors': obj<{ errors: unknown[]; page?: number; page_size?: number }>({
+  '/admin/client-errors': obj<{ errors: unknown[]; page?: number; page_size?: number; status?: string }>({
     errors: list(clientError),
     page: optional(numish, 1),
     page_size: optional(numish, 50),
+    status: optional(str, 'new'),
   }),
   '/admin/settings': recordOf(anyValue) as Schema<unknown>,
 };

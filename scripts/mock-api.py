@@ -35,6 +35,7 @@ Run via `npm run mock-api` (alone) or `npm run dev:mock` (alongside vite) from
 apps/ashat-hub-web. See the README's "Frontend with the mock API" section.
 """
 import copy
+import hashlib
 import json
 import os
 import secrets
@@ -107,6 +108,18 @@ INITIAL_USERS = copy.deepcopy(USERS)
 INITIAL_TICKETS = copy.deepcopy(TICKETS)
 MODERATION = []  # user_moderation_history mirror (migration 0004)
 CLIENT_ERRORS = []  # client_error_log mirror (migration 0005)
+CLIENT_ERROR_TRIAGE = {}  # client_error_log.id -> {status, triaged_at, triaged_by} (0006)
+CLIENT_ERROR_MUTES = {}   # message hash -> {message, muted_at, muted_by} (0006)
+
+
+def message_hash(text):
+    """SHA2(message, 256) as the API computes it: lower-hex of the UTF-8 bytes.
+
+    Keep in step with the real API — it mutes by SHA2(message,256) in MySQL, so
+    a hash computed differently here would make the mock and the API disagree
+    about which reports a mute covers.
+    """
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 # Mirrors proxy.py's public telemetry limits so the 429/413 paths are testable.
 CLIENT_ERROR_BUDGET = 20      # keep in sync with proxy.py
@@ -160,6 +173,8 @@ def reset_state():
     RECENT_MUTATIONS.clear()
     MODERATION.clear()
     CLIENT_ERRORS.clear()
+    CLIENT_ERROR_TRIAGE.clear()
+    CLIENT_ERROR_MUTES.clear()
     CLIENT_ERROR_ATTEMPTS.clear()
     APPLIED_MIGRATIONS.clear()
     APPLIED_MIGRATIONS.update(copy.deepcopy(INITIAL_MIGRATIONS))
@@ -350,9 +365,16 @@ class Handler(BaseHTTPRequestHandler):
                 "applied": applied, "pending": pending, "drifted": drifted,
                 "missing": sorted(name for name in APPLIED_MIGRATIONS if name not in known)}
 
-    def duplicate_submit(self, path, form):
-        """True when the same admin mutation for the same user arrived within the window."""
-        key = (path, str(form.get("user_id", "")))
+    def duplicate_submit(self, path, form, intent=""):
+        """True when the same admin mutation for the same target arrived within the window.
+
+        Target is `user_id` for user mutations, `id` for client error triage —
+        otherwise every triage call would share one key and a second error
+        triaged moments later would be rejected as a duplicate. `intent` tells
+        apart different asks of the same target: resolving a report and then
+        reopening it is a change of mind, not a double-click.
+        """
+        key = (path, str(form.get("user_id") or form.get("id") or ""), str(intent))
         now = time.time()
         last = RECENT_MUTATIONS.get(key)
         RECENT_MUTATIONS[key] = now
@@ -475,8 +497,25 @@ class Handler(BaseHTTPRequestHandler):
             user, failure = self.require_admin()
             if failure:
                 return self.reply(*failure)
-            newest = sorted(CLIENT_ERRORS, key=lambda entry: entry["created_at"], reverse=True)
-            return self.reply(200, {"errors": newest[:50], "page": 1, "page_size": 50})
+            status = parse_qs(urlparse(self.path).query).get("status", ["new"])[0]
+            if status not in ("new", "resolved", "muted", "all"):
+                return self.reply(*err("invalid status filter", 400))
+            listed = []
+            for entry in sorted(CLIENT_ERRORS, key=lambda item: (item["created_at"], item["id"]), reverse=True):
+                digest = message_hash(entry["message"])
+                mute = CLIENT_ERROR_MUTES.get(digest)
+                triage = CLIENT_ERROR_TRIAGE.get(entry["id"], {})
+                # A message-wide mute outranks the row's own state, matching
+                # the API's effective-status rule.
+                effective = "muted" if mute else triage.get("status", "new")
+                if status != "all" and effective != status:
+                    continue
+                listed.append(dict(entry, message_hash=digest, triage_status=effective,
+                                   triaged_at=triage.get("triaged_at", 0),
+                                   triaged_by=triage.get("triaged_by", ""),
+                                   muted_at=(mute or {}).get("muted_at", 0),
+                                   muted_by=(mute or {}).get("muted_by", "")))
+            return self.reply(200, {"errors": listed[:50], "page": 1, "page_size": 50, "status": status})
         if path in ("/api/admin/summary", "/api/admin/users", "/api/admin/settings",
                     "/api/admin/database/status", "/api/admin/repo-status",
                     "/api/admin/telemetry", "/api/admin/omega/servers"):
@@ -685,6 +724,56 @@ class Handler(BaseHTTPRequestHandler):
             if failure:
                 return self.reply(*failure)
             return self.reply(200, {"ok": True})
+
+        if path == "/api/admin/client-errors/status":
+            user, failure = self.require_admin()
+            if failure:
+                return self.reply(*failure)
+            if form.get("status") not in ("new", "resolved"):
+                return self.reply(*err("invalid status", 400))
+            if self.duplicate_submit(path, form, form["status"]):
+                return self.reply(*err("duplicate submission; retry shortly", 409))
+            # Malformed id is a 400 and an unknown one a 404, matching proxy.py.
+            try:
+                error_id = int(form.get("id"))
+            except (TypeError, ValueError):
+                return self.reply(*err("invalid client error id", 400))
+            entry = next((item for item in CLIENT_ERRORS if item["id"] == error_id), None)
+            if not entry:
+                return self.reply(*err("client error not found", 404))
+            if form["status"] == "new":
+                CLIENT_ERROR_TRIAGE.pop(entry["id"], None)
+            else:
+                CLIENT_ERROR_TRIAGE[entry["id"]] = {"status": "resolved",
+                                                     "triaged_at": int(time.time()),
+                                                     "triaged_by": user["id"]}
+            return self.reply(200, {"ok": True, "id": entry["id"], "status": form["status"]})
+
+        if path == "/api/admin/client-errors/mute":
+            # Message-level mute: {id, muted} identifies which message via a row,
+            # mirroring how /api/admin/users/ban takes {user_id, banned}.
+            user, failure = self.require_admin()
+            if failure:
+                return self.reply(*failure)
+            muted = bool(form.get("muted", True))
+            if self.duplicate_submit(path, form, "muted" if muted else "unmuted"):
+                return self.reply(*err("duplicate submission; retry shortly", 409))
+            try:
+                error_id = int(form.get("id"))
+            except (TypeError, ValueError):
+                return self.reply(*err("invalid client error id", 400))
+            entry = next((item for item in CLIENT_ERRORS if item["id"] == error_id), None)
+            if not entry:
+                return self.reply(*err("client error not found", 404))
+            digest = message_hash(entry["message"])
+            if muted:
+                CLIENT_ERROR_MUTES[digest] = {"message": entry["message"][:400],
+                                              "muted_at": int(time.time()),
+                                              "muted_by": user["id"]}
+            else:
+                CLIENT_ERROR_MUTES.pop(digest, None)
+            return self.reply(200, {"ok": True, "id": entry["id"], "muted": muted,
+                                    "message_hash": digest})
 
         if path == "/api/admin/users/role":
             user, failure = self.require_admin()

@@ -207,6 +207,20 @@ never re-reported. The admin CP's System tab renders the result in a **Client
 errors** panel, which reads `GET /api/admin/client-errors`; rows older than 30
 days are pruned opportunistically.
 
+That panel is triaged, not just read (migration `0006`): **Mark resolved**
+records a judgement on one report and removes it from the default **New** view,
+while **Mute this message** covers every report of the same message — the rows
+already logged *and* every burst that arrives later, until it is unmuted. That
+distinction is the reason muting is message-level: one row is one reported burst,
+so muting a row would do nothing about the next one. Mutes key on
+`SHA2(message, 256)` and are applied when the list is read, so they also survive
+the 30-day retention pass (the mutes table is never pruned). The panel's
+**New / Resolved / Muted / All** chips are that filter, the filter defaults to
+New, and both writes are audited (`client_error.status.updated`,
+`client_error.message.muted`). They share the admin idempotency guard, keyed by
+report id *and* the requested state — so resolving a report and immediately
+reopening it is a change of mind, not a duplicate submission.
+
 Browser source: by default the suite uses the installed Chrome channel, so no
 browser download is needed. In CI, run `npx playwright install chromium` and set
 `E2E_CHANNEL=chromium`.

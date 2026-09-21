@@ -34,7 +34,9 @@ The Python service is the public API at `/api/*`; Rust is not part of the contra
 | Method | Path | Success | Purpose |
 |---|---|---:|---|
 | POST | `/api/admin/audit/prune` | 200 | JSON `{before_id: int}`; deletes all audit events with `id < before_id`, then records an `admin.audit.pruned` event. Returns `{ok, deleted}`. |
-| GET | `/api/admin/client-errors` | 200/403 | Reported client errors, newest first, paginated |
+| GET | `/api/admin/client-errors` | 200/403 | Reported client errors, newest first, paginated; `status` filter below |
+| POST | `/api/admin/client-errors/status` | 200 | JSON `{id, status: 'new'|'resolved'}`; row-level triage |
+| POST | `/api/admin/client-errors/mute` | 200 | JSON `{id, muted: bool}`; message-level mute |
 | POST | `/api/admin/users/role` | 200 | JSON `{user_id, role}`; see request-body reference below |
 | POST | `/api/admin/users/ban` | 200 | JSON `{user_id, banned: bool}`; see request-body reference below |
 | POST | `/api/admin/users/status` | 200 | JSON `{user_id, status}`; see request-body reference below |
@@ -68,6 +70,9 @@ applies nothing. This protects against double-clicks and retried POSTs creating
 duplicate audit events. Clients should treat 409 on these endpoints as "already
 applied" and simply re-fetch the user list. Different endpoints and different
 `user_id`s never collide with each other.
+
+The two client-error triage endpoints share that guard, keyed by `id` instead of
+`user_id` — so two different reports triaged in quick succession do not collide.
 
 #### POST `/api/admin/users/role`
 
@@ -346,23 +351,66 @@ than validating it:
 #### GET `/api/admin/client-errors`
 
 Requires an admin session (403 otherwise). Returns up to 50 reports, newest
-first:
+first, filtered by `status`:
+
+| `status` | Rows returned |
+|---|---|
+| `new` (default) | Not resolved and not covered by a message mute |
+| `resolved` | Row-level triage marked resolved |
+| `muted` | Covered by a message-level mute (whatever the row state) |
+| `all` | Everything, no filter |
+
+Any other value returns 400 `invalid status filter`. Rows carry their effective
+triage state, so a client never has to derive it:
 
 ```json
 {
   "errors": [{
     "id": 12, "source": "boundary", "message": "...", "detail": "...",
     "path": "/", "count": 3, "occurrences": "[\"22:24:04 · ...\"]",
-    "user_id": "", "user_agent": "Mozilla/5.0 ...", "created_at": 1763835844
+    "user_id": "", "user_agent": "Mozilla/5.0 ...", "created_at": 1763835844,
+    "triage_status": "new", "message_hash": "9f2c…", "triaged_at": 0,
+    "triaged_by": "", "muted_at": 0, "muted_by": ""
   }],
-  "page": 1, "page_size": 50
+  "page": 1, "page_size": 50, "status": "new"
 }
 ```
 
 `occurrences` is a JSON-encoded string (TEXT column), `created_at` is unix
-seconds, and `user_id` is empty for signed-out visitors. This is client-reported
-log data: it may repeat, and it must never be treated as fact or joined against
-users. The admin CP renders it in the System tab's **Client errors** panel.
+seconds, and `user_id` is empty for signed-out visitors. `triage_status` is
+`new`, `resolved`, or `muted`; **a message mute outranks the row's own state**,
+which is why a resolved row whose message is muted reports `muted`.
+`message_hash` is `SHA2(message, 256)` — it identifies the message, not the row.
+This is client-reported log data: it may repeat, and it must never be treated as
+fact or joined against users. The admin CP renders it in the System tab's
+**Client errors** panel.
+
+#### POST `/api/admin/client-errors/status`
+
+```json
+{ "id": 12, "status": "resolved" | "new" }
+```
+
+Row-level triage (migration 0006). `resolved` records the judgement for that one
+report; `new` removes it, reopening the report. Any other value returns 400
+`invalid status`, a non-numeric `id` returns 400 `invalid client error id`, and an
+id with no log row returns 404 `client error not found`. Audit event:
+`client_error.status.updated`, targeted at the report rather than a user (so no
+moderation-history entry is written).
+
+#### POST `/api/admin/client-errors/mute`
+
+```json
+{ "id": 12, "muted": true | false }
+```
+
+Message-level mute. The row only identifies **which message** to mute — the mute
+then covers every report of that message, including ones already logged and ones
+arriving later, until it is unmuted. `muted` defaults to `true`, mirroring
+`/api/admin/users/ban`. Mutes key on `SHA2(message, 256)` and are applied when the
+list is read, so they also survive the log's 30-day retention pass; the mutes
+table is deliberately never pruned. Audit event: `client_error.message.muted` /
+`client_error.message.unmuted`.
 
 ## Frontend payload validation
 
