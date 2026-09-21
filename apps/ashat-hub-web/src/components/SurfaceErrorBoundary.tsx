@@ -1,5 +1,6 @@
 import { Component } from 'react';
 import type { ErrorInfo, ReactNode } from 'react';
+import { reportAppError } from './globalErrors';
 
 type Props = {
   /** Rendered when a child throws. */
@@ -31,6 +32,11 @@ export class SurfaceErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error('[AGP] Surface crashed:', error, info.componentStack);
+    // Route the crash through the shared error reporter so it also raises a
+    // toast: a degraded surface is easy to miss if you aren't watching the
+    // panel, and the toast is what points at the real message. The component
+    // stack becomes the toast's detail line, naming what actually threw.
+    reportAppError(error, this.props.fallbackTitle, info.componentStack ?? '');
   }
 
   private retry = () => {

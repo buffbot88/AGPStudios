@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
-import { API, request, safeList, safeNumber, safeText, safeTime } from './api';
+import { API, clearShapeDrifts, request, safeList, safeNumber, safeText, safeTime } from './api';
 import { confirmModal, confirmToast, toast } from './toast';
 import { maybeCrash } from './devCrash';
 import { PosterImage } from './home/PosterImage';
+import { UnexpectedDataNotice, UnexpectedDataPanel } from './UnexpectedDataNotice';
 
 type User = { id: string; username: string; email: string; display_name: string; role: string };
 type AdminUser = { id: string; username: string; email: string; display_name: string; role: string; is_active: number; banned_at?: number | null; email_verified_at?: string | null };
@@ -21,6 +22,10 @@ type DatabaseStatus = { database: string; version: string; paws?: { status?: str
 type AdminTelemetry = { servers: { id: string; label: string; online: boolean; active_requests: number; requests_last_5m: number; generation_tokens_per_second: number; prompt_tokens_per_second: number; total_completion_tokens: number; queue_depth: number; queue_limit: number }[]; updated_at: number };
 type OmegaServer = { id: string; label: string; online: boolean; ready: boolean; workers?: number; max_workers: number };
 type AdminGame = { slug: string; title: string; summary: string; status: string; tags: string[]; url: string; poster: string; featured: boolean; sort_order?: number };
+type ClientError = {
+  id: number; source?: string; message?: string; detail?: string; path?: string;
+  count?: number; occurrences?: string; user_id?: string; created_at?: number;
+};
 type AdminTab = 'overview' | 'users' | 'games' | 'telemetry' | 'system';
 type RepoPair = { live: string; repo: string; state: string };
 type RepoStatus = { ashathub: RepoPair };
@@ -78,6 +83,26 @@ export function AdminSurface({ user }: { user: User | null }) {
   const [selectedUser, setSelectedUser] = useState<AdminUser | null>(null);
   const [moderation, setModeration] = useState<ModerationEvent[]>([]);
   const [moderationError, setModerationError] = useState<string | null>(null);
+  // True once the first load has answered, so "arrived but unusable" renders a
+  // notice instead of the panels' Loading… placeholders forever.
+  const [loaded, setLoaded] = useState(false);
+  const [clientErrors, setClientErrors] = useState<ClientError[]>([]);
+  const [clientErrorsError, setClientErrorsError] = useState<string | null>(null);
+  const [clientErrorsBusy, setClientErrorsBusy] = useState(false);
+
+  const loadClientErrors = useCallback(async () => {
+    setClientErrorsBusy(true);
+    try {
+      const data = await request<{ errors: ClientError[] }>(`${API}/admin/client-errors`);
+      setClientErrors(safeList<ClientError>(data.errors));
+      setClientErrorsError(null);
+    } catch (reason) {
+      setClientErrors([]);
+      setClientErrorsError(reason instanceof Error ? reason.message : 'Client errors unavailable');
+    } finally {
+      setClientErrorsBusy(false);
+    }
+  }, []);
 
   const loadModeration = useCallback(async (userId: string) => {
     try {
@@ -101,21 +126,26 @@ export function AdminSurface({ user }: { user: User | null }) {
     if (!user || user.role.toLowerCase() !== 'admin') return;
     try {
       const search = query.trim() ? `?q=${encodeURIComponent(query.trim())}` : '';
-      const [summaryResult, usersResult, databaseResult, settingsResult, repoResult, gamesResult] = await Promise.allSettled([
+      const [summaryResult, usersResult, databaseResult, settingsResult, repoResult, gamesResult, clientErrorsResult] = await Promise.allSettled([
         request<AdminSummary>(`${API}/admin/summary`),
         request<{ users: AdminUser[] }>(`${API}/admin/users${search}`),
         request<DatabaseStatus>(`${API}/admin/database/status`),
         request<Record<string, string | boolean>>(`${API}/admin/settings`),
         request<RepoStatus>(`${API}/admin/repo-status`),
         request<{ games: AdminGame[] }>(`${API}/admin/games`),
+        request<{ errors: ClientError[] }>(`${API}/admin/client-errors`),
       ]);
+      // Fresh payload: the notice describes the latest response, not history
+      // (including placeholders the loading render legitimately coerced).
+      clearShapeDrifts();
       if (summaryResult.status === 'fulfilled') setSummary(summaryResult.value);
       if (usersResult.status === 'fulfilled') setUsers(safeList(usersResult.value.users));
       if (databaseResult.status === 'fulfilled') setDatabase(databaseResult.value);
       if (settingsResult.status === 'fulfilled') setSettings(settingsResult.value);
       if (repoResult.status === 'fulfilled') setRepoStatus(repoResult.value);
       if (gamesResult.status === 'fulfilled') setGames(safeList<AdminGame>(gamesResult.value.games));
-      const firstRejected = [summaryResult, usersResult, databaseResult, settingsResult, repoResult, gamesResult].find(
+      if (clientErrorsResult.status === 'fulfilled') setClientErrors(safeList<ClientError>(clientErrorsResult.value.errors));
+      const firstRejected = [summaryResult, usersResult, databaseResult, settingsResult, repoResult, gamesResult, clientErrorsResult].find(
         (outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected',
       );
       if (firstRejected) {
@@ -125,6 +155,7 @@ export function AdminSurface({ user }: { user: User | null }) {
         setError(null);
       }
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Admin data unavailable'); }
+    finally { setLoaded(true); }
   }, [query, user]);
 
   useEffect(() => { void load(); }, [load]);
@@ -246,6 +277,7 @@ export function AdminSurface({ user }: { user: User | null }) {
         <a className="adm-back-link" href="/">← Back to AGP Studios</a>
       </div>
       {error && <p className="workspace-error" role="alert">{error}</p>}
+      <UnexpectedDataNotice onRetry={() => { setLoaded(false); void load(); }} />
 
       <nav className="adm-tabs" aria-label="Admin navigation">
         {tabs.map((t) => (
@@ -257,7 +289,7 @@ export function AdminSurface({ user }: { user: User | null }) {
       {tab === 'users' && <UsersTab users={users} query={query} onQueryChange={setQuery} onSearch={load} onSelectUser={selectUser} selectedUser={selectedUser} busy={busy} currentUser={user} onUpdateUser={updateUser} onBanUser={banUser} onDeleteUser={deleteUser} moderation={moderation} moderationError={moderationError} onRefreshModeration={() => selectedUser && void loadModeration(selectedUser.id)} />}
       {tab === 'games' && <GamesTab games={games} busy={busy} onUpdatePoster={updateGamePoster} />}
       {tab === 'telemetry' && <TelemetryTab telemetry={telemetry} servers={omegaServers} busy={busy} onAction={telemetryAction} onUpdate={codingAgentsUpdate} />}
-      {tab === 'system' && <SystemTab database={database} settings={settings} onPush={pushGithub} onUpdate={systemUpdate} status={repoStatus} busy={busy} onApplyMigrations={applyMigrations} />}
+      {tab === 'system' && <SystemTab loaded={loaded} database={database} settings={settings} onPush={pushGithub} onUpdate={systemUpdate} status={repoStatus} busy={busy} onApplyMigrations={applyMigrations} clientErrors={clientErrors} clientErrorsError={clientErrorsError} clientErrorsBusy={clientErrorsBusy} onRefreshClientErrors={loadClientErrors} />}
     </section>
   );
 }
@@ -315,17 +347,23 @@ function OverviewTab({ summary, onNavigate }: { summary: AdminSummary | null; on
         <div className="adm-metric-card">
           <span className="adm-metric-label">Total Users</span>
           <strong className="adm-metric-value">{summary ? safeNumber(summary.users).toLocaleString() : '—'}</strong>
-          <small className="adm-metric-sub">{safeNumber(summary?.active_users)} active · {safeNumber(summary?.disabled_users)} disabled</small>
+          {/* Guarded like the value above: coercing a not-yet-loaded summary is
+              a placeholder, and a placeholder is not shape drift. */}
+          <small className="adm-metric-sub">
+            {summary ? `${safeNumber(summary.active_users)} active · ${safeNumber(summary.disabled_users)} disabled` : '—'}
+          </small>
         </div>
         <div className="adm-metric-card">
           <span className="adm-metric-label">Live Deployments</span>
           <strong className="adm-metric-value">{summary ? safeNumber(summary.active_deploys).toLocaleString() : '—'}</strong>
-          <small className="adm-metric-sub">{safeNumber(summary?.active_projects)} projects</small>
+          <small className="adm-metric-sub">{summary ? `${safeNumber(summary.active_projects)} projects` : '—'}</small>
         </div>
         <div className="adm-metric-card">
           <span className="adm-metric-label">Open Tickets</span>
           <strong className="adm-metric-value">{summary ? safeNumber(summary.open_tickets).toLocaleString() : '—'}</strong>
-          <small className="adm-metric-sub">{safeNumber(summary?.open_tickets) === 0 ? 'All clear' : 'Needs attention'}</small>
+          <small className="adm-metric-sub">
+            {summary ? (safeNumber(summary.open_tickets) === 0 ? 'All clear' : 'Needs attention') : '—'}
+          </small>
         </div>
       </div>
       <div className="adm-overview-actions">
@@ -434,20 +472,25 @@ function UserDetailPanel({ user: u, busy, currentUser, onUpdate, onBan, onDelete
 // ── Migrations panel (System tab) ──
 
 /**
- * Applied/pending migration panel. Reads the `migrations` object carried by
- * the existing /api/admin/database/status response (no extra fetch) and runs
- * pending files through POST /api/admin/database/migrations/apply.
+ * Applied/pending migrations, read from the database/status response the System tab already loads.
  */
-function MigrationsPanel({ migrations, busy, onApplyMigrations }: {
-  migrations: MigrationSummary | undefined; busy: boolean;
+function MigrationsPanel({ loaded, migrations, busy, onApplyMigrations }: {
+  loaded: boolean; migrations: MigrationSummary | undefined; busy: boolean;
   onApplyMigrations: (baseline: boolean) => void;
 }) {
   if (!migrations) {
     return (
       <section className="adm-panel adm-migrations">
         <span className="eyebrow">Schema migrations</span>
-        <h3>Loading…</h3>
-        <p className="muted">Migration state arrives with the database status.</p>
+        <h3>{loaded ? 'Not reported' : 'Loading…'}</h3>
+        {/* A status response that arrived without a migrations object is drift,
+            not a pending request — saying "Loading…" there never resolves. */}
+        <p className="muted">
+          {loaded
+            ? 'The database status response carried no migration state, so pending files can\u2019t be listed. Use the migration runner on the host.'
+            : 'Migration state arrives with the database status.'}
+        </p>
+        {loaded && <UnexpectedDataPanel what="The migration summary" />}
       </section>
     );
   }
@@ -484,7 +527,7 @@ function MigrationsPanel({ migrations, busy, onApplyMigrations }: {
 
       {!migrations.tracked && <p className="adm-migrations-note">
         This database has no migration history yet. If it was migrated by hand, baseline it once so
-        existing files are recorded without being re-run (migration 0001 is not idempotent).
+        existing files are recorded as applied instead of executed.
       </p>}
       {migrations.error && <p className="workspace-error" role="alert">{migrations.error}</p>}
 
@@ -510,7 +553,7 @@ function MigrationsPanel({ migrations, busy, onApplyMigrations }: {
           <ul className="adm-migration-list">
             {applied.map((entry) => <li key={safeText(entry.filename)}>
               <code>{safeText(entry.filename)}</code>
-              <small>{safeNumber(entry.statements)} stmt · {safeTime(entry.applied_at)}</small>
+              <small>{safeNumber(entry.statements)} stmt · {entry.applied_at ? safeTime(entry.applied_at) : 'unknown'}</small>
             </li>)}
             {applied.length === 0 && <li><small className="muted">None recorded.</small></li>}
           </ul>
@@ -530,16 +573,67 @@ function MigrationsPanel({ migrations, busy, onApplyMigrations }: {
   );
 }
 
+// ── Client errors panel (System tab) ──
+
+/**
+ * Uncaught browser failures reported by visitors. Reported by the client, so it is a signal to investigate, never a fact to trust.
+ */
+function ClientErrorsPanel({ errors, error, busy, onRefresh }: {
+  errors: ClientError[]; error: string | null; busy: boolean; onRefresh: () => void;
+}) {
+  return (
+    <section className="adm-panel adm-client-errors">
+      <div className="adm-migrations-heading">
+        <div>
+          <span className="eyebrow">Client errors</span>
+          <h3>{errors.length ? `${errors.length} reported` : 'Nothing reported'}</h3>
+        </div>
+        <button type="button" className="secondary-button" onClick={onRefresh} disabled={busy}>
+          {busy ? 'Refreshing…' : 'Refresh'}
+        </button>
+      </div>
+      <p className="adm-client-errors-note">
+        Uncaught failures from visitors&apos; browsers, newest first. Entries are client-reported, so they may repeat
+        or be junk — the count shows how many occurrences arrived in one burst.
+      </p>
+      {error && <p className="workspace-error" role="alert">{error}</p>}
+      <ul className="adm-client-error-list">
+        {errors.map((entry) => (
+          <li key={safeNumber(entry.id)}>
+            <div className="adm-client-error-head">
+              <span className={`adm-badge${safeText(entry.source) === 'boundary' ? ' err' : ''}`}>
+                {safeText(entry.source) || 'unknown'}
+              </span>
+              <strong>{safeText(entry.message)}</strong>
+              {safeNumber(entry.count) > 1 && <span className="adm-client-error-count">×{safeNumber(entry.count)}</span>}
+            </div>
+            {safeText(entry.detail) && <small className="adm-client-error-detail">{safeText(entry.detail)}</small>}
+            <small className="adm-moderation-meta">
+              {safeText(entry.path) || '/'} · {entry.created_at ? safeTime(entry.created_at) : 'unknown'}
+              {safeText(entry.user_id) ? ` · user ${safeText(entry.user_id)}` : ' · signed out'}
+            </small>
+          </li>
+        ))}
+        {errors.length === 0 && !error && <li className="adm-empty">No client errors reported.</li>}
+      </ul>
+    </section>
+  );
+}
+
 // ── System Tab ──
 
-function SystemTab({ database, settings, onPush, onUpdate, status, busy, onApplyMigrations }: {
+function SystemTab({ loaded, database, settings, onPush, onUpdate, status, busy, onApplyMigrations, clientErrors, clientErrorsError, clientErrorsBusy, onRefreshClientErrors }: {
+  loaded: boolean;
   database: DatabaseStatus | null; settings: Record<string, string | boolean> | null;
   onPush: () => void; onUpdate: () => void; status: RepoStatus | null;
   busy: boolean; onApplyMigrations: (baseline: boolean) => void;
+  clientErrors: ClientError[]; clientErrorsError: string | null; clientErrorsBusy: boolean;
+  onRefreshClientErrors: () => void;
 }) {
   return (
     <div className="adm-system">
-      <MigrationsPanel migrations={database?.migrations} busy={busy} onApplyMigrations={onApplyMigrations} />
+      <MigrationsPanel loaded={loaded} migrations={database?.migrations} busy={busy} onApplyMigrations={onApplyMigrations} />
+      <ClientErrorsPanel errors={clientErrors} error={clientErrorsError} busy={clientErrorsBusy} onRefresh={onRefreshClientErrors} />
       <div className="adm-system-grid">
         <section className="adm-panel">
           <span className="eyebrow">Database</span>

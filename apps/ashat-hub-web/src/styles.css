@@ -1215,8 +1215,69 @@ h3 {
   font-size: 12px;
 }
 
+.toast-body {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.toast.expanded {
+  align-items: flex-start;
+}
+
 .toast-message {
   min-width: 0;
+}
+
+.toast-count {
+  margin-left: 7px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(221, 97, 89, 0.18);
+  color: #f0a49e;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.toast-details-toggle {
+  justify-self: start;
+  padding: 0;
+  color: var(--text-muted);
+  background: none;
+  border: 0;
+  border-bottom: 1px solid rgba(159, 180, 189, 0.4);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+}
+
+.toast-details-toggle:hover {
+  color: var(--text);
+  border-bottom-color: rgba(180, 215, 230, 0.6);
+}
+
+.toast-details {
+  display: grid;
+  gap: 3px;
+  max-width: min(78vw, 460px);
+  max-height: 132px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 8px 10px;
+  list-style: none;
+  background: rgba(6, 18, 27, 0.55);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--text-muted);
+}
+
+.toast-details li {
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .toast-actions {
@@ -2040,6 +2101,148 @@ h3 {
 
 .adm-game-info small {
   color: var(--text-muted);
+}
+
+/* ---------- Unexpected data notice ---------- */
+.data-notice {
+  display: flex;
+  gap: 12px;
+  margin: 0 0 18px;
+  padding: 13px 16px;
+  background: rgba(241, 194, 91, 0.07);
+  border: 1px solid rgba(241, 194, 91, 0.32);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm);
+}
+
+.data-notice-mark {
+  color: var(--gold-bright);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.data-notice-body {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.data-notice-body strong {
+  font-size: 0.86rem;
+  letter-spacing: 0.01em;
+}
+
+.data-notice-body p {
+  margin: 0;
+  max-width: 74ch;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+
+.data-notice-details {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 8px 10px;
+  list-style: none;
+  background: rgba(6, 18, 27, 0.5);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+
+.data-notice-details li {
+  display: grid;
+  gap: 2px;
+  font-size: 0.74rem;
+  line-height: 1.5;
+}
+
+.data-notice-details code {
+  color: var(--gold-bright);
+  font-family: ui-monospace, monospace;
+}
+
+.data-notice-details span {
+  color: var(--text-muted);
+}
+
+.data-notice-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 2px;
+}
+
+.data-notice-toggle {
+  padding: 0;
+  color: var(--text-muted);
+  background: none;
+  border: 0;
+  border-bottom: 1px solid rgba(159, 180, 189, 0.4);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+}
+
+.data-notice-toggle:hover {
+  color: var(--text);
+}
+
+.adm-client-errors-note {
+  margin: 10px 0 14px;
+  max-width: 68ch;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+
+.adm-client-error-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.adm-client-error-list li {
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.adm-client-error-head {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+
+.adm-client-error-head strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 0.86rem;
+}
+
+.adm-client-error-count {
+  margin-left: auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(241, 194, 91, 0.16);
+  color: var(--gold-bright);
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.adm-client-error-detail {
+  color: var(--text-muted);
+  font-family: ui-monospace, monospace;
+  font-size: 0.74rem;
+  overflow-wrap: anywhere;
 }
 
 .adm-game-poster-input {

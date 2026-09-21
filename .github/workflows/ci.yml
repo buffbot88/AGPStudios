@@ -1,0 +1,150 @@
+name: CI
+
+# Every push, on every branch — not just main: a feature branch should learn that
+# it broke the portal before it is opened as a PR. Pull requests run it too, so
+# the checks are reported on the PR itself.
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # Build and contract checks: the portal must compile, and every shape the
+  # frontend reads must still match what the API actually returns.
+  contracts:
+    name: Build and check API contracts
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install portal dependencies
+        working-directory: apps/ashat-hub-web
+        run: npm install --no-audit --no-fund
+
+      - name: Build portal
+        working-directory: apps/ashat-hub-web
+        run: npm run build
+
+      - name: Check frontend endpoint documentation
+        working-directory: apps/ashat-hub-web
+        run: npm run test:endpoint-docs
+
+      - name: Start mock API
+        run: |
+          PORT=3110 python3 scripts/mock-api.py --no-verification > "$RUNNER_TEMP/mock-api.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/mock-api.pid"
+          ready=false
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:3110/__config > /dev/null; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" != true ]; then
+            echo 'Mock API did not become ready.' >&2
+            cat "$RUNNER_TEMP/mock-api.log" >&2
+            exit 1
+          fi
+
+      - name: Run frontend contract checks
+        working-directory: apps/ashat-hub-web
+        env:
+          ASHAT_TEST_BASE: http://127.0.0.1:3110
+        run: npm run test:contracts
+
+      # Both suites mutate the same in-memory state — registration, ban/unban,
+      # account deletion — and the API smoke suite asserts counts that only hold
+      # on seed data. Run back to back without this, its moderation-timeline
+      # assertion counts the frontend suite's earlier ban/unban as its own.
+      - name: Reset mock API state between suites
+        run: curl --fail --silent --request POST http://127.0.0.1:3110/__reset
+
+      - name: Run API contract smoke suite against the mock
+        env:
+          ASHAT_TEST_BASE: http://127.0.0.1:3110
+          ASHAT_TEST_MUTATIONS: '1'
+        run: python3 services/python-api/test_contracts.py
+
+      - name: Show mock API log on failure
+        if: failure()
+        run: cat "$RUNNER_TEMP/mock-api.log" || true
+
+      - name: Stop mock API
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/mock-api.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/mock-api.pid")" 2>/dev/null || true
+          fi
+
+  # Browser checks, in both data modes. The Playwright config boots the mock and
+  # Vite itself (`npm run dev:mock` on its own ports), so there is no separate
+  # "start the mock" step here.
+  e2e:
+    name: Playwright against the mock API
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install portal dependencies
+        working-directory: apps/ashat-hub-web
+        run: npm install --no-audit --no-fund
+
+      - name: Install Playwright browser
+        working-directory: apps/ashat-hub-web
+        run: npx playwright install --with-deps chromium
+
+      - name: Build portal
+        working-directory: apps/ashat-hub-web
+        run: npm run build
+
+      - name: E2E suite (healthy mock)
+        working-directory: apps/ashat-hub-web
+        env:
+          E2E_CHANNEL: chromium
+        run: npx playwright test
+
+      # Same stack, started with the mock in hostile mode: wrong-shape payloads
+      # on every endpoint at once. See HOSTILE_SHAPES in scripts/mock-api.py.
+      - name: E2E suite (hostile mock shapes)
+        working-directory: apps/ashat-hub-web
+        env:
+          E2E_CHANNEL: chromium
+          E2E_HOSTILE: '1'
+        run: npx playwright test drift-resilience
+
+      - name: Upload failure traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces
+          path: apps/ashat-hub-web/test-results
+          retention-days: 7
+          if-no-files-found: ignore

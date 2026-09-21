@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { API, csrfToken, errorMessage, safeText, type ApiError } from './api';
 import { getSession, onSessionChange, setSessionUser, type SessionUser } from './session';
 
@@ -250,14 +251,23 @@ export function AuthPanel({ onChange, onNavigate, embedded = false }: { onChange
   return (
     <>
       <button type="button" className="auth-sign-in" onClick={() => { openMode('login'); setIsOpen(true); }}>Sign in</button>
-      {isOpen && <div className="auth-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setIsOpen(false); }}>
-        <section className="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-modal-title" onMouseDown={(event) => event.stopPropagation()}>
-          <div className="auth-modal-header"><span className="eyebrow">AGP Studios</span><button type="button" className="auth-modal-close" aria-label="Close sign in dialog" onClick={() => setIsOpen(false)}>×</button></div>
-          <h2 id="auth-modal-title">{title}</h2>
-          <p className="auth-card-sub">{sub}</p>
-          {form}
-        </section>
-      </div>}
+      {/* Portalled to <body> on purpose. This panel renders inside the header,
+          and the header sets `backdrop-filter` — which makes it the containing
+          block for `position: fixed` descendants. Left in place, the backdrop
+          was sized to the 76px header instead of the viewport and the modal
+          was centred on it, putting its top half (the Sign in/Register tabs
+          and the close button) off-screen where it could not be clicked. */}
+      {isOpen && createPortal(
+        <div className="auth-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setIsOpen(false); }}>
+          <section className="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-modal-title" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="auth-modal-header"><span className="eyebrow">AGP Studios</span><button type="button" className="auth-modal-close" aria-label="Close sign in dialog" onClick={() => setIsOpen(false)}>×</button></div>
+            <h2 id="auth-modal-title">{title}</h2>
+            <p className="auth-card-sub">{sub}</p>
+            {form}
+          </section>
+        </div>,
+        document.body,
+      )}
     </>
   );
 }

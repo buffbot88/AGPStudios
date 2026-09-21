@@ -296,6 +296,60 @@ def phase2():
     code, body = member.req("/api/auth/session")
     assert (body or {}) == {"authenticated": False}, "session dead after account deletion"
 
+    # -- client error telemetry: public write, admin read --------------------
+    guest = Client()
+    report = {"source": "window.onerror", "message": "contract telemetry boom",
+              "detail": "Support couldn't load · MemberSurfaces (x.tsx:1:1)", "count": 3,
+              "occurrences": ["22:24:04 · a", "22:24:02 · b"], "path": "/?utm=junk#frag"}
+    code, body = guest.req("/api/telemetry/client-error", "POST", report)
+    assert code == 202 and (body or {}).get("logged") is True, ("telemetry accepted", code, body)
+
+    # Signed-in reports carry the user id, which the client never sends.
+    code, body = admin.req("/api/telemetry/client-error", "POST",
+                           dict(report, message="contract telemetry signed in"))
+    assert code == 202, ("telemetry accepts a session", code, body)
+
+    code, body = guest.req("/api/telemetry/client-error", "POST", {"source": "boundary"})
+    assert code == 400, ("telemetry requires a message", code, body)
+
+    code, body = guest.req("/api/telemetry/client-error", "POST", {"message": "x" * 9000})
+    assert code == 413, ("telemetry caps body size", code, body)
+
+    code, body = guest.req("/api/telemetry/client-error", "POST", "not-an-object")
+    assert code == 400, ("telemetry rejects a non-object body", code, body)
+
+    # Shape drift uses the same endpoint with its own source tag.
+    code, body = guest.req("/api/telemetry/client-error", "POST",
+                           {"source": "shape-drift", "message": "safeNumber expected finite number, got string",
+                            "detail": "account summary · MemberSurfaces.tsx:135", "count": 2, "path": "/#account"})
+    assert code == 202, ("telemetry accepts shape-drift reports", code, body)
+
+    code, body = admin.req("/api/admin/client-errors")
+    assert code == 200, ("admin client-errors list", code, body)
+    rows = (body or {}).get("errors") or []
+    assert (body or {}).get("page_size") == 50, ("client-errors pagination", body)
+    first = next((row for row in rows if row.get("message") == "contract telemetry boom"), None)
+    assert first, ("reported error is readable by an admin", rows[:3])
+    assert all(key in first for key in ("id", "source", "message", "detail", "path", "count",
+                                        "occurrences", "user_id", "user_agent", "created_at")), \
+        ("client-error row shape", first)
+    assert first["path"] == "/", ("query string and fragment stripped from path", first["path"])
+    assert first["count"] == 3 and first["user_id"] == "", \
+        ("count kept, signed-out report has no user", first["count"], first["user_id"])
+    assert json.loads(first["occurrences"]) == ["22:24:04 · a", "22:24:02 · b"], \
+        ("occurrences round-trip as JSON text", first["occurrences"])
+    signed_in = next((row for row in rows if row.get("message") == "contract telemetry signed in"), None)
+    assert signed_in and signed_in["user_id"], ("signed-in report carries the user id", signed_in)
+    drift = next((row for row in rows if row.get("source") == "shape-drift"), None)
+    assert drift and drift["path"] == "/" and drift["count"] == 2, \
+        ("shape-drift source round-trips", drift)
+
+    # Budget: the 21st report inside the window is refused (documented as 429).
+    codes = [guest.req("/api/telemetry/client-error", "POST", {"message": "budget probe"})[0]
+             for _ in range(30)]
+    assert 429 in codes, ("telemetry rate limits per IP", codes[:5], codes.count(429))
+    assert codes.count(202) <= 25, ("budget is bounded", codes.count(202))
+
     print("phase 2 contract smoke tests: PASS")
 
 if __name__ == "__main__":

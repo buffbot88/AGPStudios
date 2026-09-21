@@ -30,6 +30,7 @@ __pycache__/
 # Playwright artifacts
 test-results/
 playwright-report/
+blob-report/
 
 # Editor and OS junk
 .vscode/

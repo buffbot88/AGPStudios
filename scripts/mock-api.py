@@ -19,12 +19,17 @@ Behavior notes:
   mirror services/python-api/proxy.py, including its quirks (POST
   /admin/users/ban accepts `{user_id, banned}`; /admin/users/status takes
   `{user_id, status}`; PUT /api/account requires username/email/display_name).
-- Failure injection is controlled through unauthenticated loopback-only
-  `/__config` and `/__reset`: add latency with `{"latency_ms": 250}`, return
-  an injected error with `{"error_status": 503, "error_paths": ["/api/news"]}`,
-  and make it one-shot with `{"error_once": true}`. Reset restores seed data,
-  clears sessions, and clears all controls; `{"verification_required": false}`
-  may be included in the reset body.
+- Runtime controls are unauthenticated but loopback-only. `POST /__config`
+  adds latency with `{"latency_ms": 250}`, returns an injected error with
+  `{"error_status": 503, "error_paths": ["/api/news"]}`, makes it one-shot with
+  `{"error_once": true}`, and serves deliberately wrong-shape payloads with
+  `{"hostile": ["games"]}` (or start with `--hostile[=keys]`, see HOSTILE_SHAPES)
+  so drift-resilience tests need no per-test stubs. `GET /__codes` returns the
+  pending verification tokens — the portal has no token-entry screen, so that is
+  how a test completes the emailed link. `POST /__reset` restores seed data,
+  clears sessions, and returns controls to how the process was started, so
+  `--no-verification` and `--hostile` survive it; `{"verification_required":
+  false}` may be included in the reset body.
 
 Run via `npm run mock-api` (alone) or `npm run dev:mock` (alongside vite) from
 apps/ashat-hub-web. See the README's "Frontend with the mock API" section.
@@ -41,8 +46,14 @@ from urllib.parse import parse_qs, urlparse
 
 # Dev-only controls. /__config and /__reset intentionally require no auth:
 # this server binds to loopback and is never used as a production API.
+# Controls the process was started with. `/__reset` restores these rather than
+# the bare defaults, so a flag like --no-verification or --hostile survives a
+# reset instead of silently switching the mock back to normal behavior.
+STARTUP_CONTROLS = {}
+
 DEFAULT_CONTROLS = {
     "verification_required": True,
+    "hostile": [],
     "latency_ms": 0,
     "error_status": 0,
     "error_message": "Injected mock API failure",
@@ -95,6 +106,13 @@ MOCK_JWKS = {
 INITIAL_USERS = copy.deepcopy(USERS)
 INITIAL_TICKETS = copy.deepcopy(TICKETS)
 MODERATION = []  # user_moderation_history mirror (migration 0004)
+CLIENT_ERRORS = []  # client_error_log mirror (migration 0005)
+
+# Mirrors proxy.py's public telemetry limits so the 429/413 paths are testable.
+CLIENT_ERROR_BUDGET = 20      # keep in sync with proxy.py
+CLIENT_ERROR_WINDOW = 60.0
+CLIENT_ERROR_MAX_BODY = 8192
+CLIENT_ERROR_ATTEMPTS = {}
 
 # Migration tracking mirror. The real runner (services/python-api/migrate.py)
 # records applied files in a `schema_migrations` table; here the same state
@@ -111,7 +129,7 @@ import migrate  # noqa: E402
 
 
 def migration_files():
-    """NNNN_description.sql files in application order, per the real runner."""
+    """NNNN_description.sql files in order, discovered by the real runner."""
     return [{"filename": migration.name,
              "checksum": migration.checksum,
              "statements": len(migration.statements)}
@@ -134,12 +152,15 @@ def reset_state():
     """Restore deterministic seed data, sessions, and fault controls."""
     CONFIG.clear()
     CONFIG.update(DEFAULT_CONTROLS)
+    CONFIG.update(STARTUP_CONTROLS)
     USERS.clear()
     USERS.update(copy.deepcopy(INITIAL_USERS))
     TICKETS.clear()
     TICKETS.extend(copy.deepcopy(INITIAL_TICKETS))
     RECENT_MUTATIONS.clear()
     MODERATION.clear()
+    CLIENT_ERRORS.clear()
+    CLIENT_ERROR_ATTEMPTS.clear()
     APPLIED_MIGRATIONS.clear()
     APPLIED_MIGRATIONS.update(copy.deepcopy(INITIAL_MIGRATIONS))
     SESSIONS.clear()
@@ -170,6 +191,62 @@ def public(user):
     return {k: user[k] for k in ("id", "username", "email", "display_name", "role")}
 
 
+# ---------------------------------------------------------------------------
+# Hostile mode: deliberately wrong-shape payloads for drift-resilience checks.
+#
+# Each entry is a 200 response whose shape breaks the documented contract in a
+# specific way — an array where an object belongs, a string where a number
+# belongs, a required field missing. Both validated endpoints (the frontend
+# rejects them at the fetch boundary) and unvalidated ones (which fall through
+# to the safe-helper notice) are represented, because the two paths fail
+# differently and both need coverage.
+#
+# Keep these in step with the real contracts: if a field's shape changes in
+# docs/python-api-contracts.md, the matching hostile entry should change too,
+# or the drift tests will be asserting against a contract nobody has any more.
+#
+# `session` is deliberately excluded from the default set: breaking it would
+# sign every test out before it could reach the surface it is checking.
+# ---------------------------------------------------------------------------
+
+HOSTILE_SHAPES = {
+    "games": lambda: {"games": "not-an-array"},
+    "news": lambda: {"news": [{"id": 7, "title": 42, "summary": None, "url": {},
+                              "published_at": "soon"}]},
+    "account": lambda: {"stats": {"support_tickets": "many"}},  # user missing, count is text
+    "support": lambda: {"tickets": [{"id": [], "subject": 12, "status": None,
+                                      "priority": {}, "category": 5, "preview": None,
+                                      "created_at": [], "updated_at": {}}]},
+    "users": lambda: [dict(public(user), is_active=None, banned_at="maybe",
+                           email_verified_at={}) for user in list(USERS.values())[:1]],
+    "summary": lambda: {"users": "many", "active_users": None, "disabled_users": [],
+                        "open_tickets": "0", "active_projects": {}, "active_deploys": 0},
+    "telemetry": lambda: {"servers": "none", "updated_at": "now"},
+    "omega": lambda: {"servers": {"not": "a list"}},
+    "repo": lambda: {"ashathub": "unknown"},
+    "client_errors": lambda: {"errors": {"nope": True}},
+    "session": lambda: {"authenticated": "yes"},
+}
+
+# Endpoint path -> hostile key. Paths absent from this map are never affected.
+HOSTILE_PATHS = {
+    "/api/games": "games",
+    "/api/news": "news",
+    "/api/account/summary": "account",
+    "/api/support": "support",
+    "/api/admin/users": "users",
+    "/api/admin/summary": "summary",
+    "/api/admin/telemetry": "telemetry",
+    "/api/admin/omega/servers": "omega",
+    "/api/admin/repo-status": "repo",
+    "/api/admin/client-errors": "client_errors",
+    "/api/auth/session": "session",
+}
+
+DEFAULT_HOSTILE = ("games", "news", "account", "support", "users", "summary",
+                   "telemetry", "omega", "repo", "client_errors")
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -188,6 +265,21 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         raw = self.rfile.read(length) if length else b"{}"
         return json.loads(raw or b"{}")
+
+    def hostile_reply(self, path):
+        """Return a deliberately wrong-shape 200 when this endpoint is in hostile mode."""
+        key = HOSTILE_PATHS.get(path)
+        if not key or key not in CONFIG.get("hostile", []):
+            return None
+        shape = HOSTILE_SHAPES.get(key)
+        if shape is None:
+            return None
+        print(f"[mock] hostile {key} -> {path}", flush=True)
+        # `users` is a list of rows inside the usual envelope.
+        payload = shape()
+        if key == "users":
+            payload = {"users": payload, "page": 1, "page_size": 50}
+        return self.reply(200, payload)
 
     def maybe_inject_fault(self, path):
         """Apply configured latency/failure; return True when a response was sent."""
@@ -227,9 +319,7 @@ class Handler(BaseHTTPRequestHandler):
         return token, user, None
 
     def require_admin(self):
-        """Mirror proxy.py: no session => 403 admin_authentication_required,
-        NOT 401. The real API's admin_user() collapses both cases into one 403
-        and the smoke suite asserts that code."""
+        """Mirror proxy.py: no session yields 403 admin_authentication_required, not 401."""
         token, user = self.current_user()
         if not user or user["role"].lower() != "admin":
             return None, err("admin authentication required", 403)
@@ -240,7 +330,7 @@ class Handler(BaseHTTPRequestHandler):
         return user, None
 
     def migrations_summary(self):
-        """Mirror proxy.py's `migrations` object inside /api/admin/database/status."""
+        """Mirror the `migrations` object in /api/admin/database/status."""
         files = migration_files()
         applied, pending, drifted = [], [], []
         for row in files:
@@ -261,8 +351,7 @@ class Handler(BaseHTTPRequestHandler):
                 "missing": sorted(name for name in APPLIED_MIGRATIONS if name not in known)}
 
     def duplicate_submit(self, path, form):
-        """Mirror proxy.py's idempotency guard: True when the same admin
-        mutation for the same user arrived within the window."""
+        """True when the same admin mutation for the same user arrived within the window."""
         key = (path, str(form.get("user_id", "")))
         now = time.time()
         last = RECENT_MUTATIONS.get(key)
@@ -275,8 +364,19 @@ class Handler(BaseHTTPRequestHandler):
     # ---- routes ---------------------------------------------------------
     def do_GET(self):
         path = urlparse(self.path).path
+        if path.startswith("/api/"):
+            hostile = self.hostile_reply(path)
+            if hostile is not None:
+                return hostile
         if path == "/__config":
             return self.reply(200, {key: value for key, value in CONFIG.items()})
+        if path == "/__codes":
+            # Read-only test control: the pending verification tokens this mock
+            # would have put in an email. The portal has no token-entry screen —
+            # a real user clicks the emailed link — so an E2E run needs the value
+            # the API would have received from that click. Loopback-only, like
+            # /__config and /__reset.
+            return self.reply(200, {"codes": {name: code for name, code in VERIFICATIONS.items()}})
         if path == "/__reset":
             reset_state()
             return self.reply(200, {"reset": True, "controls": {key: value for key, value in CONFIG.items()}})
@@ -371,6 +471,12 @@ class Handler(BaseHTTPRequestHandler):
                 e = dict(e, id=len(MODERATION) - i)
                 events[i] = e
             return self.reply(200, {"user_id": uid, "events": events})
+        if path == "/api/admin/client-errors":
+            user, failure = self.require_admin()
+            if failure:
+                return self.reply(*failure)
+            newest = sorted(CLIENT_ERRORS, key=lambda entry: entry["created_at"], reverse=True)
+            return self.reply(200, {"errors": newest[:50], "page": 1, "page_size": 50})
         if path in ("/api/admin/summary", "/api/admin/users", "/api/admin/settings",
                     "/api/admin/database/status", "/api/admin/repo-status",
                     "/api/admin/telemetry", "/api/admin/omega/servers"):
@@ -428,10 +534,58 @@ class Handler(BaseHTTPRequestHandler):
                 if not isinstance(form["error_paths"], list) or not all(isinstance(item, str) for item in form["error_paths"]):
                     return self.reply(*err("error_paths must be an array of strings", 400))
                 CONFIG["error_paths"] = form["error_paths"]
+            if "hostile" in form:
+                selected = form["hostile"]
+                if not isinstance(selected, list) or not all(isinstance(item, str) for item in selected):
+                    return self.reply(*err("hostile must be an array of endpoint keys", 400))
+                unknown = [item for item in selected if item not in HOSTILE_SHAPES]
+                if unknown:
+                    return self.reply(*err(f"unknown hostile keys: {', '.join(sorted(unknown))}", 400))
+                CONFIG["hostile"] = selected
             return self.reply(200, {key: value for key, value in CONFIG.items()})
         if path.startswith("/api/") and self.maybe_inject_fault(path):
             return
         form = self.body_json()
+
+        if path == "/api/telemetry/client-error":
+            if int(self.headers.get("Content-Length", "0") or 0) > CLIENT_ERROR_MAX_BODY:
+                return self.reply(*err("error report too large", 413))
+            if not isinstance(form, dict):
+                return self.reply(*err("error report must be a JSON object", 400))
+            address = self.client_address[0]
+            now = time.time()
+            recent = [stamp for stamp in CLIENT_ERROR_ATTEMPTS.get(address, [])
+                      if now - stamp < CLIENT_ERROR_WINDOW]
+            if len(recent) >= CLIENT_ERROR_BUDGET:
+                CLIENT_ERROR_ATTEMPTS[address] = recent
+                return self.reply(*err("too many error reports", 429))
+            recent.append(now)
+            CLIENT_ERROR_ATTEMPTS[address] = recent
+            message = str(form.get("message") or "").strip()
+            if not message:
+                return self.reply(*err("message required", 400))
+            try:
+                count = max(1, min(10000, int(form.get("count") or 1)))
+            except (TypeError, ValueError):
+                count = 1
+            listed = form.get("occurrences")
+            token, user = self.current_user()
+            entry = {
+                "id": len(CLIENT_ERRORS) + 1,
+                "source": str(form.get("source") or "unknown")[:40],
+                "message": message[:400],
+                "detail": str(form.get("detail") or "")[:400],
+                "path": urlparse(str(form.get("path") or "")).path[:200],
+                "count": count,
+                "occurrences": json.dumps([str(item)[:200] for item in listed[:5]]
+                                          if isinstance(listed, list) else []),
+                "user_id": user["id"] if user else "",
+                "user_agent": self.headers.get("User-Agent", "")[:200],
+                "created_at": int(now),
+            }
+            CLIENT_ERRORS.append(entry)
+            print(f"[client-error] {entry['source']} x{count} {entry['path'] or '/'}: {message[:200]}", flush=True)
+            return self.reply(202, {"logged": True})
 
         if path == "/api/auth/register":
             username = form.get("username", "").strip()
@@ -463,14 +617,11 @@ class Handler(BaseHTTPRequestHandler):
                     print(f"[mock] verification code for {user['username']}: {code}", flush=True)
             return self.reply(202, {"sent": True})
 
-        if path == "/api/auth/verify-email":
-            token = parse_qs(urlparse(self.path).query).get("token", [""])[0]
-            for username, code in list(VERIFICATIONS.items()):
-                if code == token:
-                    USERS[[u["username"] for u in USERS.values() if u["username"] == username][0]]["verified"] = True
-                    del VERIFICATIONS[username]
-                    return self.reply(200, {"verified": True})
-            return self.reply(*err("invalid or expired verification token", 400))
+        # Deliberately no POST /api/auth/verify-email: the contract has the
+        # clicked email link hit GET with `?token=` (handled in do_GET), and the
+        # real proxy.py implements no POST. A POST here used to look up a
+        # username in a dict keyed by user id, raising KeyError and cutting the
+        # connection mid-response; it falls through to the 404 below instead.
 
         if path == "/api/auth/login":
             identifier = form.get("identifier", "").strip()
@@ -706,12 +857,44 @@ class Handler(BaseHTTPRequestHandler):
         return self.reply(404, {"error": {"code": "not_found", "message": "unknown endpoint"}})
 
 
+class DevServer(ThreadingHTTPServer):
+    """Threading server whose accept backlog survives parallel test bursts.
+
+    The socketserver default backlog of 5 refuses connections (ECONNREFUSED,
+    not a queue) once a suite runs its workers in parallel, which surfaces as
+    random failed requests rather than an obvious server error.
+    """
+
+    daemon_threads = True
+    request_queue_size = 128
+
+
+def hostile_selection(argv):
+    """Hostile endpoint keys from --hostile or --hostile=a,b (empty when absent)."""
+    for argument in argv:
+        if argument == "--hostile":
+            return list(DEFAULT_HOSTILE)
+        if argument.startswith("--hostile="):
+            return [item.strip() for item in argument.split("=", 1)[1].split(",") if item.strip()]
+    return []
+
+
 if __name__ == "__main__":
     required_verification = "--no-verification" not in sys.argv
+    hostile = hostile_selection(sys.argv)
+    unknown = [item for item in hostile if item not in HOSTILE_SHAPES]
+    if unknown:
+        print(f"[mock] unknown --hostile keys: {', '.join(sorted(unknown))}", flush=True)
+        print(f"[mock] known keys: {', '.join(sorted(HOSTILE_SHAPES))}", flush=True)
+        raise SystemExit(2)
     CONFIG["verification_required"] = required_verification
+    CONFIG["hostile"] = hostile
+    STARTUP_CONTROLS.update({"verification_required": required_verification, "hostile": list(hostile)})
     # PORT mirrors services/python-api/proxy.py so parallel stacks (E2E runs)
     # can bind their own instance without touching the default 3110.
     port = int(os.environ.get("PORT", "3110"))
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    server = DevServer(("127.0.0.1", port), Handler)
     print(f"[mock] AGP Studios API mock on 127.0.0.1:{port} (verification_required={required_verification})", flush=True)
+    if hostile:
+        print(f"[mock] HOSTILE shapes served for: {', '.join(hostile)}", flush=True)
     server.serve_forever()

@@ -16,6 +16,7 @@ The Python service is the public API at `/api/*`; Rust is not part of the contra
 | POST | `/api/auth/logout` | 200 | Revokes the current session and expires the cookie |
 | GET | `/api/auth/verify-email?token=...` | 200 | Verifies a single-use email token |
 | POST | `/api/auth/verify-email/resend` | 202 | JSON `{identifier}`; sends a fresh verification mail |
+| POST | `/api/telemetry/client-error` | 202 | Unauthenticated browser error report for after-the-fact review; shape and limits documented below |
 | POST | `/api/auth/password-reset/request` | 200/400 | JSON `{identifier}`; requests a password-reset email without revealing account existence |
 | GET | `/api/auth/github` | 302 | Starts GitHub OAuth sign-in/link flow |
 | GET | `/api/auth/me` | 200/401 | Alias of session for authenticated callers |
@@ -33,6 +34,7 @@ The Python service is the public API at `/api/*`; Rust is not part of the contra
 | Method | Path | Success | Purpose |
 |---|---|---:|---|
 | POST | `/api/admin/audit/prune` | 200 | JSON `{before_id: int}`; deletes all audit events with `id < before_id`, then records an `admin.audit.pruned` event. Returns `{ok, deleted}`. |
+| GET | `/api/admin/client-errors` | 200/403 | Reported client errors, newest first, paginated |
 | POST | `/api/admin/users/role` | 200 | JSON `{user_id, role}`; see request-body reference below |
 | POST | `/api/admin/users/ban` | 200 | JSON `{user_id, banned: bool}`; see request-body reference below |
 | POST | `/api/admin/users/status` | 200 | JSON `{user_id, status}`; see request-body reference below |
@@ -227,9 +229,9 @@ Requires an admin session and the CSRF header.
   Returns `{"ok": true, "baseline": false, "applied": ["0005_next.sql"]}`;
   `applied` is empty when nothing was pending (safe to call repeatedly).
 - `{"baseline": true}`: records pending **and** drifted files as applied
-  **without executing them** — for a database migrated by hand, where re-running
-  `0001` (`ALTER TABLE ... ADD COLUMN`, not idempotent) would fail. Use it once;
-  prefer `migrate.py --baseline` on the host when you have shell access.
+  **without executing them** — for a database migrated by hand, so its history is
+  recorded instead of re-applied. Use it once; prefer `migrate.py --baseline` on the
+  host when you have shell access.
 - Audit events: `admin.migrations.applied` / `admin.migrations.baselined`,
   `target_type='migrations'`, `detail={baseline, files}`.
 - DDL runs in the API process, so a migration that fails partway leaves the
@@ -303,6 +305,87 @@ poster URLs for the admin CP:
 ```
 
 Same shape as the public `GET /api/games` rows plus `sort_order`.
+
+#### POST `/api/telemetry/client-error`
+
+Public (no session, no CSRF) — the pages that can crash are the ones anyone can
+load. The body is untrusted log data; the server truncates every field rather
+than validating it:
+
+```json
+{
+  "source": "window.onerror",
+  "message": "Cannot read properties of undefined (reading 'title')",
+  "detail": "Support couldn't load · MemberSurfaces (MemberSurfaces.tsx:23:34)",
+  "count": 3,
+  "occurrences": ["22:24:04 · ...", "22:24:02 · ..."],
+  "path": "/"
+}
+```
+
+- `source` is one of `window.onerror`, `unhandledrejection`, `boundary` (the
+  React error boundary), `shape-error` (a response the frontend rejected at the
+  fetch boundary for being the wrong shape), or `shape-drift` (a field a
+  safe-helper had to fall back on because its shape wasn't what the UI expects);
+  anything else is stored as sent.
+- `message` is required (400 `message required`); `count` defaults to 1 and is
+  clamped to 1..10000; `occurrences` keeps the first 5 entries and `path` is
+  reduced to its path component (query string stripped).
+- Success is `202 {"logged": true}`. The endpoint is fire-and-forget from the
+  browser: a 429, 413, or 503 is never retried and never surfaced to the user.
+- Limits: bodies over 8192 bytes are `413 error report too large`; more than 20
+  reports per minute from one IP is `429 too many error reports`. The limit is
+  per IP in memory only — **no IP address is stored anywhere**.
+- `user_id` is attached server-side from the session cookie when one is
+  present; the client never sends it.
+- Rows older than 30 days are deleted opportunistically (at most once an hour
+  per process), so the table is bounded without a cron job.
+- A successful report also writes one `[client-error] ...` line to stdout, so
+  container/journald logs keep a copy alongside the table.
+
+#### GET `/api/admin/client-errors`
+
+Requires an admin session (403 otherwise). Returns up to 50 reports, newest
+first:
+
+```json
+{
+  "errors": [{
+    "id": 12, "source": "boundary", "message": "...", "detail": "...",
+    "path": "/", "count": 3, "occurrences": "[\"22:24:04 · ...\"]",
+    "user_id": "", "user_agent": "Mozilla/5.0 ...", "created_at": 1763835844
+  }],
+  "page": 1, "page_size": 50
+}
+```
+
+`occurrences` is a JSON-encoded string (TEXT column), `created_at` is unix
+seconds, and `user_id` is empty for signed-out visitors. This is client-reported
+log data: it may repeat, and it must never be treated as fact or joined against
+users. The admin CP renders it in the System tab's **Client errors** panel.
+
+## Frontend payload validation
+
+The portal validates the success payloads it reads against these contracts, in
+`apps/ashat-hub-web/src/components/schemas.ts`, at the fetch boundary. A
+rejected payload throws before any component sees it, naming the endpoint and
+field (`GET /api/admin/users → users[0].is_active: expected number, got
+undefined`) and reporting itself to `/api/telemetry/client-error` as
+`shape-error`.
+
+What that means for anyone changing the API:
+
+- **Adding** a field is always safe — extra keys are ignored.
+- **Renaming or removing** a validated field breaks the client with a clear
+error instead of a blank. Validated today: `/api/games`, `/api/news`,
+  `/api/auth/session`, `/api/account/summary`, `/api/support` and
+  `/api/support/:id`, `/api/admin/summary`, `/api/admin/users`,
+  `/api/admin/users/:id/moderation`, `/api/admin/database/status`,
+  `/api/admin/games`, `/api/admin/client-errors`, `/api/admin/settings`.
+- **Endpoints without a schema are not checked**, so coverage grows deliberately:
+  add an entry in `schemas.ts` when a shape is documented here.
+- Timestamps may be unix seconds or a SQL date string (the API does both), and
+  numeric fields may be sent as numeric strings; those are accepted.
 
 ## OIDC issuer
 

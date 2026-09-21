@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
-import { API, request, safeList, safeNumber, safeText, safeTime } from './api';
+import { API, clearShapeDrifts, request, safeList, safeNumber, safeText, safeTime } from './api';
 import { confirmModal, toast } from './toast';
 import { maybeCrash } from './devCrash';
+import { UnexpectedDataNotice, UnexpectedDataPanel } from './UnexpectedDataNotice';
 
 type User = { id: string; username: string; email: string; display_name: string; tag_name?: string | null; discord_tag?: string | null; location?: string | null; interests?: string | null; role: string };
 export type MemberTab = 'support' | 'account';
@@ -40,6 +41,9 @@ export function MemberSurfaces({ user, initialTab = 'support' }: { user: User | 
   const [tickets, setTickets] = useState<TicketSummary[]>([]);
   const [selectedTicket, setSelectedTicket] = useState<{ ticket: Ticket; replies: TicketReply[] } | null>(null);
   const [account, setAccount] = useState<AccountSummary | null>(null);
+  // Distinguishes "still loading" from "arrived but unusable": only the former
+  // may keep a spinner up, or a wrong-shaped payload loads forever.
+  const [accountLoaded, setAccountLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [showSubmit, setShowSubmit] = useState(false);
   const [submitProjectId, setSubmitProjectId] = useState('');
@@ -60,6 +64,9 @@ export function MemberSurfaces({ user, initialTab = 'support' }: { user: User | 
     if (!user) return;
     try {
       const data = await request<{ tickets: TicketSummary[] }>(`${API}/support`);
+      // Fresh payload: the notice describes the latest response, not history
+      // (including placeholders the loading render legitimately coerced).
+      clearShapeDrifts();
       setTickets(safeList<TicketSummary>(data.tickets));
       setError(null);
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Support unavailable'); }
@@ -69,9 +76,11 @@ export function MemberSurfaces({ user, initialTab = 'support' }: { user: User | 
     if (!user) return;
     try {
       const data = await request<AccountSummary>(`${API}/account/summary`);
+      clearShapeDrifts();
       setAccount(data);
       setError(null);
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Account summary unavailable'); }
+    finally { setAccountLoaded(true); }
   }, [user]);
 
   useEffect(() => {
@@ -125,11 +134,14 @@ export function MemberSurfaces({ user, initialTab = 'support' }: { user: User | 
       <nav className="member-tabs" aria-label="Member navigation">
         {tabs.map((item) => <button type="button" key={item.id} className={tab === item.id ? 'member-tab selected' : 'member-tab'} onClick={() => { setTab(item.id); setSelectedTicket(null); }}>{item.label}</button>)}
       </nav>
-      {error && <p className="workspace-error" role="alert">{error}</p>}
+      {/* When the account panel is already explaining a rejected payload, the
+          surface-wide banner would repeat the same message. */}
+      {error && !(tab === 'account' && !account?.user) && <p className="workspace-error" role="alert">{error}</p>}
+      <UnexpectedDataNotice onRetry={() => { setAccountLoaded(false); void loadTickets(); void loadAccount(); }} />
 
       {tab === 'support' && <div className="member-panel support-layout">{!user ? <div className="tool-empty"><p>Sign in to create and view support tickets.</p></div> : <><div className="support-sidebar"><div className="member-toolbar"><span className="eyebrow">Your tickets</span><button type="button" className="secondary-button" onClick={() => setSelectedTicket(null)}>New</button></div>{tickets.map((ticket) => <button type="button" className={selectedTicket?.ticket.id === ticket.id ? 'ticket-row selected' : 'ticket-row'} key={safeText(ticket.id)} onClick={() => void showTicket(safeText(ticket.id))}><strong>{safeText(ticket.subject)}</strong><small>{safeText(ticket.status)} · {safeText(ticket.priority)}</small></button>)}{!tickets.length && <p className="muted">No tickets yet.</p>}</div><div className="support-detail">{selectedTicket ? <><button type="button" className="back-button" onClick={() => setSelectedTicket(null)}>← New ticket</button><span className="eyebrow">{safeText(selectedTicket.ticket.status)} · {safeText(selectedTicket.ticket.priority)}</span><h3>{safeText(selectedTicket.ticket.subject)}</h3><p className="ticket-message">{safeText(selectedTicket.ticket.message)}</p><div className="ticket-replies">{safeList<TicketReply>(selectedTicket.replies).map((item) => <article className={item.is_staff ? 'ticket-reply staff' : 'ticket-reply'} key={safeText(item.id)}><small>{safeText(item.display_name) || safeText(item.username) || 'Member'} · {safeTime(item.created_at)}</small><p>{safeText(item.message)}</p></article>)}</div><form className="member-form" onSubmit={(event) => void sendReply(event)}><textarea value={reply} onChange={(event) => setReply(event.target.value)} placeholder="Reply to this ticket" rows={3} required /><button type="submit" disabled={busy}>Reply</button></form></> : <form className="member-form" onSubmit={(event) => void createTicket(event)}><span className="eyebrow">New support ticket</span><input value={supportSubject} onChange={(event) => setSupportSubject(event.target.value)} placeholder="Subject" required /><div className="form-row"><select value={supportCategory} onChange={(event) => setSupportCategory(event.target.value)}><option value="bug">Bug</option><option value="feature">Feature</option><option value="account">Account</option><option value="billing">Billing</option><option value="other">Other</option></select><select value={supportPriority} onChange={(event) => setSupportPriority(event.target.value)}><option value="low">Low</option><option value="normal">Normal</option><option value="high">High</option><option value="urgent">Urgent</option></select></div><textarea value={supportMessage} onChange={(event) => setSupportMessage(event.target.value)} placeholder="Describe the issue or request" rows={7} required /><button type="submit" disabled={busy}>Create ticket</button></form>}</div></>}</div>}
 
-      {tab === 'account' && <div className="member-panel account-grid">{!user ? <div className="tool-empty"><p>Sign in to view your account.</p></div> : account?.user ? <><AccountForm user={account.user} githubLinked={!!account.github_linked} onSaved={(next) => setAccount({ ...account, user: next })} onGithubChange={(linked) => setAccount({ ...account, github_linked: linked })} onDeleted={() => window.location.reload()} /><div className="account-stats"><Metric label="Support tickets" value={safeNumber(account.stats?.support_tickets)} /></div></> : <div className="tool-empty"><p>Loading account...</p></div>}</div>}
+      {tab === 'account' && <div className="member-panel account-grid">{!user ? <div className="tool-empty"><p>Sign in to view your account.</p></div> : !accountLoaded ? <div className="tool-empty"><p>Loading account...</p></div> : !account?.user ? <UnexpectedDataPanel what="Your account details" reason={error ?? undefined} onRetry={() => { setAccountLoaded(false); void loadAccount(); }} /> : <><AccountForm user={account.user} githubLinked={!!account.github_linked} onSaved={(next) => setAccount({ ...account, user: next })} onGithubChange={(linked) => setAccount({ ...account, github_linked: linked })} onDeleted={() => window.location.reload()} /><div className="account-stats"><Metric label="Support tickets" value={safeNumber(account.stats?.support_tickets)} /></div></>}</div>}
 
 
     </section>

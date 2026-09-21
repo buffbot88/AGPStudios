@@ -14,13 +14,27 @@ import { defineConfig, devices } from '@playwright/test';
  * Browser source: defaults to the installed Chrome channel so no browser
  * download is needed. In CI run `npx playwright install chromium` and set
  * E2E_CHANNEL=chromium.
+ *
+ * Drift resilience: `E2E_HOSTILE=1` boots the same stack with the mock in
+ * hostile mode (`--hostile`, or `E2E_HOSTILE=games,news` for a subset), which
+ * serves deliberately wrong-shape payloads. Only `drift-resilience.spec.ts`
+ * cares — the rest of the suite is written against healthy data and would fail
+ * by design — so run that spec in a second pass with this set.
  */
 const PORT = Number(process.env.E2E_PORT ?? 3111);
 const MOCK_PORT = Number(process.env.E2E_MOCK_PORT ?? 3112);
+const HOSTILE = process.env.E2E_HOSTILE
+  ? process.env.E2E_HOSTILE === '1'
+    ? ' --hostile'
+    : ` --hostile=${process.env.E2E_HOSTILE}`
+  : '';
 
 export default defineConfig({
   testDir: './tests/e2e',
   fullyParallel: true,
+  // Two browsers by default: the toast assertions race the 8s auto-dismiss when
+  // four Chromium instances share a small machine. Raise with E2E_WORKERS.
+  workers: Number(process.env.E2E_WORKERS ?? 2),
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? 'github' : 'list',
@@ -38,7 +52,7 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: `npm run dev:mock -- --no-verification --port ${PORT} --mock-port ${MOCK_PORT}`,
+    command: `npm run dev:mock -- --no-verification${HOSTILE} --port ${PORT} --mock-port ${MOCK_PORT}`,
     url: `http://localhost:${PORT}`,
     reuseExistingServer: false,
     timeout: 120_000,

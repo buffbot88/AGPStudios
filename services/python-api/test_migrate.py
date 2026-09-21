@@ -260,7 +260,7 @@ def test_real_migrations_parse() -> None:
           "real: files sort into application order")
 
     expected = {
-        "0001_diamonds.sql": 1,
+        "0001_diamonds.sql": 4,  # SET guard, PREPARE, EXECUTE, DEALLOCATE
         "0002_homepage_content.sql": 4,
         "0003_rename_project_horizon.sql": 5,
         "0004_user_moderation_history.sql": 1,
@@ -274,11 +274,11 @@ def test_real_migrations_parse() -> None:
                   f"real: {migration.name} splits into {expected[migration.name]} statements",
                   f"got {len(statements)}: {statements}")
 
-    # The critical regression this runner exists for: 0001 is not idempotent, so
-    # it must be tracked rather than re-run. Guard that assumption explicitly.
+    # 0001 predates the tracking table, so it must be re-runnable on its own —
+    # the MySQL CI job (test_migrations_mysql.py) applies every file twice.
     diamonds = next(m for m in migrations if m.name == "0001_diamonds.sql")
-    check("IF NOT EXISTS" not in diamonds.statements[0],
-          "real: 0001 remains non-idempotent (tracking is what makes it safe)")
+    check(any("information_schema.columns" in statement for statement in diamonds.statements),
+          "real: 0001 guards ADD COLUMN against an existing column (re-runnable)")
 
 
 # ---- CLI orchestration (fake database) -------------------------------------
@@ -386,7 +386,7 @@ def test_cli() -> None:
             code = migrate.main(["--baseline", "--dir", path, "--database-url", "mysql://u:p@h/db"])
             check(code == 0, "cli: --baseline succeeds")
             check(database.migration_statements() == [],
-                  "cli: --baseline runs no migration SQL (the non-idempotent 0001 stays untouched)")
+                  "cli: --baseline runs no migration SQL at all")
             check(sorted(row["filename"] for row in database.rows) == ["0001_diamonds.sql", "0002_two.sql"],
                   "cli: --baseline records every file", repr(database.rows))
             check(migrate.main(["--check", "--dir", path, "--database-url", "mysql://u:p@h/db"]) == 0,

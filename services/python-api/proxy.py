@@ -26,6 +26,15 @@ LOGIN_ATTEMPTS = {}
 IDEMPOTENCY_WINDOW = 3.0  # seconds
 RECENT_MUTATIONS = {}
 
+# Public client-error reporting: a per-IP budget for the endpoint, plus a
+# process-wide stamp so retention pruning runs at most once an hour.
+CLIENT_ERROR_ATTEMPTS = {}
+CLIENT_ERROR_BUDGET = 20           # reports per IP per window
+CLIENT_ERROR_WINDOW = 60.0         # seconds
+CLIENT_ERROR_MAX_BODY = 8192       # bytes
+CLIENT_ERROR_RETENTION = 30 * 86400
+CLIENT_ERROR_PRUNED_AT = 0.0
+
 
 def b64(value):
     return urlsafe_b64encode(value).rstrip(b"=").decode()
@@ -122,6 +131,8 @@ class Proxy(BaseHTTPRequestHandler):
             return self.resend_verification()
         if urlparse(self.path).path == "/api/auth/logout":
             return self.auth_logout()
+        if urlparse(self.path).path == "/api/telemetry/client-error":
+            return self.client_error_report()
         if urlparse(self.path).path == "/api/admin/audit/prune":
             return self.admin_audit_prune()
         if urlparse(self.path).path == "/api/admin/database/migrations/apply":
@@ -146,12 +157,7 @@ class Proxy(BaseHTTPRequestHandler):
     def do_OPTIONS(self): self.forward()
 
     def migrations_summary(self, cur):
-        """Summarize migration state for the admin CP (read-only).
-
-        Reads the `schema_migrations` tracking table written by migrate.py. A
-        database that predates the runner has no such table — that's reported as
-        `tracked: false` rather than an error, so the CP can offer a baseline.
-        """
+        """Summarize migration state for the admin CP; an untracked database reports tracked=false."""
         summary = {"tracked": False, "tracking_table": migrate.TRACKING_TABLE,
                    "current_revision": None, "applied": [], "pending": [],
                    "drifted": [], "missing": []}
@@ -188,13 +194,7 @@ class Proxy(BaseHTTPRequestHandler):
         return summary
 
     def admin_migrations_apply(self):
-        """POST /api/admin/database/migrations/apply — run pending migrations.
-
-        Applies only files that aren't recorded yet (or, with `{"baseline": true}`,
-        records the current files as applied without executing them, for a
-        database migrated by hand before the runner existed). Each applied file
-        is recorded only after its statements succeed, matching the CLI.
-        """
+        """Apply pending migrations, or record them as applied when baselining."""
         user=self.admin_user()
         if not user: return error(self,"admin authentication required",403)
         if not self.csrf_ok(user): return error(self,"csrf token required",403)
@@ -284,6 +284,8 @@ class Proxy(BaseHTTPRequestHandler):
                         cur.execute("SELECT id,subject,status,priority,category,created_at,updated_at FROM support_tickets ORDER BY updated_at DESC LIMIT 100"); return oidc_json(self,{"tickets":cur.fetchall()})
                     if path in ('/api/admin/health','/api/admin/database/status'):
                         cur.execute("SELECT VERSION() AS version"); return oidc_json(self,{"database":"healthy","version":cur.fetchone()['version'],"paws":self.game_status_value(),"migrations":self.migrations_summary(cur)})
+                    if path == '/api/admin/client-errors':
+                        page=max(1,min(1000,int(query.get('page',['1'])[0]))); cur.execute("SELECT id,source,message,detail,path,count,occurrences,user_id,user_agent,created_at FROM client_error_log ORDER BY created_at DESC,id DESC LIMIT 50 OFFSET %s",((page-1)*50,)); return oidc_json(self,{"errors":cur.fetchall(),"page":page,"page_size":50})
                     if path == '/api/admin/audit':
                         page=max(1,min(1000,int(query.get('page',['1'])[0]))); cur.execute("SELECT id,actor_id,actor_name,action,target_type,target_id,detail,created_at FROM admin_audit_events ORDER BY created_at DESC,id DESC LIMIT 50 OFFSET %s",((page-1)*50,)); return oidc_json(self,{"events":cur.fetchall(),"page":page,"page_size":50})
                     if path == '/api/admin/settings': return oidc_json(self,{"email_verification_enabled":False,"secure_cookie":True,"backend":"python"})
@@ -575,6 +577,61 @@ class Proxy(BaseHTTPRequestHandler):
                     cur.execute("INSERT INTO users (id,username,email,password_hash,display_name,role,is_active,email_verified_at) VALUES (%s,%s,%s,%s,%s,'Member',1,UTC_TIMESTAMP())",(user_id,username,email,password_hash,display))
             return oidc_json(self, {"registered":True,"verification_required":False,"user":{"id":user_id,"username":username,"email":email,"display_name":display,"role":"Member"}},201)
         except Exception as exc: return error(self, f"registration unavailable: {exc}",503)
+
+    def client_error_report(self):
+        """Log an uncaught browser failure. Public and rate limited: the payload is untrusted log data."""
+        client = self.client_address[0]
+        now = time.time()
+        CLIENT_ERROR_ATTEMPTS[client] = [stamp for stamp in CLIENT_ERROR_ATTEMPTS.get(client, []) if now - stamp < CLIENT_ERROR_WINDOW]
+        if len(CLIENT_ERROR_ATTEMPTS[client]) >= CLIENT_ERROR_BUDGET:
+            return error(self, "too many error reports", 429)
+        CLIENT_ERROR_ATTEMPTS[client].append(now)
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if length > CLIENT_ERROR_MAX_BODY:
+                return error(self, "error report too large", 413)
+            try:
+                form = json.loads(self.rfile.read(length) or b'{}')
+            except ValueError:
+                return error(self, "error report must be a JSON object")
+            if not isinstance(form, dict):
+                return error(self, "error report must be a JSON object")
+            message = str(form.get("message") or "").strip()
+            if not message:
+                return error(self, "message required")
+            source = str(form.get("source") or "unknown")[:40]
+            detail = str(form.get("detail") or "")[:400]
+            page_path = urlparse(str(form.get("path") or "")).path[:200]
+            try:
+                count = max(1, min(10000, int(form.get("count") or 1)))
+            except (TypeError, ValueError):
+                count = 1
+            listed = form.get("occurrences")
+            occurrences = json.dumps([str(item)[:200] for item in listed[:5]], default=str) if isinstance(listed, list) else "[]"
+            user_id = ""
+            if 'ashat_rust_sid' in self.headers.get('Cookie', ''):
+                try:
+                    user_id = str((self.current_user() or {}).get('id') or '')
+                except Exception:
+                    user_id = ""
+            with db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("INSERT INTO client_error_log (source,message,detail,path,count,occurrences,user_id,user_agent,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,UNIX_TIMESTAMP())",
+                                (source, message[:400], detail, page_path, count, occurrences[:2000], user_id, self.headers.get("User-Agent", "")[:200]))
+                    self.prune_client_errors(cur)
+            print(f"[client-error] {source} x{count} {page_path or '/'}: {message[:200]}", flush=True)
+            return oidc_json(self, {"logged": True}, 202)
+        except Exception as exc:
+            return error(self, f"error log unavailable: {exc}", 503)
+
+    def prune_client_errors(self, cur):
+        """Delete reported errors past the retention window, at most once an hour per process."""
+        global CLIENT_ERROR_PRUNED_AT
+        now = time.time()
+        if now - CLIENT_ERROR_PRUNED_AT < 3600:
+            return
+        CLIENT_ERROR_PRUNED_AT = now
+        cur.execute("DELETE FROM client_error_log WHERE created_at < UNIX_TIMESTAMP() - %s", (CLIENT_ERROR_RETENTION,))
 
     def auth_session(self):
         cookies = {item.split('=', 1)[0]: item.split('=', 1)[1] for item in self.headers.get('Cookie', '').split('; ') if '=' in item}

@@ -22,10 +22,21 @@ type ToastAction = { label: string; value: boolean; danger?: boolean };
 
 type ToastItem = {
   id: number;
+  /** Repeats sharing a key update this toast instead of stacking a new one. */
+  key?: string;
   message: string;
   kind: ToastKind;
   actions?: ToastAction[];
+  /** Occurrences of a grouped failure, rendered as a ×N badge. */
+  count?: number;
+  /** Recent occurrences behind the Details disclosure, newest first. */
+  details?: string[];
   duration: number;
+  /** Details list is expanded (which also pins the toast open). */
+  open?: boolean;
+  /** Auto-dismiss paused because the pointer or focus is on the toast. */
+  held?: boolean;
+  timer?: number;
 };
 
 type ModalItem = {
@@ -59,19 +70,67 @@ function dismiss(id: number) {
   emit();
 }
 
-function push(item: Omit<ToastItem, 'id'>): number {
-  const id = nextId++;
-  items = [...items, { ...item, id }];
+function update(id: number, patch: Partial<ToastItem>): void {
+  items = items.map((item) => (item.id === id ? { ...item, ...patch } : item));
   emit();
-  if (item.duration > 0) {
-    window.setTimeout(() => dismiss(id), item.duration);
+}
+
+/** (Re)start a toast's auto-dismiss timer, clearing any previous one. */
+function arm(item: ToastItem): ToastItem {
+  if (item.timer) window.clearTimeout(item.timer);
+  return item.duration > 0
+    ? { ...item, timer: window.setTimeout(() => dismiss(item.id), item.duration) }
+    : { ...item, timer: undefined };
+}
+
+function push(item: Omit<ToastItem, 'id'>): number {
+  const existing = item.key ? items.find((entry) => entry.key === item.key) : undefined;
+  if (existing) {
+    const updated = arm({ ...existing, ...item, id: existing.id, open: existing.open, held: false });
+    items = items.map((entry) => (entry.id === existing.id ? updated : entry));
+    emit();
+    return existing.id;
   }
+  const id = nextId++;
+  items = [...items, arm({ ...item, id })];
+  emit();
   return id;
 }
 
-/** Show a transient toast. Auto-dismisses after `duration` ms (default 5s). */
-export function toast(message: string, kind: ToastKind = 'info', duration = 5000): void {
-  push({ message, kind, duration });
+/** Pause auto-dismiss while the user reads or interacts with a toast. */
+function hold(id: number): void {
+  const item = items.find((entry) => entry.id === id);
+  if (!item || item.duration === 0 || !item.timer) return;
+  window.clearTimeout(item.timer);
+  update(id, { timer: undefined, held: true });
+}
+
+/** Resume auto-dismiss once the pointer and focus have left. */
+function release(id: number, delay = 4000): void {
+  const item = items.find((entry) => entry.id === id);
+  if (!item || !item.held) return;
+  update(id, { held: false, timer: window.setTimeout(() => dismiss(id), delay) });
+}
+
+/** Expand the details list and pin the toast, so it can't vanish while read. */
+function expand(id: number): void {
+  const item = items.find((entry) => entry.id === id);
+  if (!item) return;
+  if (item.timer) window.clearTimeout(item.timer);
+  update(id, { open: true, held: false, duration: 0, timer: undefined });
+}
+
+/**
+ * Show a transient toast. Auto-dismisses after `duration` ms (default 5s).
+ * Passing a `key` makes repeats refresh one toast, with a count and details.
+ */
+export function toast(
+  message: string,
+  kind: ToastKind = 'info',
+  duration = 5000,
+  options: { key?: string; count?: number; details?: string[] } = {},
+): void {
+  push({ message, kind, duration, ...options });
 }
 
 /**
@@ -266,7 +325,11 @@ export function ToastHost() {
             return (
               <div
                 key={item.id}
-                className={`toast ${item.kind}${isConfirm ? ' confirm' : ''}`}
+                className={`toast ${item.kind}${isConfirm ? ' confirm' : ''}${item.open ? ' expanded' : ''}`}
+                onMouseEnter={() => hold(item.id)}
+                onMouseLeave={() => release(item.id)}
+                onFocus={() => hold(item.id)}
+                onBlur={() => release(item.id)}
                 role={isConfirm ? 'alertdialog' : 'status'}
                 aria-modal={isConfirm || undefined}
                 aria-label={isConfirm ? item.message : undefined}
@@ -311,7 +374,33 @@ export function ToastHost() {
                     : undefined
                 }
               >
-                <span className="toast-message">{item.message}</span>
+                <span className="toast-body">
+                  <span className="toast-message">
+                    {item.message}
+                    {item.count !== undefined && item.count > 1 && (
+                      <span className="toast-count" title={`${item.count} occurrences`}>
+                        ×{item.count}
+                      </span>
+                    )}
+                  </span>
+                  {item.details?.length ? (
+                    <button
+                      type="button"
+                      className="toast-details-toggle"
+                      aria-expanded={Boolean(item.open)}
+                      onClick={() => (item.open ? update(item.id, { open: false }) : expand(item.id))}
+                    >
+                      {item.open ? 'Hide details' : `Details (${item.details.length})`}
+                    </button>
+                  ) : null}
+                  {item.open && item.details?.length ? (
+                    <ul className="toast-details">
+                      {item.details.map((detail, index) => (
+                        <li key={index}>{detail}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </span>
                 {item.actions && (
                   <span className="toast-actions">
                     {item.actions.map((action) => (
@@ -325,6 +414,11 @@ export function ToastHost() {
                       </button>
                     ))}
                   </span>
+                )}
+                {!isConfirm && item.open && (
+                  <button type="button" className="toast-button" onClick={() => dismiss(item.id)}>
+                    Dismiss
+                  </button>
                 )}
               </div>
             );

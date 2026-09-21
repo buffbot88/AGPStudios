@@ -8,8 +8,9 @@ import { expect, test } from '@playwright/test';
  * caused — and assert that:
  *
  *   1. the surface degrades to its fallback panel,
- *   2. the app shell (header, session) stays mounted and usable, and
- *   3. disarming and clicking "Try again" recovers the surface.
+ *   2. the app shell (header, session) stays mounted and usable,
+ *   3. the crash is reported as a toast (visible without devtools), and
+ *   4. disarming and clicking "Try again" recovers the surface.
  *
  * Without the boundary, step 1 would blank the whole page instead.
  *
@@ -46,10 +47,37 @@ test.describe('surface error boundary', () => {
     // Guards against a silently-passing test: the crash really happened.
     expect(consoleErrors.join('\n')).toContain('Test crash: simulated member');
 
-    // Recovery: disarm (as if the bad data were fixed), then retry.
+    // The crash also goes through the shared error reporter, so it shows up as
+    // a toast (role=status) naming both the error and the failed surface — one
+    // toast, not one per render.
+    const toastStack = page.locator('.toast-stack');
+    await expect(toastStack).toContainText('Something went wrong: Test crash: simulated member');
+    await expect(toastStack).toContainText("Support couldn't load");
+    await expect(toastStack.locator('.toast')).toHaveCount(1);
+    await expect(toastStack.locator('.toast-count')).toHaveCount(0); // first occurrence, no badge yet
+
+    // Retry while still armed: the same failure recurs and must batch into that
+    // toast as ×2 rather than pushing a second one.
+    await fallback.getByRole('button', { name: 'Try again' }).click();
+    await expect(page.getByRole('alert')).toContainText("Support couldn't load");
+    await expect(toastStack.locator('.toast')).toHaveCount(1);
+    await expect(toastStack.locator('.toast-count')).toHaveText('×2');
+
+    // The details affordance lists each occurrence, and expanding pins the
+    // toast so it can't disappear mid-read.
+    const detailsToggle = toastStack.getByRole('button', { name: /details/i });
+    await detailsToggle.click();
+    await expect(toastStack.locator('.toast-details li')).toHaveCount(2);
+    await expect(detailsToggle).toHaveAttribute('aria-expanded', 'true');
+    await expect(toastStack.getByRole('button', { name: 'Dismiss' })).toBeVisible();
+
+    // Recovery: disarm (as if the bad data were fixed), then retry. Asserting
+    // on the boundary's own heading (not "no alert anywhere") keeps this
+    // honest about what recovered: a surface-level API error panel is a
+    // different failure and must not read as a boundary one.
     await page.evaluate(disarm());
     await fallback.getByRole('button', { name: 'Try again' }).click();
-    await expect(page.getByRole('alert')).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: "Support couldn't load" })).toHaveCount(0);
     await expect(page.getByRole('navigation', { name: 'Member navigation' })).toBeVisible();
     await expect(page.getByText('Sign in to create and view support tickets.')).toBeVisible();
   });
@@ -70,19 +98,21 @@ test.describe('surface error boundary', () => {
     const fallback = page.getByRole('alert');
     await expect(fallback).toContainText("The admin panel couldn't load");
 
-    // Session/header survived the surface crash.
+    // Session/header survived the surface crash, and the crash is toasted.
     await expect(page.locator('.auth-menu')).toBeVisible();
+    await expect(page.locator('.toast-stack'))
+      .toContainText('Something went wrong: Test crash: simulated admin surface shape drift');
 
     await page.evaluate(disarm());
     await fallback.getByRole('button', { name: 'Try again' }).click();
-    await expect(page.getByRole('alert')).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: "The admin panel couldn't load" })).toHaveCount(0);
     await expect(page.getByRole('heading', { name: 'Admin Control' })).toBeVisible();
   });
 
   test('an unarmed surface never shows the fallback', async ({ page }) => {
     await page.goto('/#support');
     await expect(page.locator('.member-section')).toBeVisible();
-    await expect(page.getByRole('alert')).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: /couldn't load/ })).toHaveCount(0);
     await expect(page.getByText('Sign in to create and view support tickets.')).toBeVisible();
   });
 });

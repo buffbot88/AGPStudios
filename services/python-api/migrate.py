@@ -1,35 +1,7 @@
 #!/usr/bin/env python3
-"""Migration runner for the AGP Studios Python API.
+"""Apply SQL migrations in filename order, recording each in `schema_migrations`.
 
-Applies the SQL files in `migrations/` in filename order, recording each one in
-a `schema_migrations` table so a file runs exactly once. Replaces the previous
-"apply them by hand in order" workflow, which was fragile for two reasons:
-
-  * migration 0001 (`ALTER TABLE users ADD COLUMN diamonds`) is NOT idempotent —
-    re-running it fails with "Duplicate column name", so a human working from a
-    checklist could easily either skip it or crash on it;
-  * nothing recorded which files a given database had already seen, so the two
-    environments could silently diverge.
-
-Usage (from services/python-api):
-
-    python3 migrate.py                 # apply pending migrations
-    python3 migrate.py --status        # what's applied / pending / drifted
-    python3 migrate.py --dry-run       # show the plan, change nothing
-    python3 migrate.py --check         # exit 1 if anything is pending (deploy gate)
-    python3 migrate.py --baseline      # record existing files as applied WITHOUT
-                                       # running them (for a database that was
-                                       # migrated by hand before this runner)
-    python3 migrate.py --reapply-drifted   # re-run files whose contents changed
-
-The connection string comes from `ASHAT_DATABASE_URL` (same variable proxy.py
-uses): `mysql://user:pass@host:3306/database`.
-
-Failure semantics: MySQL implicitly commits DDL, so a migration that fails
-partway leaves the statements before the failure applied and the file
-*unrecorded*. Fix the file and re-run — the runner retries the whole file, which
-is why every migration is written to be convergent/idempotent (0001 aside, which
-is the reason migrations are tracked at all).
+Usage and failure semantics are in the README under "Database migrations".
 """
 from __future__ import annotations
 
@@ -62,12 +34,9 @@ CREATE TABLE IF NOT EXISTS {TRACKING_TABLE} (
 # --------------------------------------------------------------------------
 
 def split_statements(sql: str) -> list[str]:
-    """Split a migration file into individual statements.
+    """Split a migration file into statements, respecting quotes and comments.
 
-    A naive `sql.split(';')` breaks as soon as a string literal contains a
-    semicolon, so this tracks quoting (`'`, `"`, backtick), backslash escapes,
-    doubled-quote escapes, and `--` / `#` / `/* */` comments. Comments are
-    dropped from the returned statements.
+    A naive split on ';' breaks on semicolons inside string literals.
     """
     statements: list[str] = []
     buffer: list[str] = []
@@ -144,12 +113,7 @@ class Migration:
 
 
 def discover(directory: Path = MIGRATIONS_DIR) -> list[Migration]:
-    """Return migrations ordered by numeric filename prefix.
-
-    Every `.sql` file must be named `NNNN_description.sql`; a stray or
-    mis-named file is an error rather than a silent skip, because a migration
-    that never runs is indistinguishable from one that ran fine.
-    """
+    """Return migrations ordered by numeric filename prefix; a mis-named .sql file is an error."""
     migrations: list[Migration] = []
     seen: dict[int, str] = {}
     for path in sorted(directory.glob("*.sql")):
@@ -207,15 +171,11 @@ def plan(migrations: Sequence[Migration], applied: dict[str, str], reapply_drift
 # --------------------------------------------------------------------------
 
 class ConfigurationError(RuntimeError):
-    """Bad connection string or missing driver — reported without a traceback."""
+    """Bad connection string or missing driver."""
 
 
 def connect(database_url: str):
-    """Open a MySQL connection.
-
-    The URL is validated before the driver is imported, and pymysql is imported
-    lazily so the pure helpers above (and their tests) work without it.
-    """
+    """Open a MySQL connection; pymysql is imported lazily so the helpers above need no driver."""
     url = urlparse(database_url)
     if not url.hostname or not url.path or url.scheme not in ("mysql", "mysql+pymysql"):
         raise ConfigurationError(
@@ -259,11 +219,7 @@ def record(cursor, migration: Migration, applied_by: str) -> None:
 
 
 def apply_migration(connection, migration: Migration, applied_by: str) -> int:
-    """Execute every statement in a migration, then record it.
-
-    The row is written only after all statements succeed, so a failed migration
-    stays pending and is retried (not silently marked done).
-    """
+    """Execute a migration's statements, recording it only after all of them succeed."""
     statements = migration.statements
     with connection.cursor() as cursor:
         for statement in statements:
