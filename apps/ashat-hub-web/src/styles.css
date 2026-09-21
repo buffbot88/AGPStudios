@@ -1898,6 +1898,47 @@ h3 {
   gap: 2px;
 }
 
+/* Games tab: poster swap */
+.adm-games-list {
+  display: grid;
+  gap: 10px;
+}
+
+.adm-game-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.adm-game-thumb {
+  width: 84px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.adm-game-info {
+  display: grid;
+  gap: 6px;
+  flex: 1;
+}
+
+.adm-game-info small {
+  color: var(--text-muted);
+}
+
+.adm-game-poster-input {
+  font-family: ui-monospace, monospace;
+  font-size: 0.85rem;
+}
+
 .adm-user-row {
   display: flex;
   align-items: center;

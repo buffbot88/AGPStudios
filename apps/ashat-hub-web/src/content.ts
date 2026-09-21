@@ -70,6 +70,8 @@ export const GAMES: Game[] = [
     statusLabel: 'Coming Soon',
     tags: ['Variety'],
     url: '#news',
+    poster: '/more-in-development-poster.svg',
+    posterAlt: 'More in Development poster art',
   },
 ];
 

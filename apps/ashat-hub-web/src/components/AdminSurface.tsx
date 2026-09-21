@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { API, request, safeList, safeNumber, safeText, safeTime } from './api';
 import { confirmModal, confirmToast, toast } from './toast';
+import { maybeCrash } from './devCrash';
 
 type User = { id: string; username: string; email: string; display_name: string; role: string };
 type AdminUser = { id: string; username: string; email: string; display_name: string; role: string; is_active: number; banned_at?: number | null; email_verified_at?: string | null };
@@ -12,9 +13,11 @@ type AdminSummary = {
 type DatabaseStatus = { database: string; version: string; paws?: { status?: string } };
 type AdminTelemetry = { servers: { id: string; label: string; online: boolean; active_requests: number; requests_last_5m: number; generation_tokens_per_second: number; prompt_tokens_per_second: number; total_completion_tokens: number; queue_depth: number; queue_limit: number }[]; updated_at: number };
 type OmegaServer = { id: string; label: string; online: boolean; ready: boolean; workers?: number; max_workers: number };
-type AdminTab = 'overview' | 'users' | 'telemetry' | 'system';
+type AdminGame = { slug: string; title: string; summary: string; status: string; tags: string[]; url: string; poster: string; featured: boolean; sort_order?: number };
+type AdminTab = 'overview' | 'users' | 'games' | 'telemetry' | 'system';
 type RepoPair = { live: string; repo: string; state: string };
 type RepoStatus = { ashathub: RepoPair };
+type ModerationEvent = { id: number; user_id: string; action: string; actor_id: string; actor_name: string; detail: string; created_at: number };
 function repoCommit(pair?: RepoPair) { return pair ? `${pair.live.slice(0, 8)} / ${pair.repo.slice(0, 8)}` : 'Loading…'; }
 
 // ── Helpers ──
@@ -59,30 +62,53 @@ export function AdminSurface({ user }: { user: User | null }) {
   const [omegaServers, setOmegaServers] = useState<OmegaServer[]>([]);
   const [settings, setSettings] = useState<Record<string, string | boolean> | null>(null);
   const [repoStatus, setRepoStatus] = useState<RepoStatus | null>(null);
+  const [games, setGames] = useState<AdminGame[]>([]);
   const [query, setQuery] = useState('');
   const [deployFilter, setDeployFilter] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // Side panels
   const [selectedUser, setSelectedUser] = useState<AdminUser | null>(null);
+  const [moderation, setModeration] = useState<ModerationEvent[]>([]);
+  const [moderationError, setModerationError] = useState<string | null>(null);
+
+  const loadModeration = useCallback(async (userId: string) => {
+    try {
+      const data = await request<{ user_id: string; events: ModerationEvent[] }>(`${API}/admin/users/${encodeURIComponent(userId)}/moderation`);
+      setModeration(safeList<ModerationEvent>(data.events));
+      setModerationError(null);
+    } catch (reason) {
+      setModeration([]);
+      setModerationError(reason instanceof Error ? reason.message : 'Moderation history unavailable');
+    }
+  }, []);
+
+  const selectUser = useCallback((u: AdminUser | null) => {
+    setSelectedUser(u);
+    setModeration([]);
+    setModerationError(null);
+    if (u) void loadModeration(u.id);
+  }, [loadModeration]);
 
   const load = useCallback(async () => {
     if (!user || user.role.toLowerCase() !== 'admin') return;
     try {
       const search = query.trim() ? `?q=${encodeURIComponent(query.trim())}` : '';
-      const [summaryResult, usersResult, databaseResult, settingsResult, repoResult] = await Promise.allSettled([
+      const [summaryResult, usersResult, databaseResult, settingsResult, repoResult, gamesResult] = await Promise.allSettled([
         request<AdminSummary>(`${API}/admin/summary`),
         request<{ users: AdminUser[] }>(`${API}/admin/users${search}`),
         request<DatabaseStatus>(`${API}/admin/database/status`),
         request<Record<string, string | boolean>>(`${API}/admin/settings`),
         request<RepoStatus>(`${API}/admin/repo-status`),
+        request<{ games: AdminGame[] }>(`${API}/admin/games`),
       ]);
       if (summaryResult.status === 'fulfilled') setSummary(summaryResult.value);
       if (usersResult.status === 'fulfilled') setUsers(safeList(usersResult.value.users));
       if (databaseResult.status === 'fulfilled') setDatabase(databaseResult.value);
       if (settingsResult.status === 'fulfilled') setSettings(settingsResult.value);
       if (repoResult.status === 'fulfilled') setRepoStatus(repoResult.value);
-      const firstRejected = [summaryResult, usersResult, databaseResult, settingsResult, repoResult].find(
+      if (gamesResult.status === 'fulfilled') setGames(safeList<AdminGame>(gamesResult.value.games));
+      const firstRejected = [summaryResult, usersResult, databaseResult, settingsResult, repoResult, gamesResult].find(
         (outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected',
       );
       if (firstRejected) {
@@ -120,7 +146,7 @@ export function AdminSurface({ user }: { user: User | null }) {
       await load();
       if (selectedUser && selectedUser.id === userId) {
         const updated = await request<{ users: AdminUser[] }>(`${API}/admin/users?q=${encodeURIComponent(userId)}`);
-        const fresh = updated.users.find(u => u.id === userId);
+        const fresh = safeList<AdminUser>(updated.users).find(u => u?.id === userId);
         if (fresh) setSelectedUser(fresh);
       }
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'User update failed'); }
@@ -139,10 +165,20 @@ export function AdminSurface({ user }: { user: User | null }) {
       await load();
       if (selectedUser && selectedUser.id === userId) {
         const updated = await request<{ users: AdminUser[] }>(`${API}/admin/users?q=${encodeURIComponent(userId)}`);
-        const fresh = updated.users.find(u => u.id === userId);
+        const fresh = safeList<AdminUser>(updated.users).find(u => u?.id === userId);
         if (fresh) setSelectedUser(fresh);
       }
     } catch (reason) { setError(reason instanceof Error ? reason.message : `${action} failed`); }
+    finally { setBusy(false); }
+  }
+
+  async function updateGamePoster(slug: string, poster: string) {
+    setBusy(true); setError(null);
+    try {
+      await request(`${API}/admin/games/${encodeURIComponent(slug)}`, { method: 'PUT', body: JSON.stringify({ poster }) });
+      toast('Poster updated.', 'success');
+      await load();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Poster update failed'); }
     finally { setBusy(false); }
   }
 
@@ -165,9 +201,12 @@ export function AdminSurface({ user }: { user: User | null }) {
 
   if (!user || user.role.toLowerCase() !== 'admin') return <section className="member-panel workspace-locked"><span className="eyebrow">AGP Admin</span><h2>Administrator access required.</h2></section>;
 
+  maybeCrash('admin');
+
   const tabs: { id: AdminTab; label: string }[] = [
     { id: 'overview', label: 'Overview' },
     { id: 'users', label: 'Users' },
+    { id: 'games', label: 'Games' },
     { id: 'telemetry', label: 'Omega' },
     { id: 'system', label: 'System' },
   ];
@@ -187,7 +226,8 @@ export function AdminSurface({ user }: { user: User | null }) {
       </nav>
 
       {tab === 'overview' && <OverviewTab summary={summary} onNavigate={setTab} />}
-      {tab === 'users' && <UsersTab users={users} query={query} onQueryChange={setQuery} onSearch={load} onSelectUser={setSelectedUser} selectedUser={selectedUser} busy={busy} currentUser={user} onUpdateUser={updateUser} onBanUser={banUser} onDeleteUser={deleteUser} />}
+      {tab === 'users' && <UsersTab users={users} query={query} onQueryChange={setQuery} onSearch={load} onSelectUser={selectUser} selectedUser={selectedUser} busy={busy} currentUser={user} onUpdateUser={updateUser} onBanUser={banUser} onDeleteUser={deleteUser} moderation={moderation} moderationError={moderationError} onRefreshModeration={() => selectedUser && void loadModeration(selectedUser.id)} />}
+      {tab === 'games' && <GamesTab games={games} busy={busy} onUpdatePoster={updateGamePoster} />}
       {tab === 'telemetry' && <TelemetryTab telemetry={telemetry} servers={omegaServers} busy={busy} onAction={telemetryAction} onUpdate={codingAgentsUpdate} />}
       {tab === 'system' && <SystemTab database={database} settings={settings} onPush={pushGithub} onUpdate={systemUpdate} status={repoStatus} />}
     </section>
@@ -201,6 +241,34 @@ function TelemetryTab({ telemetry, servers, busy, onAction, onUpdate }: { teleme
     <div className="adm-toolbar adm-telemetry-toolbar"><button type="button" className="secondary-button" onClick={() => onAction('refresh')} disabled={busy}>Refresh telemetry</button><button type="button" className="secondary-button" onClick={() => onAction('clear')} disabled={busy}>Clear server cache</button><span className="refresh-state">{telemetry ? `Updated ${safeTime(telemetry.updated_at * 1000).split(', ').pop() ?? ''}` : 'Loading…'}</span></div>
     <div className="admin-telemetry-grid">{safeList<OmegaServer>(servers).map((server) => <div className={`admin-server ${server.online ? 'online' : 'offline'}`} key={safeText(server.id)}><div className="admin-server-heading"><strong>{safeText(server.label)}</strong><span className="admin-server-status">{server.online ? '● Online' : '○ Offline'}</span></div><small>{server.ready ? 'Ready' : 'Not ready'} · {safeNumber(server.workers)}/{safeNumber(server.max_workers)} workers</small><small>Omega managed by Ashat Hub SSH provisioning</small></div>)}</div>
   </div>;
+}
+
+// ── Games Tab ──
+
+function GamesTab({ games, busy, onUpdatePoster }: { games: AdminGame[]; busy: boolean; onUpdatePoster: (slug: string, poster: string) => void }) {
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const draft = (slug: string, current: string) => drafts[slug] ?? current;
+  return (
+    <div className="adm-panel-layout">
+      <div className="adm-games-list">
+        <div className="adm-toolbar"><span className="eyebrow">Game art</span><span className="refresh-state">Poster URLs update live — no redeploy needed</span></div>
+        {safeList<AdminGame>(games).filter(Boolean).map((game) => (
+          <form className="adm-game-row" key={safeText(game.slug)} onSubmit={(e) => { e.preventDefault(); onUpdatePoster(safeText(game.slug), draft(safeText(game.slug), safeText(game.poster)).trim()); }}>
+            <img className="adm-game-thumb" src={draft(safeText(game.slug), safeText(game.poster)) || undefined} alt="" onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = 'hidden'; }} />
+            <div className="adm-game-info">
+              <strong>{safeText(game.title)}</strong>
+              <small>{safeText(game.slug)} · {safeText(game.status)}{game.featured ? ' · featured' : ''}</small>
+              <input className="adm-game-poster-input" value={draft(safeText(game.slug), safeText(game.poster))}
+                onChange={(e) => setDrafts({ ...drafts, [safeText(game.slug)]: e.target.value })}
+                placeholder="/poster.svg or https://…" spellCheck={false} />
+            </div>
+            <button type="submit" className="secondary-button" disabled={busy}>Save poster</button>
+          </form>
+        ))}
+        {games.length === 0 && <div className="adm-empty">No games configured.</div>}
+      </div>
+    </div>
+  );
 }
 
 // ── Overview Tab ──
@@ -237,11 +305,12 @@ function OverviewTab({ summary, onNavigate }: { summary: AdminSummary | null; on
 
 // ── Users Tab ──
 
-function UsersTab({ users, query, onQueryChange, onSearch, onSelectUser, selectedUser, busy, currentUser, onUpdateUser, onBanUser, onDeleteUser }: {
+function UsersTab({ users, query, onQueryChange, onSearch, onSelectUser, selectedUser, busy, currentUser, onUpdateUser, onBanUser, onDeleteUser, moderation, moderationError, onRefreshModeration }: {
   users: AdminUser[]; query: string; onQueryChange: (q: string) => void; onSearch: () => void;
   onSelectUser: (u: AdminUser | null) => void; selectedUser: AdminUser | null;
   busy: boolean; currentUser: User; onUpdateUser: (id: string, body: { role?: string; is_active?: boolean }) => void;
   onBanUser: (id: string, banned: boolean) => void; onDeleteUser: (id: string) => void;
+  moderation: ModerationEvent[]; moderationError: string | null; onRefreshModeration: () => void;
 }) {
   return (
     <div className="adm-panel-layout">
@@ -251,27 +320,28 @@ function UsersTab({ users, query, onQueryChange, onSearch, onSelectUser, selecte
           <button type="button" className="secondary-button" onClick={onSearch}>Search</button>
         </div>
         <div className="adm-user-list">
-          {safeList<AdminUser>(users).map((u) => (
-            <button key={safeText(u.id)} type="button" className={selectedUser?.id === u.id ? 'adm-user-row selected' : 'adm-user-row'} onClick={() => onSelectUser(u)}>
+          {safeList<AdminUser>(users).filter(Boolean).map((u) => (
+            <button key={safeText(u.id)} type="button" className={selectedUser?.id === u?.id ? 'adm-user-row selected' : 'adm-user-row'} onClick={() => onSelectUser(u)}>
               <div className="adm-user-row-info">
-                <strong>{safeText(u.display_name) || safeText(u.username)}</strong>
-                <small>@{safeText(u.username)} · {safeText(u.email)}</small>
+                <strong>{safeText(u?.display_name) || safeText(u?.username)}</strong>
+                <small>@{safeText(u?.username)} · {safeText(u?.email)}</small>
               </div>
-              <span className="adm-user-role">{safeText(u.role)}</span>
-              <span className={u.is_active ? 'adm-status-dot active' : 'adm-status-dot disabled'} />
+              <span className="adm-user-role">{safeText(u?.role)}</span>
+              <span className={u?.is_active ? 'adm-status-dot active' : 'adm-status-dot disabled'} />
             </button>
           ))}
           {users.length === 0 && <div className="adm-empty">No users found.</div>}
         </div>
       </div>
-      {selectedUser && <UserDetailPanel user={selectedUser} busy={busy} currentUser={currentUser} onUpdate={onUpdateUser} onBan={onBanUser} onDelete={onDeleteUser} onClose={() => onSelectUser(null)} />}
+      {selectedUser && <UserDetailPanel user={selectedUser} busy={busy} currentUser={currentUser} onUpdate={onUpdateUser} onBan={onBanUser} onDelete={onDeleteUser} onClose={() => onSelectUser(null)} moderation={moderation} moderationError={moderationError} onRefreshModeration={onRefreshModeration} />}
     </div>
   );
 }
 
-function UserDetailPanel({ user: u, busy, currentUser, onUpdate, onBan, onDelete, onClose }: {
+function UserDetailPanel({ user: u, busy, currentUser, onUpdate, onBan, onDelete, onClose, moderation, moderationError, onRefreshModeration }: {
   user: AdminUser; busy: boolean; currentUser: User; onUpdate: (id: string, body: { role?: string; is_active?: boolean }) => void;
   onBan: (id: string, banned: boolean) => void; onDelete: (id: string) => void; onClose: () => void;
+  moderation: ModerationEvent[]; moderationError: string | null; onRefreshModeration: () => void;
 }) {
   const isBanned = Boolean(u.banned_at);
   return (
@@ -304,6 +374,23 @@ function UserDetailPanel({ user: u, busy, currentUser, onUpdate, onBan, onDelete
         <button type="button" className="adm-btn-delete" disabled={busy || u.id === currentUser.id} onClick={() => void onDelete(u.id)}>
           Delete User Permanently
         </button>
+      </div>
+      <div className="adm-moderation-history">
+        <div className="adm-moderation-heading">
+          <span className="eyebrow">Moderation history</span>
+          <button type="button" className="adm-close-btn" onClick={onRefreshModeration} aria-label="Refresh moderation history">↻</button>
+        </div>
+        {moderationError ? <p className="workspace-error" role="alert">{moderationError}</p>
+          : moderation.length === 0 ? <p className="muted">No moderation actions recorded.</p>
+          : <ul className="adm-moderation-list">
+              {moderation.map((event) => <li key={safeText(event.id)} className="adm-moderation-event">
+                <span className={`adm-badge ${String(event.action).includes('banned') && !String(event.action).includes('un') ? 'err' : 'ok'}`}>
+                  {safeText(event.action).replace('user.', '').replace('.', ' ')}
+                </span>
+                <span className="adm-moderation-detail">{safeText(event.detail)}</span>
+                <small className="adm-moderation-meta">by {safeText(event.actor_name)} · {safeTime(event.created_at)}</small>
+              </li>)}
+            </ul>}
       </div>
     </div>
   );

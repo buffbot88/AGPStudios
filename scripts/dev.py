@@ -10,6 +10,12 @@ Usage:
     python3 scripts/dev.py                 # mock API + vite (foreground)
     python3 scripts/dev.py --no-verification
                                            # pass mock-api flags through
+    python3 scripts/dev.py --port 3111 --mock-port 3112
+                                           # isolated stack for E2E runs
+
+Options consumed here: --port (vite, default 3101) and --mock-port (default
+3110). Every other argument is forwarded to scripts/mock-api.py. The API is
+waited for before vite starts, so nothing races the mock's bind.
 Requires: python3 on PATH (the same interpreter runs scripts/mock-api.py).
 """
 import os
@@ -22,6 +28,23 @@ ROOT = Path(__file__).resolve().parent.parent
 WEB_DIR = ROOT / "apps" / "ashat-hub-web"
 
 exiting = False
+
+
+def wait_for_port(host: str, port: int, timeout: float) -> bool:
+    """Block until host:port accepts TCP connections, or the timeout expires."""
+    import socket
+    import time as _time
+
+    deadline = _time.monotonic() + timeout
+    while _time.monotonic() < deadline:
+        try:
+            with socket.create_connection((host, port), timeout=0.5):
+                return True
+        except OSError:
+            if _time.monotonic() >= deadline:
+                break
+            _time.sleep(0.1)
+    return False
 
 
 def terminate(signum, _frame):
@@ -47,16 +70,45 @@ def main() -> int:
         signal.signal(signal.SIGINT, terminate)
         signal.signal(signal.SIGTERM, terminate)
 
-    mock_cmd = [sys.executable, str(ROOT / "scripts" / "mock-api.py"), *sys.argv[1:]]
-    vite_cmd = ["npm", "run", "dev"]
-    if os.name == "nt":
-        vite_cmd = ["npm.cmd", "run", "dev"]
+    # Args: --port/--mock-port configure the stack (used by the E2E runner so
+    # tests get their own ports); anything else is forwarded to mock-api.py.
+    argv = list(sys.argv[1:])
 
-    env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    def take(flag, default):
+        if flag in argv:
+            index = argv.index(flag)
+            value = argv[index + 1]
+            del argv[index:index + 2]
+            return int(value)
+        return default
+
+    web_port = take("--port", 3101)
+    mock_port = take("--mock-port", 3110)
+
+    mock_cmd = [sys.executable, str(ROOT / "scripts" / "mock-api.py"), *argv]
+    vite_cmd = ["npm", "run", "dev", "--", "--port", str(web_port), "--strictPort"]
+    if os.name == "nt":
+        vite_cmd[0] = "npm.cmd"
+
+    env = {
+        **os.environ,
+        "PYTHONUNBUFFERED": "1",
+        "PORT": str(mock_port),
+        # Point the vite /api proxy at this run's mock instance.
+        "ASHAT_API_TARGET": f"http://127.0.0.1:{mock_port}",
+    }
     mock = subprocess.Popen(mock_cmd, env=env)
+
+    # Wait for the API to accept connections before starting vite. Otherwise the
+    # first page load can race the mock's bind and log proxy ECONNREFUSED
+    # errors (E2E runs saw this), even though the app degrades gracefully.
+    if not wait_for_port("127.0.0.1", mock_port, timeout=15.0):
+        print(f"[dev] mock API never came up on port {mock_port}; starting vite anyway",
+              file=sys.stderr, flush=True)
+
     vite = subprocess.Popen(vite_cmd, cwd=WEB_DIR, env=env)
     print(f"[dev] mock-api pid={mock.pid}  vite pid={vite.pid}", flush=True)
-    print("[dev] vite → http://localhost:3101/  (proxy target 127.0.0.1:3110)", flush=True)
+    print(f"[dev] vite → http://localhost:{web_port}/  (proxy target 127.0.0.1:{mock_port})", flush=True)
     print("[dev] Ctrl+C stops both.", flush=True)
 
     try:
@@ -75,9 +127,10 @@ def main() -> int:
                 return code or 1
             sys.stdout.flush()
             sys.stderr.flush()
-            mock.wait(timeout=1)
-    except subprocess.TimeoutExpired:
-        return 0  # loop again — neither child has exited
+            # Poll briefly without letting TimeoutExpired escape the loop;
+            # an earlier version returned here and orphaned both children.
+            import time as _time
+            _time.sleep(0.25)
     except KeyboardInterrupt:
         terminate(signal.SIGINT, None)
         return 0

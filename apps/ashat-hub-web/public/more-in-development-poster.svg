@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" role="img" aria-label="More in Development poster art">
+  <defs>
+    <!-- pre-dawn sky: same night-to-horizon ramp family as the other posters -->
+    <linearGradient id="more-sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0a1626"/>
+      <stop offset=".55" stop-color="#0f2438"/>
+      <stop offset="1" stop-color="#1a3448"/>
+    </linearGradient>
+    <!-- haze band on the horizon -->
+    <linearGradient id="more-haze" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#22405a" stop-opacity="0"/>
+      <stop offset="1" stop-color="#22405a" stop-opacity=".55"/>
+    </linearGradient>
+    <radialGradient id="more-glow" cx=".5" cy=".5" r=".5">
+      <stop offset="0" stop-color="#f1c25b" stop-opacity=".32"/>
+      <stop offset="1" stop-color="#f1c25b" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="more-gold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f6d16b"/>
+      <stop offset="1" stop-color="#d99f35"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="400" height="300" fill="url(#more-sky)"/>
+
+  <!-- stars -->
+  <g fill="#cfe2ee">
+    <circle cx="46" cy="42" r="1.1" opacity=".7"/>
+    <circle cx="112" cy="26" r="1" opacity=".5"/>
+    <circle cx="204" cy="52" r="1" opacity=".4"/>
+    <circle cx="310" cy="34" r="1.3" opacity=".8"/>
+    <circle cx="356" cy="84" r="1" opacity=".5"/>
+    <circle cx="70" cy="96" r="1" opacity=".4"/>
+    <circle cx="150" cy="86" r="1" opacity=".5"/>
+    <circle cx="262" cy="72" r="1" opacity=".6"/>
+  </g>
+
+  <!-- dawn glow breaking the horizon: something is coming -->
+  <ellipse cx="200" cy="248" rx="180" ry="70" fill="url(#more-glow)"/>
+
+  <!-- sunrise sliver on the horizon -->
+  <path d="M148 248 A52 52 0 0 1 252 248 Z" fill="url(#more-gold)"/>
+
+  <!-- unfinished outlines: silhouettes of worlds still taking shape -->
+  <g fill="none" stroke="#8fb4c9" stroke-opacity=".5" stroke-width="2" stroke-dasharray="6 7" stroke-linecap="round">
+    <!-- a hill/planet outline, left -->
+    <path d="M30 248 Q92 176 156 248"/>
+    <!-- a tower/rocket outline, right -->
+    <path d="M292 248 L292 196 Q292 180 306 172 Q320 180 320 196 L320 248"/>
+  </g>
+
+  <!-- dashed horizon line: the road ahead -->
+  <line x1="0" y1="248" x2="400" y2="248" stroke="#f1c25b" stroke-opacity=".3" stroke-width="1.5" stroke-dasharray="10 10"/>
+
+  <!-- question mark constellation, gold -->
+  <g transform="translate(200 120)" fill="none" stroke="url(#more-gold)" stroke-width="7" stroke-linecap="round">
+    <path d="M-22 -18 Q-22 -40 0 -40 Q22 -40 22 -20 Q22 -4 0 0"/>
+    <circle cx="0" cy="22" r="1.6" fill="url(#more-gold)" stroke="none"/>
+    <circle cx="0" cy="36" r="1.6" fill="url(#more-gold)" stroke="none"/>
+  </g>
+
+  <!-- haze rising from the horizon -->
+  <rect x="0" y="212" width="400" height="60" fill="url(#more-haze)"/>
+
+  <!-- foreground ground -->
+  <path d="M0 268 Q120 256 240 264 T400 260 L400 300 L0 300 Z" fill="#081524"/>
+
+  <text x="30" y="256" font-family="Georgia, 'Times New Roman', serif" font-style="italic" font-size="24" fill="#f6d16b">More in Development</text>
+  <text x="31" y="272" font-family="Verdana, Geneva, sans-serif" font-size="8" letter-spacing="2" fill="#c9b28a">NEW WORLDS · COMING SOON</text>
+</svg>

@@ -15,23 +15,40 @@ Behavior notes:
   username `boss`, password `admin-pass-1`.
 - Verification codes are printed to stdout so tests can complete the verify
   flow; run with --no-verification to activate accounts immediately.
-- Listens on 127.0.0.1:3110 (the vite proxy target); request shapes mirror
-  services/python-api/proxy.py, including its quirks (POST /admin/users/ban
-  always bans; /admin/users/status takes {user_id, status}; PUT /api/account
-  requires username/email/display_name).
+- Listens on 127.0.0.1:3110 by default (override with `PORT`); request shapes
+  mirror services/python-api/proxy.py, including its quirks (POST
+  /admin/users/ban accepts `{user_id, banned}`; /admin/users/status takes
+  `{user_id, status}`; PUT /api/account requires username/email/display_name).
+- Failure injection is controlled through unauthenticated loopback-only
+  `/__config` and `/__reset`: add latency with `{"latency_ms": 250}`, return
+  an injected error with `{"error_status": 503, "error_paths": ["/api/news"]}`,
+  and make it one-shot with `{"error_once": true}`. Reset restores seed data,
+  clears sessions, and clears all controls; `{"verification_required": false}`
+  may be included in the reset body.
 
 Run via `npm run mock-api` (alone) or `npm run dev:mock` (alongside vite) from
 apps/ashat-hub-web. See the README's "Frontend with the mock API" section.
 """
+import copy
 import json
+import os
 import secrets
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-# email verification required for register (toggle via /__config)
-CONFIG = {"verification_required": True}
+# Dev-only controls. /__config and /__reset intentionally require no auth:
+# this server binds to loopback and is never used as a production API.
+DEFAULT_CONTROLS = {
+    "verification_required": True,
+    "latency_ms": 0,
+    "error_status": 0,
+    "error_message": "Injected mock API failure",
+    "error_paths": [],
+    "error_once": False,
+}
+CONFIG = dict(DEFAULT_CONTROLS)
 
 USERS = {
     # pre-seeded admin (password: admin-pass-1)
@@ -53,12 +70,55 @@ GAMES = {"games": [
      "summary": "A new world is taking shape.",
      "status": "in-development", "tags": ["Exploration"], "url": "",
      "poster": "/world-of-ra-poster.svg", "featured": False},
+    {"slug": "more-titles", "title": "More in Development",
+     "summary": "New worlds, new experiences, and more to come.",
+     "status": "coming-soon", "tags": ["Variety"], "url": "#news",
+     "poster": "/more-in-development-poster.svg", "featured": False},
 ]}
 NEWS = {"news": [
     {"id": "n1", "title": "A New Chapter Ahead",
      "summary": "We're working on new worlds, new ideas, and more ways to play together.",
      "url": "#news", "published_at": int(time.time())},
 ]}
+
+# Shape-only OIDC signing key for local contract tests. The mock never issues
+# real tokens; production loads its RSA key from ASHAT_OIDC_PRIVATE_KEY_FILE.
+MOCK_JWKS = {
+    "keys": [{
+        "kty": "RSA", "use": "sig", "alg": "RS256", "kid": "mock-key-1",
+        "n": "sXchc2FtcGxlLWp3a3MtbW9kdWx1cy1mb3ItY29udHJhY3QtdGVzdHM",
+        "e": "AQAB",
+    }]
+}
+
+INITIAL_USERS = copy.deepcopy(USERS)
+INITIAL_TICKETS = copy.deepcopy(TICKETS)
+MODERATION = []  # user_moderation_history mirror (migration 0004)
+
+# Mirrors proxy.py's admin-mutation idempotency guard: (path, user_id) ->
+# last submit time. Repeats inside the window return 409.
+IDEMPOTENCY_WINDOW = 3.0  # seconds — keep in sync with proxy.py
+RECENT_MUTATIONS = {}
+
+
+def reset_state():
+    """Restore deterministic seed data, sessions, and fault controls."""
+    CONFIG.clear()
+    CONFIG.update(DEFAULT_CONTROLS)
+    USERS.clear()
+    USERS.update(copy.deepcopy(INITIAL_USERS))
+    TICKETS.clear()
+    TICKETS.extend(copy.deepcopy(INITIAL_TICKETS))
+    RECENT_MUTATIONS.clear()
+    MODERATION.clear()
+    SESSIONS.clear()
+    CSRF.clear()
+    VERIFICATIONS.clear()
+
+
+def path_matches(path, configured):
+    """Match an injected-error path exactly or as a path prefix."""
+    return not configured or any(path == item or path.startswith(item.rstrip('/') + '/') for item in configured)
 
 
 def err(message, status):
@@ -98,6 +158,25 @@ class Handler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length) if length else b"{}"
         return json.loads(raw or b"{}")
 
+    def maybe_inject_fault(self, path):
+        """Apply configured latency/failure; return True when a response was sent."""
+        delay = max(0, min(int(CONFIG.get("latency_ms", 0) or 0), 60_000))
+        if delay:
+            time.sleep(delay / 1000)
+        status = int(CONFIG.get("error_status", 0) or 0)
+        paths = CONFIG.get("error_paths", [])
+        if status and path_matches(path, paths):
+            if CONFIG.get("error_once"):
+                CONFIG["error_status"] = 0
+            self.reply(*err(str(CONFIG.get("error_message") or "Injected mock API failure"), status))
+            return True
+        return False
+
+    def request_base(self):
+        """Return the loopback origin used by this mock instance."""
+        host = self.headers.get("Host", "127.0.0.1:3110")
+        return "http://" + host
+
     def current_user(self):
         token = cookies(self).get("ashat_rust_sid")
         if token and token in SESSIONS:
@@ -116,12 +195,70 @@ class Handler(BaseHTTPRequestHandler):
                 return None, None, err("csrf token required", 403)
         return token, user, None
 
+    def require_admin(self):
+        """Mirror proxy.py: no session => 403 admin_authentication_required,
+        NOT 401. The real API's admin_user() collapses both cases into one 403
+        and the smoke suite asserts that code."""
+        token, user = self.current_user()
+        if not user or user["role"].lower() != "admin":
+            return None, err("admin authentication required", 403)
+        if self.command in ("POST", "PUT", "DELETE"):
+            supplied = self.headers.get("X-CSRF-Token", "")
+            if not supplied or supplied != CSRF.get(token):
+                return None, err("csrf token required", 403)
+        return user, None
+
+    def duplicate_submit(self, path, form):
+        """Mirror proxy.py's idempotency guard: True when the same admin
+        mutation for the same user arrived within the window."""
+        key = (path, str(form.get("user_id", "")))
+        now = time.time()
+        last = RECENT_MUTATIONS.get(key)
+        RECENT_MUTATIONS[key] = now
+        return last is not None and now - last < IDEMPOTENCY_WINDOW
+
     def log_message(self, *args):
         pass
 
     # ---- routes ---------------------------------------------------------
     def do_GET(self):
         path = urlparse(self.path).path
+        if path == "/__config":
+            return self.reply(200, {key: value for key, value in CONFIG.items()})
+        if path == "/__reset":
+            reset_state()
+            return self.reply(200, {"reset": True, "controls": {key: value for key, value in CONFIG.items()}})
+        if path == "/api/oauth/.well-known/openid-configuration":
+            issuer = f"{self.request_base()}/api/oauth"
+            return self.reply(200, {
+                "issuer": issuer,
+                "authorization_endpoint": issuer + "/authorize",
+                "token_endpoint": issuer + "/token",
+                "userinfo_endpoint": issuer + "/userinfo",
+                "jwks_uri": issuer + "/.well-known/jwks.json",
+                "response_types_supported": ["code"],
+                "grant_types_supported": ["authorization_code"],
+                "code_challenge_methods_supported": ["S256"],
+                "id_token_signing_alg_values_supported": ["RS256"],
+            })
+        if path == "/api/oauth/.well-known/jwks.json":
+            return self.reply(200, MOCK_JWKS)
+        if path == "/api/oauth/authorize":
+            # Mirror proxy.py's authorize validation: response_type must be
+            # "code", and the required params must be present (400 otherwise).
+            params = parse_qs(urlparse(self.path).query)
+            required = ("response_type", "client_id", "redirect_uri", "state")
+            if any(not params.get(k, [""])[0] for k in required) or params["response_type"][0] != "code":
+                return self.reply(*err("invalid authorize request", 400))
+            return self.reply(200, {"content_type": "text/html"})
+        if path == "/api/game-status":
+            return self.reply(200, {"online": False, "source": "paws-and-parcels", "health": {"status": "ok"}})
+        if path == "/api/portal-data":
+            return self.reply(200, {"health": {"status": "ok"}, "players_online": None,
+                                    "server_metrics": None, "season": None, "character": None,
+                                    "news": [], "regions": []})
+        if path.startswith("/api/") and self.maybe_inject_fault(path):
+            return
         if path == "/api/auth/verify-email":
             token = parse_qs(urlparse(self.path).query).get("token", [""])[0]
             for username, code in list(VERIFICATIONS.items()):
@@ -140,13 +277,13 @@ class Handler(BaseHTTPRequestHandler):
             _, user, failure = self.require_auth()
             if failure:
                 return self.reply(*failure)
-            return self.reply(200, {"user": None, "stats": {"conversation_messages": None, "support_tickets": "not-a-number"}})
+            return self.reply(200, {"user": public(user), "stats": {"support_tickets": len([t for t in TICKETS if t["user_id"] == user["id"]])}})
         if path == "/api/support":
             _, user, failure = self.require_auth()
             if failure:
                 return self.reply(*failure)
             mine = [{k: v for k, v in t.items() if k != "replies"} for t in TICKETS if t["user_id"] == user["id"]]
-            return self.reply(200, {"tickets": "oops-not-a-list"})
+            return self.reply(200, {"tickets": mine})
         if path.startswith("/api/support/"):
             _, user, failure = self.require_auth()
             if failure:
@@ -163,60 +300,84 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, {"ticket": body, "replies": ticket.get("replies", [])})
         if path == "/api/games":
             return self.reply(200, GAMES)
+        if path == "/api/admin/games":
+            user, failure = self.require_admin()
+            if failure:
+                return self.reply(*failure)
+            listing = [dict(g) for g in GAMES["games"]]
+            return self.reply(200, {"games": listing})
         if path == "/api/news":
             return self.reply(200, NEWS)
-        if path == "/api/admin/summary":
-            _, user, failure = self.require_auth()
+        if path.startswith("/api/admin/users/") and path.endswith("/moderation"):
+            user, failure = self.require_admin()
             if failure:
                 return self.reply(*failure)
-            if user["role"].lower() != "admin":
-                return self.reply(*err("admin authentication required", 403))
-            return self.reply(200, {"users": None, "active_users": "12",
-                                    "disabled_users": None, "open_tickets": {"bad": True},
-                                    "active_projects": 0, "active_deploys": 0})
-
-        if path == "/api/admin/users":
-            _, user, failure = self.require_auth()
+            uid = path.removeprefix("/api/admin/users/").removesuffix("/moderation")
+            events = [e for e in MODERATION if e["user_id"] == uid]
+            events.sort(key=lambda e: (e["created_at"], e.get("id", 0)), reverse=True)
+            for i, e in enumerate(events):
+                e = dict(e, id=len(MODERATION) - i)
+                events[i] = e
+            return self.reply(200, {"user_id": uid, "events": events})
+        if path in ("/api/admin/summary", "/api/admin/users", "/api/admin/settings",
+                    "/api/admin/database/status", "/api/admin/repo-status",
+                    "/api/admin/telemetry", "/api/admin/omega/servers"):
+            user, failure = self.require_admin()
             if failure:
                 return self.reply(*failure)
-            if user["role"].lower() != "admin":
-                return self.reply(*err("admin authentication required", 403))
-            listing = [
-                dict(public(u),
-                     is_active=0 if u.get("status_override") is False else 1,
-                     banned_at=u.get("banned_at"),
-                     email_verified_at=int(time.time()) if u["verified"] else None)
-                for u in USERS.values()
-            ]
-            return self.reply(200, {"users": [None, {"id": None, "username": 123, "display_name": None, "role": None, "is_active": "yes", "banned_at": 5, "email_verified_at": None}]})
-
-        if path == "/api/admin/settings":
-            _, user, failure = self.require_auth()
-            if failure:
-                return self.reply(*failure)
-            if user["role"].lower() != "admin":
-                return self.reply(*err("admin authentication required", 403))
-            return self.reply(200, {"email_verification_enabled": CONFIG["verification_required"], "secure_cookie": False, "backend": "python"})
-
-        if path == "/api/admin/database/status":
-            _, user, failure = self.require_auth()
-            if failure:
-                return self.reply(*failure)
-            if user["role"].lower() != "admin":
-                return self.reply(*err("admin authentication required", 403))
-            return self.reply(200, {"database": "healthy", "version": "mock-8.0", "paws": {"status": "ok"}})
-
-        if path == "/api/admin/repo-status":
-            _, user, failure = self.require_auth()
-            if failure:
-                return self.reply(*failure)
-            if user["role"].lower() != "admin":
-                return self.reply(*err("admin authentication required", 403))
-            return self.reply(200, {"ashathub": {"live": "mock0001", "repo": "mock0001", "state": "current"}})
+            if path == "/api/admin/summary":
+                return self.reply(200, {"users": len(USERS), "active_users": len(USERS),
+                                        "disabled_users": 0, "open_tickets": len(TICKETS),
+                                        "active_projects": 0, "active_deploys": 0})
+            if path == "/api/admin/users":
+                listing = [
+                    dict(public(u),
+                         is_active=0 if u.get("status_override") is False else 1,
+                         banned_at=u.get("banned_at"),
+                         email_verified_at=int(time.time()) if u["verified"] else None)
+                    for u in USERS.values()
+                ]
+                return self.reply(200, {"users": listing, "page": 1, "page_size": 50})
+            if path == "/api/admin/settings":
+                return self.reply(200, {"email_verification_enabled": CONFIG["verification_required"],
+                                        "secure_cookie": False, "backend": "python"})
+            if path == "/api/admin/database/status":
+                return self.reply(200, {"database": "healthy", "version": "mock-8.0", "paws": {"status": "ok"}})
+            if path == "/api/admin/repo-status":
+                return self.reply(200, {"ashathub": {"live": "mock0001", "repo": "mock0001", "state": "current"}})
+            if path == "/api/admin/telemetry":
+                return self.reply(200, {"servers": [], "updated_at": int(time.time())})
+            return self.reply(200, {"servers": []})
         return self.reply(404, {"error": {"code": "not_found", "message": "unknown endpoint"}})
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if path == "/__reset":
+            form = self.body_json()
+            reset_state()
+            if isinstance(form, dict) and "verification_required" in form:
+                CONFIG["verification_required"] = bool(form["verification_required"])
+            return self.reply(200, {"reset": True, "controls": {key: value for key, value in CONFIG.items()}})
+        if path == "/__config":
+            form = self.body_json()
+            if not isinstance(form, dict):
+                return self.reply(*err("config must be an object", 400))
+            for key in ("verification_required", "error_once"):
+                if key in form:
+                    CONFIG[key] = bool(form[key])
+            if "latency_ms" in form:
+                CONFIG["latency_ms"] = max(0, int(form["latency_ms"]))
+            if "error_status" in form:
+                CONFIG["error_status"] = max(0, int(form["error_status"]))
+            if "error_message" in form:
+                CONFIG["error_message"] = str(form["error_message"])
+            if "error_paths" in form:
+                if not isinstance(form["error_paths"], list) or not all(isinstance(item, str) for item in form["error_paths"]):
+                    return self.reply(*err("error_paths must be an array of strings", 400))
+                CONFIG["error_paths"] = form["error_paths"]
+            return self.reply(200, {key: value for key, value in CONFIG.items()})
+        if path.startswith("/api/") and self.maybe_inject_fault(path):
+            return
         form = self.body_json()
 
         if path == "/api/auth/register":
@@ -316,36 +477,37 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, {"ok": True, "id": ticket["replies"][-1]["id"]})
 
         if path == "/api/admin/omega/launch":
-            _, user, failure = self.require_auth()
+            user, failure = self.require_admin()
             if failure:
                 return self.reply(*failure)
-            if user["role"].lower() != "admin":
-                return self.reply(*err("admin authentication required", 403))
             return self.reply(200, {"ok": True})
 
         if path == "/api/admin/users/role":
-            _, user, failure = self.require_auth()
+            user, failure = self.require_admin()
             if failure:
                 return self.reply(*failure)
-            if user["role"].lower() != "admin":
-                return self.reply(*err("admin authentication required", 403))
             target = USERS.get(str(form.get("user_id", "")))
             if not target or form.get("role") not in ("Member", "Pro", "Admin"):
                 return self.reply(*err("invalid role or user", 400))
+            if self.duplicate_submit(path, form):
+                return self.reply(*err("duplicate submission; retry shortly", 409))
             target["role"] = form["role"]
+            MODERATION.append({"user_id": str(form["user_id"]), "action": "user.role.updated",
+                               "actor_id": user["id"], "actor_name": user["username"],
+                               "detail": "role: " + form["role"], "created_at": int(time.time())})
             return self.reply(200, {"ok": True})
 
         if path == "/api/admin/users/status":
-            _, user, failure = self.require_auth()
+            user, failure = self.require_admin()
             if failure:
                 return self.reply(*failure)
-            if user["role"].lower() != "admin":
-                return self.reply(*err("admin authentication required", 403))
             target = USERS.get(str(form.get("user_id", "")))
             if not target:
                 return self.reply(*err("user not found", 404))
             # Real API shape: {user_id, status: 'active'|'disabled'|'banned'}
             status = form.get("status", "active")
+            if self.duplicate_submit(path, form):
+                return self.reply(*err("duplicate submission; retry shortly", 409))
             if status == "banned":
                 target["status_override"] = False
                 target["banned_at"] = int(time.time())
@@ -355,33 +517,39 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 target["status_override"] = True
                 target["banned_at"] = None
+            MODERATION.append({"user_id": str(form.get("user_id", "")), "action": "user.status.updated",
+                               "actor_id": user["id"], "actor_name": user["username"],
+                               "detail": "status: " + status, "created_at": int(time.time())})
             return self.reply(200, {"ok": True})
 
         if path == "/api/admin/users/ban":
             # Real API now accepts {user_id, banned: bool} — default true for
             # backward compatibility with callers that omit the field.
-            _, user, failure = self.require_auth()
+            user, failure = self.require_admin()
             if failure:
                 return self.reply(*failure)
-            if user["role"].lower() != "admin":
-                return self.reply(*err("admin authentication required", 403))
             target = USERS.get(str(form.get("user_id", "")))
             if not target:
                 return self.reply(*err("user not found", 404))
+            if self.duplicate_submit(path, form):
+                return self.reply(*err("duplicate submission; retry shortly", 409))
             if form.get("banned", True):
                 target["status_override"] = False
                 target["banned_at"] = int(time.time())
             else:
                 target["status_override"] = True
                 target["banned_at"] = None
+            MODERATION.append({"user_id": str(form.get("user_id", "")),
+                               "action": "user.banned" if form.get("banned", True) else "user.unbanned",
+                               "actor_id": user["id"], "actor_name": user["username"],
+                               "detail": "banned" if form.get("banned", True) else "unbanned",
+                               "created_at": int(time.time())})
             return self.reply(200, {"ok": True})
 
         if path == "/api/admin/telemetry/refresh" or path == "/api/admin/telemetry/clear":
-            _, user, failure = self.require_auth()
+            user, failure = self.require_admin()
             if failure:
                 return self.reply(*failure)
-            if user["role"].lower() != "admin":
-                return self.reply(*err("admin authentication required", 403))
             return self.reply(200, {"ok": True})
 
         if path == "/api/admin/telemetry":
@@ -404,6 +572,23 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_PUT(self):
         path = urlparse(self.path).path
+        if path.startswith("/api/admin/games/"):
+            user, failure = self.require_admin()
+            if failure:
+                return self.reply(*failure)
+            slug = path.removeprefix("/api/admin/games/").strip("/")
+            target = next((g for g in GAMES["games"] if g["slug"] == slug), None)
+            if not target:
+                return self.reply(*err("game not found", 404))
+            form = self.body_json()
+            poster = form.get("poster")
+            if not isinstance(poster, str):
+                return self.reply(*err("poster url required", 400))
+            poster = poster.strip()
+            if len(poster) > 400:
+                return self.reply(*err("poster url too long (max 400)", 400))
+            target["poster"] = poster
+            return self.reply(200, {"ok": True, "slug": slug, "poster": poster})
         if path == "/api/account":
             _, user, failure = self.require_auth()
             if failure:
@@ -425,11 +610,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         path = urlparse(self.path).path
         if path.startswith("/api/admin/users/"):
-            _, user, failure = self.require_auth()
+            user, failure = self.require_admin()
             if failure:
                 return self.reply(*failure)
-            if user["role"].lower() != "admin":
-                return self.reply(*err("admin authentication required", 403))
             target_id = path.rsplit("/", 1)[1]
             if target_id not in USERS or target_id == user["id"]:
                 return self.reply(*err("user not found", 404))
@@ -457,6 +640,9 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     required_verification = "--no-verification" not in sys.argv
     CONFIG["verification_required"] = required_verification
-    server = ThreadingHTTPServer(("127.0.0.1", 3110), Handler)
-    print(f"[mock] AGP Studios API mock on 127.0.0.1:3110 (verification_required={required_verification})", flush=True)
+    # PORT mirrors services/python-api/proxy.py so parallel stacks (E2E runs)
+    # can bind their own instance without touching the default 3110.
+    port = int(os.environ.get("PORT", "3110"))
+    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    print(f"[mock] AGP Studios API mock on 127.0.0.1:{port} (verification_required={required_verification})", flush=True)
     server.serve_forever()

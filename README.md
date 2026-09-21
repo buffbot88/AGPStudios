@@ -49,7 +49,19 @@ npm run dev:mock -- --no-verification   # register activates immediately (E2E st
 ```
 
 `npm run dev:mock` starts both processes and tears both down on Ctrl+C, including
-on Windows (where `cmd & cmd &` backgrounding doesn't work). When the real
+on Windows (where `cmd & cmd &` backgrounding doesn't work). The mock also exposes
+loopback-only test controls: `POST /__reset` restores seed data and clears sessions;
+`POST /__config` accepts `latency_ms`, `error_status`, `error_message`,
+`error_paths`, `error_once`, and `verification_required`. For example:
+
+```bash
+curl -X POST http://127.0.0.1:3110/__config \
+  -H 'Content-Type: application/json' \
+  -d '{"latency_ms":250,"error_status":503,"error_paths":["/api/news"],"error_once":true}'
+curl -X POST http://127.0.0.1:3110/__reset
+```
+
+When the real
 `services/python-api` is running instead, just use `npm run dev` — vite proxies
 `/api/*` to `127.0.0.1:3110` either way.
 
@@ -71,6 +83,26 @@ The suite registers its own throwaway member, exercises member + admin flows
 (reads, tickets, role/status/ban, PUT/DELETE account), and cleans up after
 itself. It must pass against both the mock and the live API — if a shape only
 passes on one, the mock has drifted and should be fixed to mirror reality.
+
+### End-to-end tests
+
+```bash
+cd apps/ashat-hub-web && npm run test:e2e
+```
+
+Playwright drives the real UI against the mock API. `playwright.config.ts`
+starts both servers itself (mock on 3110, Vite on 3111) so runs never collide
+with a dev server on 3101. `tests/e2e/surface-error-boundary.spec.ts` covers the
+error boundary: a member or admin surface is made to throw during render and the
+test asserts the fallback appears, the app shell survives, and retry recovers.
+
+Browser source: by default the suite uses the installed Chrome channel, so no
+browser download is needed. In CI, run `npx playwright install chromium` and set
+`E2E_CHANNEL=chromium`.
+
+The crash injection lives in `src/components/devCrash.ts` behind
+`import.meta.env.DEV`, so it is dead-code-eliminated from production builds
+(verified: the built bundle contains neither the crash message nor its global).
 
 ### Database migrations
 

@@ -15,6 +15,11 @@ ISSUER = os.environ.get("OIDC_ISSUER", "https://www.agpstudios.org/api/oauth")
 KEY_FILE = os.environ.get("ASHAT_OIDC_PRIVATE_KEY_FILE", "")
 CODES = {}
 LOGIN_ATTEMPTS = {}
+# Idempotency guard for admin user mutations: (path, user_id) -> last submit
+# time. Double-clicks and retried POSTs within the window get 409 instead of
+# re-applying the mutation and writing a second audit event.
+IDEMPOTENCY_WINDOW = 3.0  # seconds
+RECENT_MUTATIONS = {}
 
 
 def b64(value):
@@ -121,7 +126,9 @@ class Proxy(BaseHTTPRequestHandler):
         self.forward()
 
     def do_PUT(self):
-        if urlparse(self.path).path == "/api/account": return self.account_update()
+        path = urlparse(self.path).path
+        if path == "/api/account": return self.account_update()
+        if path.startswith("/api/admin/games/"): return self.admin_game_update(path.removeprefix("/api/admin/games/"))
         self.forward()
     def do_PATCH(self): self.forward()
     def do_DELETE(self):
@@ -131,10 +138,47 @@ class Proxy(BaseHTTPRequestHandler):
         self.forward()
     def do_OPTIONS(self): self.forward()
 
+    def admin_game_update(self, slug):
+        """PUT /api/admin/games/:slug — swap poster art without a migration.
+        Other fields (title, summary, url, status, featured) are accepted for
+        future use but currently ignored; only poster is updatable here."""
+        user=self.admin_user()
+        if not user: return error(self,"admin authentication required",403)
+        if not self.csrf_ok(user): return error(self,"csrf token required",403)
+        if not slug: return error(self,"game slug required")
+        try:
+            length=int(self.headers.get("Content-Length","0")); form=json.loads(self.rfile.read(length) or b'{}')
+            poster=form.get("poster")
+            if not isinstance(poster,str): return error(self,"poster url required")
+            poster=poster.strip()
+            if len(poster) > 400: return error(self,"poster url too long (max 400)")
+            with db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("UPDATE games SET poster=%s,updated_at=UNIX_TIMESTAMP() WHERE slug=%s",(poster,slug))
+                    if cur.rowcount == 0: return error(self,"game not found",404)
+            return oidc_json(self,{"ok":True,"slug":slug,"poster":poster})
+        except Exception as exc: return error(self,f"games unavailable: {exc}",503)
+
     def admin_user(self):
         user=self.current_user()
         if not user or str(user.get('role','')).lower() != 'admin': return None
         return user
+
+    def duplicate_submit(self, path, form):
+        """True when the same admin mutation for the same user arrived within
+        the idempotency window; records this attempt otherwise."""
+        key = (path, str(form.get("user_id", "")))
+        now = time.time()
+        last = RECENT_MUTATIONS.get(key)
+        RECENT_MUTATIONS[key] = now
+        if last is not None and now - last < IDEMPOTENCY_WINDOW:
+            # Prune expired entries occasionally so the map doesn't grow forever.
+            if len(RECENT_MUTATIONS) > 1024:
+                cutoff = now - IDEMPOTENCY_WINDOW
+                for stale in [k for k, t in RECENT_MUTATIONS.items() if t < cutoff]:
+                    del RECENT_MUTATIONS[stale]
+            return True
+        return False
 
     def admin_get(self):
         user=self.admin_user()
@@ -143,6 +187,11 @@ class Proxy(BaseHTTPRequestHandler):
         try:
             with db() as conn:
                 with conn.cursor() as cur:
+                    if path.startswith('/api/admin/users/') and path.endswith('/moderation'):
+                        uid=path.removeprefix('/api/admin/users/').removesuffix('/moderation')
+                        cur.execute("SELECT id,action,actor_id,actor_name,detail,created_at FROM user_moderation_history WHERE user_id=%s ORDER BY created_at DESC,id DESC LIMIT 100",(uid,))
+                        events=cur.fetchall()
+                        return oidc_json(self,{"user_id":uid,"events":events})
                     if path in ('/api/admin/summary','/api/admin/overview'):
                         cur.execute("SELECT COUNT(*) AS n FROM users"); total=cur.fetchone()['n']; cur.execute("SELECT COUNT(*) AS n FROM users WHERE is_active=1"); active=cur.fetchone()['n']; cur.execute("SELECT COUNT(*) AS n FROM support_tickets WHERE status IN ('open','in_progress')"); tickets=cur.fetchone()['n']; return oidc_json(self,{"users":total,"active_users":active,"disabled_users":total-active,"open_tickets":tickets,"active_projects":0,"active_deploys":0})
                     if path == '/api/admin/users':
@@ -156,6 +205,13 @@ class Proxy(BaseHTTPRequestHandler):
                     if path == '/api/admin/audit':
                         page=max(1,min(1000,int(query.get('page',['1'])[0]))); cur.execute("SELECT id,actor_id,actor_name,action,target_type,target_id,detail,created_at FROM admin_audit_events ORDER BY created_at DESC,id DESC LIMIT 50 OFFSET %s",((page-1)*50,)); return oidc_json(self,{"events":cur.fetchall(),"page":page,"page_size":50})
                     if path == '/api/admin/settings': return oidc_json(self,{"email_verification_enabled":False,"secure_cookie":True,"backend":"python"})
+                    if path == '/api/admin/games':
+                        cur.execute("SELECT slug,title,summary,status,tags,url,poster,featured,sort_order FROM games ORDER BY sort_order,created_at")
+                        rows=cur.fetchall()
+                        for row in rows:
+                            try: row["tags"]=json.loads(row.get("tags") or "[]")
+                            except Exception: row["tags"]=[]
+                        return oidc_json(self,{"games":rows})
             return error(self,'admin endpoint not found',404)
         except Exception as exc: return error(self,f"admin unavailable: {exc}",503)
 
@@ -174,23 +230,32 @@ class Proxy(BaseHTTPRequestHandler):
                 with conn.cursor() as cur:
                     if path == '/api/admin/users/role':
                         if form.get('role') not in ('Member','Pro','Admin'): return error(self,'invalid role')
+                        if self.duplicate_submit(path, form): return error(self,"duplicate submission; retry shortly",409)
                         cur.execute("UPDATE users SET role=%s,updated_at=UTC_TIMESTAMP() WHERE id=%s",(form['role'],form.get('user_id'))); action='user.role.updated'
+                        mod_detail='role: '+str(form['role'])
                     elif path in ('/api/admin/users/status','/api/admin/users/ban'):
                         if path.endswith('/ban'):
                             # POST /api/admin/users/ban accepts {user_id, banned: bool}.
                             # `banned` defaults to true so older callers that omit it
                             # (or sent only user_id) keep the original ban behavior.
                             banned=bool(form.get('banned', True))
+                            if self.duplicate_submit(path, form): return error(self,"duplicate submission; retry shortly",409)
                             if banned: cur.execute("UPDATE users SET is_active=0,banned_at=UNIX_TIMESTAMP(),updated_at=UTC_TIMESTAMP() WHERE id=%s",(form.get('user_id'),))
                             else: cur.execute("UPDATE users SET is_active=1,banned_at=NULL,updated_at=UTC_TIMESTAMP() WHERE id=%s",(form.get('user_id'),))
                             action='user.banned' if banned else 'user.unbanned'
+                            mod_detail='banned' if banned else 'unbanned'
                         else:
                             status=form.get('status','active')
+                            if self.duplicate_submit(path, form): return error(self,"duplicate submission; retry shortly",409)
                             if status == 'banned': cur.execute("UPDATE users SET is_active=0,banned_at=UNIX_TIMESTAMP(),updated_at=UTC_TIMESTAMP() WHERE id=%s",(form.get('user_id'),))
                             else: cur.execute("UPDATE users SET is_active=%s,banned_at=NULL,updated_at=UTC_TIMESTAMP() WHERE id=%s",(0 if status=='disabled' else 1,form.get('user_id')))
                             action='user.status.updated'
+                            mod_detail='status: '+str(status)
                     else: return error(self,'admin endpoint not found',404)
                     cur.execute("INSERT INTO admin_audit_events (actor_id,actor_name,action,target_type,target_id,detail,created_at) VALUES (%s,%s,%s,'user',%s,%s,UNIX_TIMESTAMP())",(user['id'],user['username'],action,form.get('user_id',''),json.dumps(form)))
+                    # Moderation timeline: append to the dedicated history table
+                    # (migration 0004) so the admin CP can show per-user history.
+                    cur.execute("INSERT INTO user_moderation_history (user_id,action,actor_id,actor_name,detail,created_at) VALUES (%s,%s,%s,%s,%s,UNIX_TIMESTAMP())",(str(form.get('user_id','')),action,user['id'],user['username'],mod_detail))
             return oidc_json(self,{"ok":True})
         except Exception as exc: return error(self,f"admin unavailable: {exc}",503)
 

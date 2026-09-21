@@ -20,6 +20,7 @@ import json
 import os
 import secrets
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -101,6 +102,42 @@ def check_admin_user(u, label):
 def run():
     member, admin = Client(), Client()
     username = f"contract-shape-{secrets.token_hex(4)}"
+
+    # -- OIDC issuer (docs/python-api-contracts.md) ----------------------------
+    # Keep these assertions against the live discovery document rather than
+    # merely checking a hand-written local constant: issuer URLs and supported
+    # algorithms are security-sensitive integration points.
+    oidc_base = BASE.rstrip("/") + "/api/oauth"
+    code, discovery = member.req("/api/oauth/.well-known/openid-configuration")
+    check(code == 200 and isinstance(discovery, dict),
+          "OIDC discovery returns 200 JSON", repr(discovery)[:160])
+    if isinstance(discovery, dict):
+        check(discovery.get("issuer") == oidc_base,
+              "OIDC discovery issuer matches the configured API origin", repr(discovery.get("issuer")))
+        for key, suffix in (("authorization_endpoint", "/authorize"),
+                            ("token_endpoint", "/token"),
+                            ("userinfo_endpoint", "/userinfo"),
+                            ("jwks_uri", "/.well-known/jwks.json")):
+            check(discovery.get(key) == oidc_base + suffix,
+                  f"OIDC discovery {key} matches issuer", repr(discovery.get(key)))
+        check(discovery.get("response_types_supported") == ["code"],
+              "OIDC discovery supports code response type", repr(discovery.get("response_types_supported")))
+        check(discovery.get("grant_types_supported") == ["authorization_code"],
+              "OIDC discovery supports authorization_code grant", repr(discovery.get("grant_types_supported")))
+        check(discovery.get("code_challenge_methods_supported") == ["S256"],
+              "OIDC discovery requires PKCE S256", repr(discovery.get("code_challenge_methods_supported")))
+        check(discovery.get("id_token_signing_alg_values_supported") == ["RS256"],
+              "OIDC discovery advertises RS256 ID tokens", repr(discovery.get("id_token_signing_alg_values_supported")))
+
+    code, jwks = member.req("/api/oauth/.well-known/jwks.json")
+    keys = (jwks or {}).get("keys") if isinstance(jwks, dict) else None
+    check(code == 200 and isinstance(keys, list) and bool(keys),
+          "OIDC JWKS returns a non-empty keys array", repr(jwks)[:160])
+    for key in keys or []:
+        check(isinstance(key, dict) and all(is_str(key.get(field)) for field in ("kty", "use", "alg", "kid", "n", "e")),
+              "OIDC JWKS key has RSA public-key fields", repr(key)[:160])
+        check(key.get("kty") == "RSA" and key.get("use") == "sig" and key.get("alg") == "RS256",
+              "OIDC JWKS key is an RSA signing key", repr(key)[:160])
 
     # -- public homepage content (content.ts fetchers) ------------------------
     code, body = member.req("/api/games")
@@ -253,6 +290,8 @@ def run():
         check(row.get("is_active") in (0, False),
               "status disable actually disabled (the is_active regression)", repr(row)[:160])
 
+        # the API's idempotency guard 409s same-user mutations within ~3s
+        time.sleep(3.2)
         code, body = admin.req("/api/admin/users/status", "POST", {"user_id": uid, "status": "active"}, admin_csrf)
         _, body = admin.req(f"/api/admin/users?q={username}")
         row = next((u for u in (body or {}).get("users", []) if u.get("username") == username), {})
@@ -260,12 +299,14 @@ def run():
               "status enable actually enabled (the is_active regression)", repr(row)[:160])
 
         # ban / unban via /ban with banned flag
+        time.sleep(3.2)  # idempotency guard window
         code, body = admin.req("/api/admin/users/ban", "POST", {"user_id": uid, "banned": True}, admin_csrf)
         _, body = admin.req(f"/api/admin/users?q={username}")
         row = next((u for u in (body or {}).get("users", []) if u.get("username") == username), {})
         check(row.get("is_active") in (0, False) and row.get("banned_at"),
               "ban sets is_active=0 and banned_at", repr(row)[:160])
 
+        time.sleep(3.2)  # idempotency guard window
         code, body = admin.req("/api/admin/users/ban", "POST", {"user_id": uid, "banned": False}, admin_csrf)
         _, body = admin.req(f"/api/admin/users?q={username}")
         row = next((u for u in (body or {}).get("users", []) if u.get("username") == username), {})

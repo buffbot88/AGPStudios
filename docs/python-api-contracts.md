@@ -16,10 +16,13 @@ The Python service is the public API at `/api/*`; Rust is not part of the contra
 | POST | `/api/auth/logout` | 200 | Revokes the current session and expires the cookie |
 | GET | `/api/auth/verify-email?token=...` | 200 | Verifies a single-use email token |
 | POST | `/api/auth/verify-email/resend` | 202 | JSON `{identifier}`; sends a fresh verification mail |
+| POST | `/api/auth/password-reset/request` | 200/400 | JSON `{identifier}`; requests a password-reset email without revealing account existence |
+| GET | `/api/auth/github` | 302 | Starts GitHub OAuth sign-in/link flow |
 | GET | `/api/auth/me` | 200/401 | Alias of session for authenticated callers |
 | GET | `/api/account/summary` | 200/401 | Authenticated account and support summary; shape documented below |
 | PUT | `/api/account` | 200/401 | Authenticated account update; requirements documented below |
 | DELETE | `/api/account` | 200/401 | Authenticated account self-deletion. JSON body `{confirm: 'DELETE'}` required (400 otherwise). Deletes the user row, all associated data and sessions, and expires the `ashat_rust_sid` and `ashat_csrf` cookies in the response. |
+| POST | `/api/account/github` | 200/404 | GitHub unlink attempt; currently returns 404 because unlinking is not implemented |
 | GET | `/api/support` | 200/401 | Authenticated ticket list |
 | POST | `/api/support` | 201/401 | Authenticated ticket creation |
 | GET | `/api/support/:id` | 200/401/404 | Authenticated ticket and replies |
@@ -33,12 +36,35 @@ The Python service is the public API at `/api/*`; Rust is not part of the contra
 | POST | `/api/admin/users/role` | 200 | JSON `{user_id, role}`; see request-body reference below |
 | POST | `/api/admin/users/ban` | 200 | JSON `{user_id, banned: bool}`; see request-body reference below |
 | POST | `/api/admin/users/status` | 200 | JSON `{user_id, status}`; see request-body reference below |
+| GET | `/api/admin/summary` | 200 | Admin overview counts |
+| GET | `/api/admin/users` | 200 | Filtered admin user list; optional `q` query |
+| GET | `/api/admin/users/:id/moderation` | 200 | Per-user moderation timeline; see shape reference below |
+| GET | `/api/admin/database/status` | 200 | Database and Paws health status |
+| GET | `/api/admin/settings` | 200 | Runtime API settings |
+| GET | `/api/admin/repo-status` | 200 | Live/repository commit comparison |
+| GET | `/api/admin/telemetry` | 200 | Omega telemetry server status |
+| GET | `/api/admin/games` | 200 | Admin game list incl. poster URLs |
+| PUT | `/api/admin/games/:slug` | 200 | Update game poster URL without a migration; see shape reference below |
+| GET | `/api/admin/omega/servers` | 200 | Omega server status |
+| POST | `/api/admin/telemetry/refresh` | 200 | Refreshes telemetry server data |
+| POST | `/api/admin/telemetry/clear` | 200 | Clears telemetry server cache |
+| POST | `/api/admin/github/push` | 200 | Pushes committed changes to GitHub main |
+| POST | `/api/admin/omega/launch` | 200 | Launches the Omega coding agent |
+| POST | `/api/admin/system/update` | 200 | Pulls, rebuilds, and restarts the live system |
 | DELETE | `/api/admin/users/:id` | 200 | Permanently deletes a member: ticket replies, tickets, sessions, email verifications, then the user row. Self-delete returns 409. Audit event `admin.user.deleted` is recorded. |
 
 ### Request-body reference
 
 All admin user mutations require the CSRF header (`X-CSRF-Token`) in addition to the
 admin session; a missing/mismatched token returns 403 `csrf token required`.
+
+All admin user mutations (role, status, ban) carry an **idempotency guard**: a
+duplicate submission for the same `user_id` on the same endpoint within a short
+window (~3 seconds) returns **409 `duplicate submission; retry shortly`** and
+applies nothing. This protects against double-clicks and retried POSTs creating
+duplicate audit events. Clients should treat 409 on these endpoints as "already
+applied" and simply re-fetch the user list. Different endpoints and different
+`user_id`s never collide with each other.
 
 #### POST `/api/admin/users/role`
 
@@ -111,6 +137,113 @@ tag name shown in the UI) are accepted but ignored. Behavior:
 - The API does not expose GitHub unlinking; only linking exists, so a
   `POST /api/account/github` currently returns 404.
 
+#### GET `/api/admin/users`
+
+Requires an admin session (403 `admin authentication required` otherwise — not 401;
+the admin guard collapses both no-session and non-admin into one 403). Returns the
+first 50 matching users ordered by username:
+
+```json
+{
+  "users": [
+    {
+      "id": "string",
+      "username": "string",
+      "email": "string",
+      "display_name": "string",
+      "role": "Member" | "Pro" | "Admin",
+      "diamonds": 0,
+      "is_active": 1,
+      "banned_at": null,
+      "email_verified_at": null
+    }
+  ],
+  "page": 1,
+  "page_size": 50
+}
+```
+
+Field notes:
+
+- `is_active` is the DB `TINYINT(1)` value — `0`/`1` integer, **not** a boolean.
+  The frontend's enable/disable and ban checks must treat any truthy value as
+  active; strict `=== true` comparisons silently fail.
+- `banned_at` is a unix-seconds timestamp when banned, `null` otherwise. A user
+  can be disabled (`is_active=0`, `banned_at=null`) without being banned.
+- `email_verified_at` is a unix-seconds timestamp, or `null` when unverified.
+- `diamonds` is the in-game currency balance; present in this listing even
+  though `GET /api/account/summary`'s safe user omits it in some paths.
+- `page` echoes the `?page=` query (default 1); `page_size` is fixed at 50.
+  There is no total-count field — paginate until a page returns fewer than 50
+  rows.
+- Filtering: optional `?q=` does a `LIKE %q%` match against `username`, `email`,
+  and `display_name` combined with OR; it is not an exact match.
+
+#### GET `/api/admin/users/:id/moderation`
+
+Requires an admin session (403 otherwise). Returns the user's moderation
+timeline, newest first, from the `user_moderation_history` table (migration
+0004):
+
+```json
+{
+  "user_id": "string",
+  "events": [
+    {
+      "id": 12,
+      "user_id": "string",
+      "action": "user.banned",
+      "actor_id": "string",
+      "actor_name": "string",
+      "detail": "banned",
+      "created_at": 1700000000
+    }
+  ]
+}
+```
+
+- `action` values: `user.role.updated`, `user.status.updated`, `user.banned`,
+  `user.unbanned` — same vocabulary as the admin audit events for these flows.
+- `detail` is a short human-readable summary: `role: <role>`,
+  `status: <status>`, `banned`, or `unbanned`.
+- `created_at` is unix seconds; `id` is a monotonically increasing sequence
+  used as a stable tiebreaker for ordering.
+- Events are recorded on every successful role/status/ban mutation (idempotency
+  409s record nothing). History is **retained after the user is deleted** — the
+  table has no FK and the deletion paths do not purge it.
+- Limited to the 100 most recent events; there is no pagination yet.
+
+#### PUT `/api/admin/games/:slug`
+
+Requires an admin session and the CSRF header. Updates a game's `poster` URL in
+place — no migration or redeploy needed; the public `GET /api/games` reflects
+the change immediately. The homepage carousel and game cards pick up new art on
+their next load.
+
+```json
+{ "poster": "/new-poster.svg" }
+```
+
+- `poster` must be a string, trimmed; max length 400 (400 `poster url required`
+  when missing/not a string, 400 `poster url too long (max 400)` when over).
+- Unknown slug returns 404 `game not found`.
+- Success returns `{ "ok": true, "slug": "...", "poster": "..." }`.
+- Other game fields (title, summary, status, tags, featured) are **not**
+  editable here yet — they still require the seed migrations.
+- The endpoint does not validate that the URL resolves or is an image; the
+  frontend renders a poster fallback when the art fails to load.
+
+#### GET `/api/admin/games`
+
+Requires an admin session (403 otherwise). Returns all games with their
+poster URLs for the admin CP:
+
+```json
+{ "games": [{ "slug", "title", "summary", "status", "tags", "url", "poster", "featured", "sort_order" }] }
+```
+
+Same shape as the public `GET /api/games` rows plus `sort_order`.
+
 ## OIDC issuer
 
 Issuer: `https://www.agpstudios.org/api/oauth`
@@ -151,4 +284,7 @@ in the repository. Authorization codes are single-use and expire after 10 minute
 
 The smoke suite is `services/python-api/test_contracts.py`. It checks the live
 public discovery, JWKS, health, session, status, authorize validation, and member
-auth boundary without requiring credentials or mutating data.
+auth boundary without requiring credentials or mutating data. The frontend
+contract suite (`tests/test_frontend_contracts.py`) repeats the discovery/JWKS
+shape checks against the configured API origin, including issuer-derived endpoint
+URLs, PKCE `S256`, and RSA `RS256` key metadata; CI runs it against the mock API.

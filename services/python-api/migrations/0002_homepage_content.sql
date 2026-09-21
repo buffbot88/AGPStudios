@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS studio_news (
 INSERT INTO games (id, slug, title, summary, status, tags, url, poster, featured, sort_order, created_at, updated_at)
 VALUES
   ('paws01','paws-and-parcels','Paws & Parcels','Deliver small moments. Explore a growing world.','live','["Cozy","Exploration","Social"]','https://pawsandparcels.agpstudios.org','/paws-parcels-poster.svg',1,1,UNIX_TIMESTAMP(),UNIX_TIMESTAMP()),
-  ('horizon01','world-of-ra-horizon','The World of Ra - Horizon - Season 1','A new world is taking shape.','in-development','["Exploration"]','','/world-of-ra-poster.svg',0,2,UNIX_TIMESTAMP(),UNIX_TIMESTAMP())
+  ('horizon01','world-of-ra-horizon','The World of Ra - Horizon - Season 1','A new world is taking shape.','in-development','["Exploration"]','','/world-of-ra-poster.svg',0,2,UNIX_TIMESTAMP(),UNIX_TIMESTAMP()),
+  ('more01','more-titles','More in Development','New worlds, new experiences, and more to come.','coming-soon','["Variety"]','#news','/more-in-development-poster.svg',0,3,UNIX_TIMESTAMP(),UNIX_TIMESTAMP())
 ON DUPLICATE KEY UPDATE title=VALUES(title);
 
 INSERT INTO studio_news (id, title, summary, url, published_at, created_at)

@@ -15,6 +15,7 @@ import { AuthPanel } from './components/AuthPanel';
 import { getSession, onSessionChange, onSessionExpired, peekSession, setSessionUser } from './components/session';
 import { ToastHost, toast } from './components/toast';
 import { safeText } from './components/api';
+import { installGlobalErrorHandlers } from './components/globalErrors';
 
 type User = {
   id: string;
@@ -97,6 +98,10 @@ function App() {
     void getSession();
     return onSessionChange(setUser);
   }, []);
+
+  // Surface uncaught errors and unhandled promise rejections as toasts; these
+  // bypass the React error boundary and would otherwise fail silently.
+  useEffect(() => installGlobalErrorHandlers(), []);
 
   // If background revalidation discovers the session expired server-side,
   // tell the user gently and land them somewhere safe.
