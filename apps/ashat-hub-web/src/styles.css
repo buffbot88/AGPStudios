@@ -1936,6 +1936,76 @@ h3 {
   gap: 2px;
 }
 
+/* Migrations panel (System tab) */
+.adm-migrations {
+  margin-bottom: 18px;
+}
+
+.adm-migrations-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.adm-migrations-heading h3 {
+  margin: 4px 0 0;
+}
+
+.adm-migrations-note {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  background: var(--surface-2);
+  border-left: 2px solid var(--gold);
+  border-radius: 4px;
+}
+
+.adm-migrations-actions {
+  display: flex;
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.adm-migration-lists {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+}
+
+.adm-migration-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.adm-migration-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.adm-migration-list code {
+  font-size: 0.82rem;
+  color: var(--text);
+}
+
+.adm-migration-list small {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
 /* Games tab: poster swap */
 .adm-games-list {
   display: grid;

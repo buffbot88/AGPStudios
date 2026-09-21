@@ -7,8 +7,9 @@ AGP Studios is the web portal and Python API project for AGP Studios.
 - `apps/ashat-hub-web/` — Vite + React portal. Public site, member area, and admin UI.
 - `services/python-api/` — Python API service. Serves the public `/api/*` surface: auth,
   OIDC, account, support, and admin endpoints. SQL migrations for its MySQL schema
-  live in `services/python-api/migrations/` and are applied manually in filename
-  order (`0001`, `0002`, ...); each file is idempotent, so re-running is safe.
+  live in `services/python-api/migrations/` and are applied by the tracked runner
+  (`python3 migrate.py`), which records each file in a `schema_migrations` table so
+  it runs exactly once, in filename order.
 - `docs/system-architecture.md` — what the active system is and its request boundary.
 - `docs/python-api-contracts.md` — the public API contract source of truth.
 - `docs/retired-components.md` — what was removed and where archival material lives.
@@ -106,10 +107,44 @@ The crash injection lives in `src/components/devCrash.ts` behind
 
 ### Database migrations
 
-SQL migrations live in `services/python-api/migrations/` and are applied manually in
-filename order against the production MySQL database. Each file is written to be
-idempotent and safe to run on databases in any prior state — re-running a migration
-converges to the same schema and seed data instead of failing or duplicating rows.
+SQL migrations live in `services/python-api/migrations/` as `NNNN_description.sql` and
+are applied by `services/python-api/migrate.py`, which:
+
+1. creates a `schema_migrations` table (`filename`, `checksum`, `statements`,
+   `applied_at`, `applied_by`) if it doesn't exist,
+2. reads the files in numeric filename order, and
+3. runs the ones that aren't recorded yet, recording each only after all of its
+   statements succeed.
+
+```bash
+cd services/python-api
+python3 migrate.py --status     # applied / pending / drifted, changes nothing
+python3 migrate.py              # apply everything pending
+python3 migrate.py --check      # exit 1 if anything is pending (deploy gate)
+```
+
+The connection string comes from `ASHAT_DATABASE_URL`
+(`mysql://user:pass@host:3306/database`) — the same variable `proxy.py` uses.
+
+**A database migrated by hand before this runner existed** should be baselined once:
+
+```bash
+python3 migrate.py --baseline   # record current files as applied WITHOUT running them
+```
+
+Without the baseline, the runner would try to re-run `0001`, which is an
+`ALTER TABLE ... ADD COLUMN` that is *not* idempotent (it fails with "Duplicate
+column name"). Tracking exists precisely so migrations like that run once. Other
+files are written to be convergent anyway, so a re-run is harmless — but a recorded
+file is never executed twice.
+
+Editing an applied migration changes its checksum. The runner reports that as
+**drift** and leaves it alone; converge with `python3 migrate.py --reapply-drifted`.
+A migration that fails partway is left unrecorded (MySQL commits DDL implicitly),
+so fix the file and re-run it.
+
+Unit tests for the runner need no database — `python3 services/python-api/test_migrate.py`
+(also run in CI).
 
 Production services and environment configuration are runtime-managed. Credentials, service
 environment files, logs, databases, `node_modules/`, and generated runtime data must not be

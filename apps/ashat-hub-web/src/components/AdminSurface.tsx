@@ -11,7 +11,13 @@ type AdminSummary = {
   open_tickets: number; active_deploys: number; active_projects: number;
   database_manager: string;
 };
-type DatabaseStatus = { database: string; version: string; paws?: { status?: string } };
+type MigrationEntry = { filename: string; applied_at?: number | null; statements?: number | null; applied_by?: string };
+type MigrationSummary = {
+  tracked: boolean; tracking_table: string; current_revision: string | null;
+  applied: MigrationEntry[]; pending: { filename: string; statements?: number }[];
+  drifted: string[]; missing: string[]; error?: string;
+};
+type DatabaseStatus = { database: string; version: string; paws?: { status?: string }; migrations?: MigrationSummary };
 type AdminTelemetry = { servers: { id: string; label: string; online: boolean; active_requests: number; requests_last_5m: number; generation_tokens_per_second: number; prompt_tokens_per_second: number; total_completion_tokens: number; queue_depth: number; queue_limit: number }[]; updated_at: number };
 type OmegaServer = { id: string; label: string; online: boolean; ready: boolean; workers?: number; max_workers: number };
 type AdminGame = { slug: string; title: string; summary: string; status: string; tags: string[]; url: string; poster: string; featured: boolean; sort_order?: number };
@@ -127,6 +133,27 @@ export function AdminSurface({ user }: { user: User | null }) {
   useEffect(() => { if (tab === 'telemetry') { void loadTelemetry(); void loadOmegaServers(); } }, [tab, loadTelemetry, loadOmegaServers]);
   async function telemetryAction(action: 'refresh' | 'clear') { setBusy(true); setError(null); try { await request(`${API}/admin/telemetry/${action}`, { method: 'POST' }); await loadTelemetry(); await loadOmegaServers(); toast(action === 'refresh' ? 'Telemetry refreshed.' : 'Server cache cleared.', 'success'); } catch (reason) { setError(reason instanceof Error ? reason.message : `Telemetry ${action} failed`); } finally { setBusy(false); } }
   async function pushGithub() { if (!(await confirmToast({ message: 'Push committed Ashat Hub changes to GitHub main?', confirmLabel: 'Push' }))) return; setBusy(true); setError(null); try { await request(`${API}/admin/github/push`, { method: 'POST' }); toast('Changes pushed to GitHub.', 'success'); } catch (reason) { setError(reason instanceof Error ? reason.message : 'GitHub push failed'); } finally { setBusy(false); } }
+  async function applyMigrations(baseline: boolean) {
+    if (!(await confirmToast({
+      message: baseline
+        ? 'Record the current migration files as applied WITHOUT running them? Use this only for a database migrated by hand before the runner existed.'
+        : 'Run all pending database migrations now? Schema changes apply immediately.',
+      confirmLabel: baseline ? 'Baseline' : 'Run migrations',
+      danger: !baseline,
+    }))) return;
+    setBusy(true); setError(null);
+    try {
+      const result = await request<{ ok: boolean; applied: string[] }>(`${API}/admin/database/migrations/apply`, {
+        method: 'POST',
+        body: JSON.stringify({ baseline }),
+      });
+      const count = safeList<string>(result.applied).length;
+      toast(count ? `${count} migration(s) ${baseline ? 'baselined' : 'applied'}.` : 'No migrations were pending.', count ? 'success' : 'info');
+      await load();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Migration run failed'); }
+    finally { setBusy(false); }
+  }
+
   async function systemUpdate() { if (!(await confirmToast({ message: 'Pull main, rebuild Ashat Hub, and restart the live service?', confirmLabel: 'Update & restart', danger: true }))) return; setBusy(true); setError(null); try { const result = await request<{ commit: string }>(`${API}/admin/system/update`, { method: 'POST' }); toast(`System updated to ${result.commit}. Reloading Admin CP…`); window.setTimeout(() => window.location.reload(), 2500); } catch (reason) { setError(reason instanceof Error ? reason.message : 'System update failed'); } finally { setBusy(false); } }
   async function codingAgentsUpdate() { if (!(await confirmToast({ message: 'Launch the Omega coding agent?', confirmLabel: 'Launch' }))) return; setBusy(true); setError(null); try { await request(`${API}/admin/omega/launch`, { method: 'POST' }); toast('Omega coding agent launched.', 'success'); await loadTelemetry(); await loadOmegaServers(); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Omega launch failed'); } finally { setBusy(false); } }
 
@@ -230,7 +257,7 @@ export function AdminSurface({ user }: { user: User | null }) {
       {tab === 'users' && <UsersTab users={users} query={query} onQueryChange={setQuery} onSearch={load} onSelectUser={selectUser} selectedUser={selectedUser} busy={busy} currentUser={user} onUpdateUser={updateUser} onBanUser={banUser} onDeleteUser={deleteUser} moderation={moderation} moderationError={moderationError} onRefreshModeration={() => selectedUser && void loadModeration(selectedUser.id)} />}
       {tab === 'games' && <GamesTab games={games} busy={busy} onUpdatePoster={updateGamePoster} />}
       {tab === 'telemetry' && <TelemetryTab telemetry={telemetry} servers={omegaServers} busy={busy} onAction={telemetryAction} onUpdate={codingAgentsUpdate} />}
-      {tab === 'system' && <SystemTab database={database} settings={settings} onPush={pushGithub} onUpdate={systemUpdate} status={repoStatus} />}
+      {tab === 'system' && <SystemTab database={database} settings={settings} onPush={pushGithub} onUpdate={systemUpdate} status={repoStatus} busy={busy} onApplyMigrations={applyMigrations} />}
     </section>
   );
 }
@@ -404,11 +431,115 @@ function UserDetailPanel({ user: u, busy, currentUser, onUpdate, onBan, onDelete
   );
 }
 
+// ── Migrations panel (System tab) ──
+
+/**
+ * Applied/pending migration panel. Reads the `migrations` object carried by
+ * the existing /api/admin/database/status response (no extra fetch) and runs
+ * pending files through POST /api/admin/database/migrations/apply.
+ */
+function MigrationsPanel({ migrations, busy, onApplyMigrations }: {
+  migrations: MigrationSummary | undefined; busy: boolean;
+  onApplyMigrations: (baseline: boolean) => void;
+}) {
+  if (!migrations) {
+    return (
+      <section className="adm-panel adm-migrations">
+        <span className="eyebrow">Schema migrations</span>
+        <h3>Loading…</h3>
+        <p className="muted">Migration state arrives with the database status.</p>
+      </section>
+    );
+  }
+
+  const applied = safeList<MigrationEntry>(migrations.applied);
+  const pending = safeList<{ filename: string; statements?: number }>(migrations.pending);
+  const drifted = safeList<string>(migrations.drifted);
+  const missing = safeList<string>(migrations.missing);
+
+  return (
+    <section className="adm-panel adm-migrations">
+      <div className="adm-migrations-heading">
+        <div>
+          <span className="eyebrow">Schema migrations</span>
+          <h3>{pending.length ? `${pending.length} pending` : 'Up to date'}</h3>
+        </div>
+        <span className={pending.length ? 'adm-badge err' : 'adm-badge ok'}>
+          {pending.length ? '◐ Applying needed' : '● Current'}
+        </span>
+      </div>
+
+      <div className="adm-detail-fields">
+        <div className="adm-field">
+          <span className="adm-field-label">Current revision</span>
+          <span className="adm-field-value mono">{safeText(migrations.current_revision) || '—'}</span>
+        </div>
+        <div className="adm-field">
+          <span className="adm-field-label">Tracking</span>
+          <span className="adm-field-value mono">
+            {migrations.tracked ? safeText(migrations.tracking_table) || 'schema_migrations' : 'not tracked'}
+          </span>
+        </div>
+      </div>
+
+      {!migrations.tracked && <p className="adm-migrations-note">
+        This database has no migration history yet. If it was migrated by hand, baseline it once so
+        existing files are recorded without being re-run (migration 0001 is not idempotent).
+      </p>}
+      {migrations.error && <p className="workspace-error" role="alert">{migrations.error}</p>}
+
+      {drifted.length > 0 && <p className="adm-migrations-note">
+        Changed on disk since they were applied (not re-run): {drifted.map(safeText).join(', ')}.
+      </p>}
+      {missing.length > 0 && <p className="adm-migrations-note">
+        Recorded but no longer in the repo: {missing.map(safeText).join(', ')}.
+      </p>}
+
+      <div className="adm-migrations-actions">
+        <button type="button" className="primary-button" disabled={busy || pending.length === 0}
+          onClick={() => onApplyMigrations(false)}>
+          {pending.length ? `Run ${pending.length} pending` : 'Nothing to run'}
+        </button>
+        {!migrations.tracked && <button type="button" className="secondary-button" disabled={busy}
+          onClick={() => onApplyMigrations(true)}>Baseline existing</button>}
+      </div>
+
+      <div className="adm-migration-lists">
+        <div>
+          <span className="eyebrow">Applied ({applied.length})</span>
+          <ul className="adm-migration-list">
+            {applied.map((entry) => <li key={safeText(entry.filename)}>
+              <code>{safeText(entry.filename)}</code>
+              <small>{safeNumber(entry.statements)} stmt · {safeTime(entry.applied_at)}</small>
+            </li>)}
+            {applied.length === 0 && <li><small className="muted">None recorded.</small></li>}
+          </ul>
+        </div>
+        <div>
+          <span className="eyebrow">Pending ({pending.length})</span>
+          <ul className="adm-migration-list">
+            {pending.map((entry) => <li key={safeText(entry.filename)}>
+              <code>{safeText(entry.filename)}</code>
+              <small>{safeNumber(entry.statements)} stmt</small>
+            </li>)}
+            {pending.length === 0 && <li><small className="muted">Nothing pending.</small></li>}
+          </ul>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 // ── System Tab ──
 
-function SystemTab({ database, settings, onPush, onUpdate, status }: { database: DatabaseStatus | null; settings: Record<string, string | boolean> | null; onPush: () => void; onUpdate: () => void; status: RepoStatus | null }) {
+function SystemTab({ database, settings, onPush, onUpdate, status, busy, onApplyMigrations }: {
+  database: DatabaseStatus | null; settings: Record<string, string | boolean> | null;
+  onPush: () => void; onUpdate: () => void; status: RepoStatus | null;
+  busy: boolean; onApplyMigrations: (baseline: boolean) => void;
+}) {
   return (
     <div className="adm-system">
+      <MigrationsPanel migrations={database?.migrations} busy={busy} onApplyMigrations={onApplyMigrations} />
       <div className="adm-system-grid">
         <section className="adm-panel">
           <span className="eyebrow">Database</span>

@@ -5,7 +5,12 @@ from hashlib import sha256
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import urlopen
-import crypt, json, os, secrets, subprocess, time
+import crypt, json, os, secrets, subprocess, sys, time
+
+# The migration runner lives next to this file; import it by path so the API
+# works regardless of the process working directory.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import migrate
 
 import pymysql
 from cryptography.hazmat.primitives import hashes, serialization
@@ -119,6 +124,8 @@ class Proxy(BaseHTTPRequestHandler):
             return self.auth_logout()
         if urlparse(self.path).path == "/api/admin/audit/prune":
             return self.admin_audit_prune()
+        if urlparse(self.path).path == "/api/admin/database/migrations/apply":
+            return self.admin_migrations_apply()
         if urlparse(self.path).path.startswith("/api/admin/"):
             return self.admin_post()
         if urlparse(self.path).path == "/api/support" or urlparse(self.path).path.startswith("/api/support/"):
@@ -137,6 +144,81 @@ class Proxy(BaseHTTPRequestHandler):
         if urlparse(self.path).path.startswith("/api/admin/users/"): return self.admin_user_delete(urlparse(self.path).path.rsplit('/',1)[1])
         self.forward()
     def do_OPTIONS(self): self.forward()
+
+    def migrations_summary(self, cur):
+        """Summarize migration state for the admin CP (read-only).
+
+        Reads the `schema_migrations` tracking table written by migrate.py. A
+        database that predates the runner has no such table — that's reported as
+        `tracked: false` rather than an error, so the CP can offer a baseline.
+        """
+        summary = {"tracked": False, "tracking_table": migrate.TRACKING_TABLE,
+                   "current_revision": None, "applied": [], "pending": [],
+                   "drifted": [], "missing": []}
+        try:
+            migrations = migrate.discover()
+        except Exception as exc:
+            summary["error"] = str(exc)
+            return summary
+
+        rows = []
+        try:
+            cur.execute(f"SELECT filename, checksum, statements, applied_at, applied_by FROM {migrate.TRACKING_TABLE}")
+            rows = cur.fetchall() or []
+            summary["tracked"] = True
+        except Exception:
+            # Tracking table absent: the database is untracked, not broken.
+            rows = []
+
+        recorded = {row["filename"]: row for row in rows}
+        result = migrate.plan(migrations, {name: row["checksum"] for name, row in recorded.items()})
+
+        summary["applied"] = [
+            {"filename": m.name,
+             "applied_at": (recorded[m.name] or {}).get("applied_at"),
+             "statements": (recorded[m.name] or {}).get("statements"),
+             "applied_by": (recorded[m.name] or {}).get("applied_by") or ""}
+            for m in result.applied
+        ]
+        summary["pending"] = [{"filename": m.name, "statements": len(m.statements)} for m in result.pending]
+        summary["drifted"] = [m.name for m in result.drifted]
+        summary["missing"] = result.missing
+        if result.applied:
+            summary["current_revision"] = result.applied[-1].name
+        return summary
+
+    def admin_migrations_apply(self):
+        """POST /api/admin/database/migrations/apply — run pending migrations.
+
+        Applies only files that aren't recorded yet (or, with `{"baseline": true}`,
+        records the current files as applied without executing them, for a
+        database migrated by hand before the runner existed). Each applied file
+        is recorded only after its statements succeed, matching the CLI.
+        """
+        user=self.admin_user()
+        if not user: return error(self,"admin authentication required",403)
+        if not self.csrf_ok(user): return error(self,"csrf token required",403)
+        try:
+            length=int(self.headers.get("Content-Length","0")); form=json.loads(self.rfile.read(length) or b'{}')
+            baseline=bool(form.get('baseline', False))
+            actor=f"admin:{user['username']}"
+            with db() as conn:
+                with conn.cursor() as cur:
+                    migrate.ensure_tracking_table(cur)
+                    result=migrate.plan(migrate.discover(), migrate.load_applied(cur))
+                    todo = (result.pending + result.drifted) if baseline else result.pending
+                    handled=[]
+                    for migration in todo:
+                        if baseline:
+                            migrate.record(cur, migration, actor)
+                        else:
+                            migrate.apply_migration(conn, migration, actor)
+                        handled.append(migration.name)
+                    action='admin.migrations.baselined' if baseline else 'admin.migrations.applied'
+                    cur.execute("INSERT INTO admin_audit_events (actor_id,actor_name,action,target_type,target_id,detail,created_at) VALUES (%s,%s,%s,'migrations',%s,%s,UNIX_TIMESTAMP())",
+                                (user['id'],user['username'],action,'schema_migrations',json.dumps({"baseline":baseline,"files":handled})))
+            return oidc_json(self,{"ok":True,"baseline":baseline,"applied":handled})
+        except Exception as exc: return error(self,f"migration unavailable: {exc}",503)
 
     def admin_game_update(self, slug):
         """PUT /api/admin/games/:slug — swap poster art without a migration.
@@ -201,7 +283,7 @@ class Proxy(BaseHTTPRequestHandler):
                     if path in ('/api/admin/support','/api/admin/tickets'):
                         cur.execute("SELECT id,subject,status,priority,category,created_at,updated_at FROM support_tickets ORDER BY updated_at DESC LIMIT 100"); return oidc_json(self,{"tickets":cur.fetchall()})
                     if path in ('/api/admin/health','/api/admin/database/status'):
-                        cur.execute("SELECT VERSION() AS version"); return oidc_json(self,{"database":"healthy","version":cur.fetchone()['version'],"paws":self.game_status_value()})
+                        cur.execute("SELECT VERSION() AS version"); return oidc_json(self,{"database":"healthy","version":cur.fetchone()['version'],"paws":self.game_status_value(),"migrations":self.migrations_summary(cur)})
                     if path == '/api/admin/audit':
                         page=max(1,min(1000,int(query.get('page',['1'])[0]))); cur.execute("SELECT id,actor_id,actor_name,action,target_type,target_id,detail,created_at FROM admin_audit_events ORDER BY created_at DESC,id DESC LIMIT 50 OFFSET %s",((page-1)*50,)); return oidc_json(self,{"events":cur.fetchall(),"page":page,"page_size":50})
                     if path == '/api/admin/settings': return oidc_json(self,{"email_verification_enabled":False,"secure_cookie":True,"backend":"python"})

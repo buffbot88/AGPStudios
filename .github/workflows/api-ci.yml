@@ -1,0 +1,59 @@
+name: API CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  api:
+    name: Migration runner and Python API checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Compile Python sources
+        run: |
+          python3 -m py_compile \
+            services/python-api/migrate.py \
+            services/python-api/test_migrate.py \
+            services/python-api/proxy.py \
+            services/python-api/test_contracts.py \
+            scripts/mock-api.py \
+            scripts/dev.py
+
+      - name: Run migration runner unit tests
+        # No database needed: the suite covers statement splitting, migration
+        # discovery/ordering, drift detection, and apply/record semantics
+        # against an in-memory fake connection.
+        run: python3 services/python-api/test_migrate.py
+
+      - name: Check migration files are well formed
+        run: |
+          python3 - <<'PY'
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, "services/python-api")
+          import migrate
+
+          migrations = migrate.discover()
+          for migration in migrations:
+              statements = migration.statements
+              assert statements, f"{migration.name} has no statements"
+              assert all(s.strip() for s in statements), f"{migration.name} has an empty statement"
+              print(f"{migration.name}: {len(statements)} statement(s)")
+
+          names = [m.name for m in migrations]
+          assert names == sorted(names), f"migrations are not in filename order: {names}"
+          print(f"migration files OK: {len(migrations)} file(s)")
+          PY

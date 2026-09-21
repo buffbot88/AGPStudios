@@ -35,6 +35,7 @@ import os
 import secrets
 import sys
 import time
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -95,6 +96,34 @@ INITIAL_USERS = copy.deepcopy(USERS)
 INITIAL_TICKETS = copy.deepcopy(TICKETS)
 MODERATION = []  # user_moderation_history mirror (migration 0004)
 
+# Migration tracking mirror. The real runner (services/python-api/migrate.py)
+# records applied files in a `schema_migrations` table; here the same state
+# lives in memory so the admin CP's migration panel is exercisable without
+# MySQL. Seeded as "everything except the newest file is applied", which is the
+# realistic state right after a migration is committed to the repo.
+MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "services" / "python-api" / "migrations"
+
+# Use the real runner's discovery/splitting instead of re-implementing it: a
+# duplicated splitter would drift (a naive split on ';' miscounts statements
+# that contain semicolons in string literals or comments).
+sys.path.insert(0, str(MIGRATIONS_DIR.parent))
+import migrate  # noqa: E402
+
+
+def migration_files():
+    """NNNN_description.sql files in application order, per the real runner."""
+    return [{"filename": migration.name,
+             "checksum": migration.checksum,
+             "statements": len(migration.statements)}
+            for migration in migrate.discover(MIGRATIONS_DIR)]
+
+
+INITIAL_MIGRATIONS = {
+    row["filename"]: dict(row, applied_at=int(time.time()), applied_by="seed")
+    for row in migration_files()[:-1]
+}
+APPLIED_MIGRATIONS = copy.deepcopy(INITIAL_MIGRATIONS)
+
 # Mirrors proxy.py's admin-mutation idempotency guard: (path, user_id) ->
 # last submit time. Repeats inside the window return 409.
 IDEMPOTENCY_WINDOW = 3.0  # seconds — keep in sync with proxy.py
@@ -111,6 +140,8 @@ def reset_state():
     TICKETS.extend(copy.deepcopy(INITIAL_TICKETS))
     RECENT_MUTATIONS.clear()
     MODERATION.clear()
+    APPLIED_MIGRATIONS.clear()
+    APPLIED_MIGRATIONS.update(copy.deepcopy(INITIAL_MIGRATIONS))
     SESSIONS.clear()
     CSRF.clear()
     VERIFICATIONS.clear()
@@ -207,6 +238,27 @@ class Handler(BaseHTTPRequestHandler):
             if not supplied or supplied != CSRF.get(token):
                 return None, err("csrf token required", 403)
         return user, None
+
+    def migrations_summary(self):
+        """Mirror proxy.py's `migrations` object inside /api/admin/database/status."""
+        files = migration_files()
+        applied, pending, drifted = [], [], []
+        for row in files:
+            recorded = APPLIED_MIGRATIONS.get(row["filename"])
+            if not recorded:
+                pending.append({"filename": row["filename"], "statements": row["statements"]})
+            elif recorded["checksum"] != row["checksum"]:
+                drifted.append(row["filename"])
+            else:
+                applied.append({"filename": row["filename"],
+                                "applied_at": recorded.get("applied_at"),
+                                "statements": recorded.get("statements"),
+                                "applied_by": recorded.get("applied_by", "")})
+        known = {row["filename"] for row in files}
+        return {"tracked": True, "tracking_table": "schema_migrations",
+                "current_revision": applied[-1]["filename"] if applied else None,
+                "applied": applied, "pending": pending, "drifted": drifted,
+                "missing": sorted(name for name in APPLIED_MIGRATIONS if name not in known)}
 
     def duplicate_submit(self, path, form):
         """Mirror proxy.py's idempotency guard: True when the same admin
@@ -342,7 +394,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(200, {"email_verification_enabled": CONFIG["verification_required"],
                                         "secure_cookie": False, "backend": "python"})
             if path == "/api/admin/database/status":
-                return self.reply(200, {"database": "healthy", "version": "mock-8.0", "paws": {"status": "ok"}})
+                return self.reply(200, {"database": "healthy", "version": "mock-8.0",
+                                        "paws": {"status": "ok"}, "migrations": self.migrations_summary()})
             if path == "/api/admin/repo-status":
                 return self.reply(200, {"ashathub": {"live": "mock0001", "repo": "mock0001", "state": "current"}})
             if path == "/api/admin/telemetry":
@@ -545,6 +598,22 @@ class Handler(BaseHTTPRequestHandler):
                                "detail": "banned" if form.get("banned", True) else "unbanned",
                                "created_at": int(time.time())})
             return self.reply(200, {"ok": True})
+
+        if path == "/api/admin/database/migrations/apply":
+            user, failure = self.require_admin()
+            if failure:
+                return self.reply(*failure)
+            baseline = bool(form.get("baseline", False))
+            handled = []
+            for row in migration_files():
+                recorded = APPLIED_MIGRATIONS.get(row["filename"])
+                pending = not recorded
+                drifted = bool(recorded) and recorded["checksum"] != row["checksum"]
+                if pending or (baseline and drifted):
+                    APPLIED_MIGRATIONS[row["filename"]] = dict(
+                        row, applied_at=int(time.time()), applied_by=f"admin:{user['username']}")
+                    handled.append(row["filename"])
+            return self.reply(200, {"ok": True, "baseline": baseline, "applied": handled})
 
         if path == "/api/admin/telemetry/refresh" or path == "/api/admin/telemetry/clear":
             user, failure = self.require_admin()

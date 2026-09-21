@@ -23,6 +23,14 @@ build/
 target/
 models/
 
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Playwright artifacts
+test-results/
+playwright-report/
+
 # Editor and OS junk
 .vscode/
 .idea/
