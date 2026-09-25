@@ -2901,27 +2901,6 @@ h3 {
   border-color: rgba(241, 194, 91, 0.5);
 }
 
-.github-auth-button {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  width: 100%;
-  margin-top: 4px;
-  padding: 11px;
-  color: var(--text);
-  background: #24292f;
-  border: 1px solid #57606a;
-  border-radius: var(--radius-sm);
-  font-weight: 700;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.github-auth-button:hover {
-  background: #32383f;
-}
-
 .auth-submit {
   width: 100%;
   margin-top: 4px;

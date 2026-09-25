@@ -277,6 +277,27 @@ class Proxy(BaseHTTPRequestHandler):
         user=self.admin_user()
         if not user: return error(self,"admin authentication required",403)
         path=urlparse(self.path).path; query=parse_qs(urlparse(self.path).query)
+        if path == '/api/admin/alpha/status':
+            def healthy(url):
+                try:
+                    with urlopen(url, timeout=3) as response: return response.status == 200
+                except Exception: return False
+            qwen=healthy('http://127.0.0.1:3004/health')
+            alpha=healthy('http://127.0.0.1:3000/health')
+            now=int(time.time())
+            return oidc_json(self,{'servers':[
+                {'id':'qwen','label':'Qwen Coder','online':qwen,'ready':qwen,'workers':1 if qwen else 0,'max_workers':1},
+                {'id':'vision','label':'Vision','online':alpha,'ready':alpha,'workers':1 if alpha else 0,'max_workers':1},
+            ],'updated_at':now})
+        if path == '/api/admin/repo-status':
+            root='/var/oled/data/AshatHub'
+            try:
+                repo=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True,timeout=5).strip()
+                dirty=bool(subprocess.check_output(['git','status','--porcelain'],cwd=root,text=True,timeout=5).strip())
+                state='dirty' if dirty else 'current'
+            except Exception:
+                repo='unknown'; state='unknown'
+            return oidc_json(self,{'ashathub':{'live':repo,'repo':repo,'state':state}})
         try:
             with db() as conn:
                 with conn.cursor() as cur:
@@ -288,7 +309,7 @@ class Proxy(BaseHTTPRequestHandler):
                     if path in ('/api/admin/summary','/api/admin/overview'):
                         cur.execute("SELECT COUNT(*) AS n FROM users"); total=cur.fetchone()['n']; cur.execute("SELECT COUNT(*) AS n FROM users WHERE is_active=1"); active=cur.fetchone()['n']; cur.execute("SELECT COUNT(*) AS n FROM support_tickets WHERE status IN ('open','in_progress')"); tickets=cur.fetchone()['n']; return oidc_json(self,{"users":total,"active_users":active,"disabled_users":total-active,"open_tickets":tickets,"active_projects":0,"active_deploys":0})
                     if path == '/api/admin/users':
-                        q=query.get('q',[''])[0]; page=max(1,min(1000,int(query.get('page',['1'])[0]))); like='%'+q+'%'; cur.execute("SELECT id,username,email,display_name,role,diamonds,is_active,banned_at,email_verified_at FROM users WHERE username LIKE %s OR email LIKE %s OR display_name LIKE %s ORDER BY username LIMIT 50 OFFSET %s",(like,like,like,(page-1)*50)); return oidc_json(self,{"users":cur.fetchall(),"page":page,"page_size":50})
+                        q=query.get('q',[''])[0]; page=max(1,min(1000,int(query.get('page',['1'])[0]))); like='%'+q+'%'; cur.execute("SELECT id,username,email,display_name,role,diamonds,is_active,banned_at,email_verified_at FROM users WHERE id LIKE %s OR username LIKE %s OR email LIKE %s OR display_name LIKE %s ORDER BY username LIMIT 50 OFFSET %s",(like,like,like,like,(page-1)*50)); return oidc_json(self,{"users":cur.fetchall(),"page":page,"page_size":50})
                     if path.startswith('/api/admin/users/'):
                         uid=path.rsplit('/',1)[1]; cur.execute("SELECT id,username,email,display_name,role,diamonds,is_active,banned_at,email_verified_at FROM users WHERE id=%s",(uid,)); row=cur.fetchone(); return oidc_json(self,{"user":row}) if row else error(self,'user not found',404)
                     if path in ('/api/admin/support','/api/admin/tickets'):
@@ -323,6 +344,7 @@ class Proxy(BaseHTTPRequestHandler):
                         for row in rows:
                             try: row["tags"]=json.loads(row.get("tags") or "[]")
                             except Exception: row["tags"]=[]
+                            row["featured"] = bool(row.get("featured"))
                         return oidc_json(self,{"games":rows})
             return error(self,'admin endpoint not found',404)
         except Exception as exc: return error(self,f"admin unavailable: {exc}",503)

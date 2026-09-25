@@ -47,14 +47,10 @@ The Python service is the public API at `/api/*`; Rust is not part of the contra
 | POST | `/api/admin/database/migrations/apply` | 200 | Run pending migrations (or baseline existing ones) |
 | GET | `/api/admin/settings` | 200 | Runtime API settings |
 | GET | `/api/admin/repo-status` | 200 | Live/repository commit comparison |
-| GET | `/api/admin/telemetry` | 200 | Omega telemetry server status |
+| GET | `/api/admin/alpha/status` | 200 | Alpha Qwen Coder and Vision model health |
 | GET | `/api/admin/games` | 200 | Admin game list incl. poster URLs |
 | PUT | `/api/admin/games/:slug` | 200 | Update game poster URL without a migration; see shape reference below |
-| GET | `/api/admin/omega/servers` | 200 | Omega server status |
-| POST | `/api/admin/telemetry/refresh` | 200 | Refreshes telemetry server data |
-| POST | `/api/admin/telemetry/clear` | 200 | Clears telemetry server cache |
 | POST | `/api/admin/github/push` | 200 | Pushes committed changes to GitHub main |
-| POST | `/api/admin/omega/launch` | 200 | Launches the Omega coding agent |
 | POST | `/api/admin/system/update` | 200 | Pulls, rebuilds, and restarts the live system |
 | DELETE | `/api/admin/users/:id` | 200 | Permanently deletes a member: ticket replies, tickets, sessions, email verifications, then the user row. Self-delete returns 409. Audit event `admin.user.deleted` is recorded. |
 

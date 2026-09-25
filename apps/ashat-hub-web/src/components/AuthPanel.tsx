@@ -223,7 +223,6 @@ export function AuthPanel({ onChange, onNavigate, embedded = false }: { onChange
           <span className="field-icon" aria-hidden>⚿</span>
           <input value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password" type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} required />
         </div>}
-        {mode !== 'reset-request' && <button type="button" className="github-auth-button" onClick={() => { window.location.href = `${API}/auth/github`; }}>Continue with GitHub</button>}
         <button type="submit" className="auth-submit" disabled={busy}>{mode === 'login' ? 'Sign in' : mode === 'register' ? 'Create account' : 'Send reset link'}</button>
         <div className="auth-links">
           {mode === 'login' && <button type="button" className="auth-switch" onClick={() => openMode('reset-request')}>Forgot password?</button>}
