@@ -1,23 +1,26 @@
 #!/usr/bin/env python3
 """Python API for the retained Ashat Hub surface."""
-from base64 import urlsafe_b64encode, urlsafe_b64decode
+from base64 import b64encode, urlsafe_b64encode, urlsafe_b64decode
 from hashlib import sha256
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlencode, urlparse
-from urllib.request import urlopen
-import crypt, json, os, secrets, subprocess, sys, time
+from urllib.request import Request, urlopen
+import crypt, json, os, re, secrets, subprocess, sys, threading, time
+from cryptography.fernet import Fernet
 
 # The migration runner lives next to this file; import it by path so the API
 # works regardless of the process working directory.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import migrate
 
-import pymysql
+from database import db
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 
-ISSUER = os.environ.get("OIDC_ISSUER", "https://www.agpstudios.org/api/oauth")
-KEY_FILE = os.environ.get("ASHAT_OIDC_PRIVATE_KEY_FILE", "")
+from config import CONFIG, path as config_path
+
+ISSUER = CONFIG["oidc_issuer"]
+KEY_FILE = str(config_path(CONFIG["oidc_private_key_file"])) if CONFIG["oidc_private_key_file"] else ""
 CODES = {}
 LOGIN_ATTEMPTS = {}
 # Idempotency guard for admin user mutations: (path, user_id) -> last submit
@@ -34,17 +37,82 @@ CLIENT_ERROR_WINDOW = 60.0         # seconds
 CLIENT_ERROR_MAX_BODY = 8192       # bytes
 CLIENT_ERROR_RETENTION = 30 * 86400
 CLIENT_ERROR_PRUNED_AT = 0.0
+GAME_TICKET_ATTEMPTS = {}
+GAME_TICKET_LOCK = threading.Lock()
+GAME_TICKET_WINDOW = 300
+GAME_TICKET_LIMIT = 10
+ONLINE_VISITORS = {}
+ONLINE_VISITORS_LOCK = threading.Lock()
+ONLINE_VISITOR_TTL = 90
+ACOINS_PACKAGES = {1000: (100, 1000), 5000: (500, 5000), 10000: (1000, 10000)}
+AUTH_CORS_ORIGINS = {"https://mko.agpstudios.org"}
+AUTH_CORS_PATHS = {"/api/auth/session", "/api/auth/login", "/api/auth/register", "/api/auth/logout"}
+AUTH_CORS_METHODS = {"GET", "POST"}
+AUTH_CORS_HEADERS = {"content-type", "x-csrf-token"}
+
+
+def payment_cipher():
+    value = CONFIG["payment_encryption_key"]
+    if not value: raise RuntimeError('payment encryption key not configured')
+    return Fernet(value.encode())
+
+
+def payment_key_configured():
+    try: payment_cipher(); return True
+    except Exception: return False
+
+
+def completed_paypal_capture(order, result):
+    if result.get('id') != order['paypal_order_id'] or result.get('status') != 'COMPLETED': return None
+    units = result.get('purchase_units')
+    if not isinstance(units, list) or len(units) != 1: return None
+    if units[0].get('reference_id') != order['id']: return None
+    payments = units[0].get('payments', {})
+    captures = payments.get('captures', [])
+    if len(captures) != 1: return None
+    capture = captures[0]
+    amount = capture.get('amount', {})
+    dollars = f"{order['amount_cents'] // 100}.{order['amount_cents'] % 100:02d}"
+    if capture.get('status') != 'COMPLETED' or amount.get('currency_code') != 'USD' or amount.get('value') != dollars: return None
+    return capture.get('id') if isinstance(capture.get('id'), str) else None
+
+
+def paypal_request(settings, method, path, payload=None, request_id=None):
+    base = 'https://api-m.sandbox.paypal.com' if settings['environment'] == 'sandbox' else 'https://api-m.paypal.com'
+    secret = payment_cipher().decrypt(settings['paypal_client_secret'].encode()).decode()
+    basic = b64encode(f"{settings['paypal_client_id']}:{secret}".encode()).decode()
+    token_request = Request(base + '/v1/oauth2/token', data=b'grant_type=client_credentials',
+                            headers={'Authorization': 'Basic ' + basic, 'Content-Type': 'application/x-www-form-urlencoded'}, method='POST')
+    with urlopen(token_request, timeout=15) as response: token = json.loads(response.read())['access_token']
+    data = json.dumps(payload or {}).encode() if method != 'GET' else None
+    headers = {'Authorization': 'Bearer ' + token, 'Accept': 'application/json', 'Content-Type': 'application/json', 'Prefer': 'return=representation'}
+    if request_id: headers['PayPal-Request-Id'] = request_id
+    request = Request(base + path, data=data, headers=headers, method=method)
+    with urlopen(request, timeout=15) as response: return json.loads(response.read())
+
+
+def record_online_visitor(visitor_id, now=None):
+    now=time.time() if now is None else now
+    with ONLINE_VISITORS_LOCK:
+        for key, seen in list(ONLINE_VISITORS.items()):
+            if now - seen >= ONLINE_VISITOR_TTL: ONLINE_VISITORS.pop(key, None)
+        ONLINE_VISITORS[visitor_id]=now
+        return len(ONLINE_VISITORS)
+
+
+def allow_game_ticket(user_id, now=None):
+    now=time.time() if now is None else now
+    with GAME_TICKET_LOCK:
+        recent=[stamp for stamp in GAME_TICKET_ATTEMPTS.get(user_id,[]) if now-stamp < GAME_TICKET_WINDOW]
+        if len(recent) >= GAME_TICKET_LIMIT:
+            GAME_TICKET_ATTEMPTS[user_id]=recent
+            return False
+        GAME_TICKET_ATTEMPTS[user_id]=recent+[now]
+        return True
 
 
 def b64(value):
     return urlsafe_b64encode(value).rstrip(b"=").decode()
-
-
-def db():
-    url = urlparse(os.environ["ASHAT_DATABASE_URL"])
-    return pymysql.connect(host=url.hostname, port=url.port or 3306, user=url.username,
-                           password=url.password, database=url.path.lstrip("/"),
-                           cursorclass=pymysql.cursors.DictCursor, autocommit=True)
 
 
 def key():
@@ -99,6 +167,17 @@ def issue_token(entry):
 class Proxy(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
+    def end_headers(self):
+        origin = self.headers.get("Origin")
+        if origin in AUTH_CORS_ORIGINS and urlparse(self.path).path in AUTH_CORS_PATHS:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Access-Control-Allow-Credentials", "true")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, X-CSRF-Token")
+            self.send_header("Access-Control-Max-Age", "600")
+            self.send_header("Vary", "Origin")
+        super().end_headers()
+
     def do_GET(self):
         if self.path.startswith("/api/oauth/"):
             return self.oidc_get()
@@ -131,6 +210,14 @@ class Proxy(BaseHTTPRequestHandler):
             return self.resend_verification()
         if urlparse(self.path).path == "/api/auth/logout":
             return self.auth_logout()
+        if urlparse(self.path).path == "/api/game/ticket":
+            return self.game_ticket()
+        if urlparse(self.path).path == "/api/acoins/order":
+            return self.acoins_order()
+        if urlparse(self.path).path == "/api/acoins/capture":
+            return self.acoins_capture()
+        if urlparse(self.path).path == "/api/online-presence":
+            return self.online_presence()
         if urlparse(self.path).path == "/api/telemetry/client-error":
             return self.client_error_report()
         if urlparse(self.path).path == "/api/admin/audit/prune":
@@ -154,7 +241,16 @@ class Proxy(BaseHTTPRequestHandler):
         if urlparse(self.path).path == "/api/account": return self.account_delete()
         if urlparse(self.path).path.startswith("/api/admin/users/"): return self.admin_user_delete(urlparse(self.path).path.rsplit('/',1)[1])
         self.forward()
-    def do_OPTIONS(self): self.forward()
+    def do_OPTIONS(self):
+        path = urlparse(self.path).path
+        origin = self.headers.get("Origin")
+        method = self.headers.get("Access-Control-Request-Method", "").upper()
+        headers = {header.strip().lower() for header in self.headers.get("Access-Control-Request-Headers", "").split(",") if header.strip()}
+        if origin not in AUTH_CORS_ORIGINS or path not in AUTH_CORS_PATHS or method not in AUTH_CORS_METHODS or not headers <= AUTH_CORS_HEADERS:
+            return self.send_error(403)
+        self.send_response(204)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def migrations_summary(self, cur):
         """Summarize migration state for the admin CP; an untracked database reports tracked=false."""
@@ -215,7 +311,7 @@ class Proxy(BaseHTTPRequestHandler):
                             migrate.apply_migration(conn, migration, actor)
                         handled.append(migration.name)
                     action='admin.migrations.baselined' if baseline else 'admin.migrations.applied'
-                    cur.execute("INSERT INTO admin_audit_events (actor_id,actor_name,action,target_type,target_id,detail,created_at) VALUES (%s,%s,%s,'migrations',%s,%s,UNIX_TIMESTAMP())",
+                    cur.execute("INSERT INTO admin_audit_events (actor_id,actor_name,action,target_type,target_id,detail,created_at) VALUES (?,?,?,'migrations',?,?,CAST(strftime('%s','now') AS INTEGER))",
                                 (user['id'],user['username'],action,'schema_migrations',json.dumps({"baseline":baseline,"files":handled})))
             return oidc_json(self,{"ok":True,"baseline":baseline,"applied":handled})
         except Exception as exc: return error(self,f"migration unavailable: {exc}",503)
@@ -236,7 +332,7 @@ class Proxy(BaseHTTPRequestHandler):
             if len(poster) > 400: return error(self,"poster url too long (max 400)")
             with db() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("UPDATE games SET poster=%s,updated_at=UNIX_TIMESTAMP() WHERE slug=%s",(poster,slug))
+                    cur.execute("UPDATE games SET poster=?,updated_at=CAST(strftime('%s','now') AS INTEGER) WHERE slug=?",(poster,slug))
                     if cur.rowcount == 0: return error(self,"game not found",404)
             return oidc_json(self,{"ok":True,"slug":slug,"poster":poster})
         except Exception as exc: return error(self,f"games unavailable: {exc}",503)
@@ -277,18 +373,6 @@ class Proxy(BaseHTTPRequestHandler):
         user=self.admin_user()
         if not user: return error(self,"admin authentication required",403)
         path=urlparse(self.path).path; query=parse_qs(urlparse(self.path).query)
-        if path == '/api/admin/alpha/status':
-            def healthy(url):
-                try:
-                    with urlopen(url, timeout=3) as response: return response.status == 200
-                except Exception: return False
-            qwen=healthy('http://127.0.0.1:3004/health')
-            alpha=healthy('http://127.0.0.1:3000/health')
-            now=int(time.time())
-            return oidc_json(self,{'servers':[
-                {'id':'qwen','label':'Qwen Coder','online':qwen,'ready':qwen,'workers':1 if qwen else 0,'max_workers':1},
-                {'id':'vision','label':'Vision','online':alpha,'ready':alpha,'workers':1 if alpha else 0,'max_workers':1},
-            ],'updated_at':now})
         if path == '/api/admin/repo-status':
             root='/var/oled/data/AshatHub'
             try:
@@ -303,19 +387,19 @@ class Proxy(BaseHTTPRequestHandler):
                 with conn.cursor() as cur:
                     if path.startswith('/api/admin/users/') and path.endswith('/moderation'):
                         uid=path.removeprefix('/api/admin/users/').removesuffix('/moderation')
-                        cur.execute("SELECT id,action,actor_id,actor_name,detail,created_at FROM user_moderation_history WHERE user_id=%s ORDER BY created_at DESC,id DESC LIMIT 100",(uid,))
+                        cur.execute("SELECT id,action,actor_id,actor_name,detail,created_at FROM user_moderation_history WHERE user_id=? ORDER BY created_at DESC,id DESC LIMIT 100",(uid,))
                         events=cur.fetchall()
                         return oidc_json(self,{"user_id":uid,"events":events})
                     if path in ('/api/admin/summary','/api/admin/overview'):
                         cur.execute("SELECT COUNT(*) AS n FROM users"); total=cur.fetchone()['n']; cur.execute("SELECT COUNT(*) AS n FROM users WHERE is_active=1"); active=cur.fetchone()['n']; cur.execute("SELECT COUNT(*) AS n FROM support_tickets WHERE status IN ('open','in_progress')"); tickets=cur.fetchone()['n']; return oidc_json(self,{"users":total,"active_users":active,"disabled_users":total-active,"open_tickets":tickets,"active_projects":0,"active_deploys":0})
                     if path == '/api/admin/users':
-                        q=query.get('q',[''])[0]; page=max(1,min(1000,int(query.get('page',['1'])[0]))); like='%'+q+'%'; cur.execute("SELECT id,username,email,display_name,role,diamonds,is_active,banned_at,email_verified_at FROM users WHERE id LIKE %s OR username LIKE %s OR email LIKE %s OR display_name LIKE %s ORDER BY username LIMIT 50 OFFSET %s",(like,like,like,like,(page-1)*50)); return oidc_json(self,{"users":cur.fetchall(),"page":page,"page_size":50})
+                        q=query.get('q',[''])[0]; page=max(1,min(1000,int(query.get('page',['1'])[0]))); like='%'+q+'%'; cur.execute("SELECT id,username,email,display_name,role,diamonds,is_active,banned_at,email_verified_at FROM users WHERE id LIKE ? OR username LIKE ? OR email LIKE ? OR display_name LIKE ? ORDER BY username LIMIT 50 OFFSET ?",(like,like,like,like,(page-1)*50)); return oidc_json(self,{"users":cur.fetchall(),"page":page,"page_size":50})
                     if path.startswith('/api/admin/users/'):
-                        uid=path.rsplit('/',1)[1]; cur.execute("SELECT id,username,email,display_name,role,diamonds,is_active,banned_at,email_verified_at FROM users WHERE id=%s",(uid,)); row=cur.fetchone(); return oidc_json(self,{"user":row}) if row else error(self,'user not found',404)
+                        uid=path.rsplit('/',1)[1]; cur.execute("SELECT id,username,email,display_name,role,diamonds,is_active,banned_at,email_verified_at FROM users WHERE id=?",(uid,)); row=cur.fetchone(); return oidc_json(self,{"user":row}) if row else error(self,'user not found',404)
                     if path in ('/api/admin/support','/api/admin/tickets'):
                         cur.execute("SELECT id,subject,status,priority,category,created_at,updated_at FROM support_tickets ORDER BY updated_at DESC LIMIT 100"); return oidc_json(self,{"tickets":cur.fetchall()})
                     if path in ('/api/admin/health','/api/admin/database/status'):
-                        cur.execute("SELECT VERSION() AS version"); return oidc_json(self,{"database":"healthy","version":cur.fetchone()['version'],"paws":self.game_status_value(),"migrations":self.migrations_summary(cur)})
+                        cur.execute("SELECT sqlite_version() AS version"); return oidc_json(self,{"database":"healthy","version":cur.fetchone()['version'],"paws":self.game_status_value(),"migrations":self.migrations_summary(cur)})
                     if path == '/api/admin/client-errors':
                         # `status` defaults to new so triaged rows stop appearing as new;
                         # `all` and the explicit states are for reviewing what was done.
@@ -326,18 +410,22 @@ class Proxy(BaseHTTPRequestHandler):
                         # state, because the message is the thing being muted.
                         where="m.message_hash IS NULL AND COALESCE(t.status,'new')='new'" if status=='new' else ("m.message_hash IS NULL AND t.status='resolved'" if status=='resolved' else ("m.message_hash IS NOT NULL" if status=='muted' else '1=1'))
                         cur.execute("SELECT e.id,e.source,e.message,e.detail,e.path,e.count,e.occurrences,e.user_id,e.user_agent,e.created_at,"
-                                    " SHA2(e.message,256) AS message_hash,"
+                                    " sha256(e.message) AS message_hash,"
                                     " CASE WHEN m.message_hash IS NOT NULL THEN 'muted' ELSE COALESCE(t.status,'new') END AS triage_status,"
                                     " COALESCE(t.triaged_at,0) AS triaged_at, COALESCE(t.triaged_by,'') AS triaged_by,"
                                     " COALESCE(m.muted_at,0) AS muted_at, COALESCE(m.muted_by,'') AS muted_by"
                                     " FROM client_error_log e"
                                     " LEFT JOIN client_error_triage t ON t.error_id=e.id"
-                                    " LEFT JOIN client_error_mutes m ON m.message_hash=SHA2(e.message,256)"
-                                    f" WHERE {where} ORDER BY e.created_at DESC,e.id DESC LIMIT 50 OFFSET %s",((page-1)*50,))
+                                    " LEFT JOIN client_error_mutes m ON m.message_hash=sha256(e.message)"
+                                    f" WHERE {where} ORDER BY e.created_at DESC,e.id DESC LIMIT 50 OFFSET ?",((page-1)*50,))
                         return oidc_json(self,{"errors":cur.fetchall(),"page":page,"page_size":50,"status":status})
                     if path == '/api/admin/audit':
-                        page=max(1,min(1000,int(query.get('page',['1'])[0]))); cur.execute("SELECT id,actor_id,actor_name,action,target_type,target_id,detail,created_at FROM admin_audit_events ORDER BY created_at DESC,id DESC LIMIT 50 OFFSET %s",((page-1)*50,)); return oidc_json(self,{"events":cur.fetchall(),"page":page,"page_size":50})
+                        page=max(1,min(1000,int(query.get('page',['1'])[0]))); cur.execute("SELECT id,actor_id,actor_name,action,target_type,target_id,detail,created_at FROM admin_audit_events ORDER BY created_at DESC,id DESC LIMIT 50 OFFSET ?",((page-1)*50,)); return oidc_json(self,{"events":cur.fetchall(),"page":page,"page_size":50})
                     if path == '/api/admin/settings': return oidc_json(self,{"email_verification_enabled":False,"secure_cookie":True,"backend":"python"})
+                    if path == '/api/admin/payments/settings':
+                        cur.execute("SELECT paypal_email,paypal_client_id,paypal_client_secret,environment FROM acoin_payment_settings WHERE id=1")
+                        row=cur.fetchone() or {}
+                        return oidc_json(self,{"paypal_email":row.get('paypal_email',''),"paypal_client_id":row.get('paypal_client_id',''),"client_secret_configured":bool(row.get('paypal_client_secret')),"environment":row.get('environment','sandbox'),"encryption_key_configured":payment_key_configured()})
                     if path == '/api/admin/games':
                         cur.execute("SELECT slug,title,summary,status,tags,url,poster,featured,sort_order FROM games ORDER BY sort_order,created_at")
                         rows=cur.fetchall()
@@ -351,26 +439,147 @@ class Proxy(BaseHTTPRequestHandler):
 
     def game_status_value(self):
         try:
-            with urlopen(os.environ.get("PAWS_HEALTH_URL", "http://127.0.0.1:3003/api/health"), timeout=5) as response: return json.loads(response.read())
+            with urlopen(CONFIG["paws_health_url"], timeout=5) as response: return json.loads(response.read())
         except Exception: return {"status":"unavailable"}
+
+    def acoins_order(self):
+        user=self.current_user()
+        if not user: return error(self,'authentication required',401)
+        if not self.csrf_ok(user): return error(self,'csrf token required',403)
+        try:
+            length=int(self.headers.get('Content-Length','0'))
+            if not 0 <= length <= 1024: return error(self,'invalid ACoins package')
+            try: form=json.loads(self.rfile.read(length) or b'{}')
+            except ValueError: return error(self,'invalid ACoins package')
+            if not isinstance(form,dict): return error(self,'invalid ACoins package')
+            package=form.get('acoins')
+            if type(package) is not int or package not in ACOINS_PACKAGES: return error(self,'invalid ACoins package')
+            amount_cents,coins=ACOINS_PACKAGES[package]
+            with db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute('SELECT paypal_email,paypal_client_id,paypal_client_secret,environment FROM acoin_payment_settings WHERE id=1')
+                    settings=cur.fetchone()
+            if not settings or not settings['paypal_client_id'] or not settings['paypal_client_secret']:
+                return error(self,'PayPal is not configured',503)
+            local_id=secrets.token_hex(16)
+            result=paypal_request(settings,'POST','/v2/checkout/orders',{
+                'intent':'CAPTURE',
+                'payment_source':{'paypal':{'experience_context':{
+                    'brand_name':'AGP Studios','landing_page':'LOGIN','user_action':'PAY_NOW',
+                    'shipping_preference':'NO_SHIPPING',
+                    'return_url':'https://www.agpstudios.org/?acoins=return',
+                    'cancel_url':'https://www.agpstudios.org/?acoins=cancel'}}},
+                'purchase_units':[{'reference_id':local_id,'custom_id':local_id,
+                    'payee':{'email_address':settings['paypal_email']},
+                    'amount':{'currency_code':'USD','value':f'{amount_cents // 100}.{amount_cents % 100:02d}'},
+                    'description':f'{coins:,} ACoins'}]},request_id=local_id)
+            paypal_id=result.get('id')
+            approval=next((item.get('href') for item in result.get('links',[]) if item.get('rel') in ('approve','payer-action')),None)
+            if not isinstance(paypal_id,str) or not isinstance(approval,str) or urlparse(approval).scheme != 'https' or urlparse(approval).hostname not in ('www.paypal.com','www.sandbox.paypal.com'):
+                return error(self,'PayPal checkout unavailable',503)
+            with db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("INSERT INTO acoin_orders (id,paypal_order_id,user_id,environment,amount_cents,acoins,status,created_at) VALUES (?,?,?,?,?,?,'pending',CAST(strftime('%s','now') AS INTEGER))",(local_id,paypal_id,str(user['id']),settings['environment'],amount_cents,coins))
+            return oidc_json(self,{'approval_url':approval,'order_id':paypal_id,'acoins':coins,'amount_cents':amount_cents},201)
+        except Exception:
+            return error(self,'PayPal checkout unavailable',503)
+
+    def acoins_capture(self):
+        user=self.current_user()
+        if not user: return error(self,'authentication required',401)
+        if not self.csrf_ok(user): return error(self,'csrf token required',403)
+        try:
+            length=int(self.headers.get('Content-Length','0'))
+            if not 0 <= length <= 1024: return error(self,'invalid PayPal order')
+            try: form=json.loads(self.rfile.read(length) or b'{}')
+            except ValueError: return error(self,'invalid PayPal order')
+            paypal_id=form.get('order_id') if isinstance(form,dict) else None
+            if not isinstance(paypal_id,str) or not re.fullmatch(r'[A-Za-z0-9-]{5,64}',paypal_id): return error(self,'invalid PayPal order')
+            with db() as conn:
+                # ponytail: SQLite's single-writer lock spans PayPal capture to prevent double credit; use a short claim/lease if write contention appears.
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute('SELECT * FROM acoin_orders WHERE paypal_order_id=? AND user_id=?',(paypal_id,str(user['id'])))
+                        order=cur.fetchone()
+                        if not order:
+                            conn.rollback(); return error(self,'purchase not found',404)
+                        cur.execute('SELECT acoins_balance FROM users WHERE id=?',(str(user['id']),))
+                        balance=cur.fetchone()['acoins_balance']
+                        if order['status']=='completed':
+                            conn.commit(); return oidc_json(self,{'balance':balance,'credited':order['acoins']})
+                        cur.execute('SELECT paypal_email,paypal_client_id,paypal_client_secret,environment FROM acoin_payment_settings WHERE id=1')
+                        settings=cur.fetchone()
+                        if not settings or settings['environment'] != order['environment']:
+                            conn.rollback(); return error(self,'payment settings changed; contact support',503)
+                        try:
+                            result=paypal_request(settings,'POST',f'/v2/checkout/orders/{paypal_id}/capture',{},request_id=order['id']+'-capture')
+                        except Exception:
+                            result=paypal_request(settings,'GET',f'/v2/checkout/orders/{paypal_id}')
+                        capture_id=completed_paypal_capture(order,result)
+                        if not capture_id:
+                            conn.rollback(); return error(self,'PayPal payment is not complete',409)
+                        cur.execute("UPDATE acoin_orders SET status='completed',paypal_capture_id=?,completed_at=CAST(strftime('%s','now') AS INTEGER) WHERE id=? AND status='pending'",(capture_id,order['id']))
+                        cur.execute('UPDATE users SET acoins_balance=acoins_balance+? WHERE id=?',(order['acoins'],str(user['id'])))
+                        cur.execute('SELECT acoins_balance FROM users WHERE id=?',(str(user['id']),))
+                        balance=cur.fetchone()['acoins_balance']
+                    conn.commit()
+                    return oidc_json(self,{'balance':balance,'credited':order['acoins']})
+                except Exception:
+                    conn.rollback()
+                    raise
+        except Exception:
+            return error(self,'Payment confirmation unavailable',503)
 
     def admin_post(self):
         user=self.admin_user()
         if not user: return error(self,"admin authentication required",403)
         if not self.csrf_ok(user): return error(self,"csrf token required",403)
-        path=urlparse(self.path).path; length=int(self.headers.get("Content-Length","0")); form=json.loads(self.rfile.read(length) or b'{}')
+        path=urlparse(self.path).path; length=int(self.headers.get("Content-Length","0"))
+        if path == '/api/admin/payments/settings' and not 0 <= length <= 4096: return error(self,'invalid payment settings')
+        form=json.loads(self.rfile.read(length) or b'{}')
         # Audit/context for the branches below. User mutations write a moderation
         # timeline entry; client error triage has no user to attach one to, so it
         # clears mod_detail and retargets the audit event instead.
         audit_target_type='user'; audit_target_id=str(form.get('user_id',''))
+        audit_detail=json.dumps({}) if path == '/api/admin/payments/settings' else json.dumps(form)
         log_moderation=True
         try:
             with db() as conn:
                 with conn.cursor() as cur:
-                    if path == '/api/admin/users/role':
+                    if path == '/api/admin/payments/settings':
+                        if not isinstance(form,dict): return error(self,'invalid payment settings')
+                        email=form.get('paypal_email','')
+                        client_id=form.get('paypal_client_id','')
+                        secret=form.get('paypal_client_secret','')
+                        environment=form.get('environment','sandbox')
+                        if not isinstance(email,str) or not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+',email.strip()): return error(self,'valid PayPal email required')
+                        if not isinstance(client_id,str) or not client_id.strip() or len(client_id)>255: return error(self,'PayPal client ID required')
+                        if not isinstance(secret,str) or len(secret)>512: return error(self,'invalid PayPal client secret')
+                        if environment not in ('sandbox','live'): return error(self,'invalid PayPal environment')
+                        cur.execute("SELECT paypal_client_secret FROM acoin_payment_settings WHERE id=1")
+                        saved=cur.fetchone() or {}
+                        encrypted=saved.get('paypal_client_secret','')
+                        if secret:
+                            try: encrypted=payment_cipher().encrypt(secret.encode()).decode()
+                            except Exception: return error(self,'payment encryption key unavailable',503)
+                        cur.execute("INSERT INTO acoin_payment_settings (id,paypal_email,paypal_client_id,paypal_client_secret,environment,updated_by,updated_at) VALUES (1,?,?,?,?,?,CAST(strftime('%s','now') AS INTEGER)) ON CONFLICT(id) DO UPDATE SET paypal_email=excluded.paypal_email,paypal_client_id=excluded.paypal_client_id,paypal_client_secret=excluded.paypal_client_secret,environment=excluded.environment,updated_by=excluded.updated_by,updated_at=excluded.updated_at",(email.strip(),client_id.strip(),encrypted,environment,str(user['id'])))
+                        action='acoins.payment_settings.updated'; audit_target_type='payment_settings'; audit_target_id='paypal'; log_moderation=False
+                        audit_detail=json.dumps({'paypal_email':email.strip(),'environment':environment})
+                        mod_detail=''
+                    elif path == '/api/admin/world-of-ra/grant':
+                        uid=str(form.get('user_id','')).strip()
+                        if not uid: return error(self,'user id required')
+                        if self.duplicate_submit(path,form): return error(self,'duplicate submission; retry shortly',409)
+                        cur.execute("SELECT id FROM users WHERE id=?",(uid,))
+                        if not cur.fetchone(): return error(self,'user not found',404)
+                        cur.execute("INSERT INTO world_of_ra_entitlements (user_id,granted_at,granted_by) VALUES (?,CAST(strftime('%s','now') AS INTEGER),?) ON CONFLICT(user_id) DO UPDATE SET granted_at=excluded.granted_at,granted_by=excluded.granted_by",(uid,str(user['id'])))
+                        action='world_of_ra.entitlement.granted'; audit_target_type='world_of_ra_entitlement'; audit_target_id=uid; log_moderation=False
+                        mod_detail=''
+                    elif path == '/api/admin/users/role':
                         if form.get('role') not in ('Member','Pro','Admin'): return error(self,'invalid role')
                         if self.duplicate_submit(path, form): return error(self,"duplicate submission; retry shortly",409)
-                        cur.execute("UPDATE users SET role=%s,updated_at=UTC_TIMESTAMP() WHERE id=%s",(form['role'],form.get('user_id'))); action='user.role.updated'
+                        cur.execute("UPDATE users SET role=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",(form['role'],form.get('user_id'))); action='user.role.updated'
                         mod_detail='role: '+str(form['role'])
                     elif path in ('/api/admin/users/status','/api/admin/users/ban'):
                         if path.endswith('/ban'):
@@ -379,15 +588,15 @@ class Proxy(BaseHTTPRequestHandler):
                             # (or sent only user_id) keep the original ban behavior.
                             banned=bool(form.get('banned', True))
                             if self.duplicate_submit(path, form): return error(self,"duplicate submission; retry shortly",409)
-                            if banned: cur.execute("UPDATE users SET is_active=0,banned_at=UNIX_TIMESTAMP(),updated_at=UTC_TIMESTAMP() WHERE id=%s",(form.get('user_id'),))
-                            else: cur.execute("UPDATE users SET is_active=1,banned_at=NULL,updated_at=UTC_TIMESTAMP() WHERE id=%s",(form.get('user_id'),))
+                            if banned: cur.execute("UPDATE users SET is_active=0,banned_at=CAST(strftime('%s','now') AS INTEGER),updated_at=CURRENT_TIMESTAMP WHERE id=?",(form.get('user_id'),))
+                            else: cur.execute("UPDATE users SET is_active=1,banned_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?",(form.get('user_id'),))
                             action='user.banned' if banned else 'user.unbanned'
                             mod_detail='banned' if banned else 'unbanned'
                         else:
                             status=form.get('status','active')
                             if self.duplicate_submit(path, form): return error(self,"duplicate submission; retry shortly",409)
-                            if status == 'banned': cur.execute("UPDATE users SET is_active=0,banned_at=UNIX_TIMESTAMP(),updated_at=UTC_TIMESTAMP() WHERE id=%s",(form.get('user_id'),))
-                            else: cur.execute("UPDATE users SET is_active=%s,banned_at=NULL,updated_at=UTC_TIMESTAMP() WHERE id=%s",(0 if status=='disabled' else 1,form.get('user_id')))
+                            if status == 'banned': cur.execute("UPDATE users SET is_active=0,banned_at=CAST(strftime('%s','now') AS INTEGER),updated_at=CURRENT_TIMESTAMP WHERE id=?",(form.get('user_id'),))
+                            else: cur.execute("UPDATE users SET is_active=?,banned_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?",(0 if status=='disabled' else 1,form.get('user_id')))
                             action='user.status.updated'
                             mod_detail='status: '+str(status)
                     elif path == '/api/admin/client-errors/status':
@@ -397,32 +606,32 @@ class Proxy(BaseHTTPRequestHandler):
                         if self.duplicate_submit(path, form, form['status']): return error(self,"duplicate submission; retry shortly",409)
                         try: error_id=int(form.get('id'))
                         except (TypeError,ValueError): return error(self,'invalid client error id')
-                        cur.execute("SELECT id FROM client_error_log WHERE id=%s",(error_id,))
+                        cur.execute("SELECT id FROM client_error_log WHERE id=?",(error_id,))
                         if not cur.fetchone(): return error(self,'client error not found',404)
-                        if form['status'] == 'new': cur.execute("DELETE FROM client_error_triage WHERE error_id=%s",(error_id,))
-                        else: cur.execute("INSERT INTO client_error_triage (error_id,status,triaged_at,triaged_by) VALUES (%s,%s,UNIX_TIMESTAMP(),%s) ON DUPLICATE KEY UPDATE status=VALUES(status),triaged_at=VALUES(triaged_at),triaged_by=VALUES(triaged_by)",(error_id,form['status'],user['id']))
+                        if form['status'] == 'new': cur.execute("DELETE FROM client_error_triage WHERE error_id=?",(error_id,))
+                        else: cur.execute("INSERT INTO client_error_triage (error_id,status,triaged_at,triaged_by) VALUES (?,?,CAST(strftime('%s','now') AS INTEGER),?) ON CONFLICT(error_id) DO UPDATE SET status=excluded.status,triaged_at=excluded.triaged_at,triaged_by=excluded.triaged_by",(error_id,form['status'],user['id']))
                         action='client_error.status.updated'
                         audit_target_type='client_error'; audit_target_id=str(error_id); log_moderation=False
                     elif path == '/api/admin/client-errors/mute':
-                        # Message-level mute (migration 0006): the row identifies
+                        # Message-level mute: the row identifies
                         # which message, and the mute then covers every report of
                         # it, past and future. {id, muted} mirrors /users/ban.
                         muted=bool(form.get('muted', True))
                         if self.duplicate_submit(path, form, 'muted' if muted else 'unmuted'): return error(self,"duplicate submission; retry shortly",409)
                         try: error_id=int(form.get('id'))
                         except (TypeError,ValueError): return error(self,'invalid client error id')
-                        cur.execute("SELECT message FROM client_error_log WHERE id=%s",(error_id,))
+                        cur.execute("SELECT message FROM client_error_log WHERE id=?",(error_id,))
                         row=cur.fetchone()
                         if not row: return error(self,'client error not found',404)
-                        if muted: cur.execute("INSERT INTO client_error_mutes (message_hash,message,muted_at,muted_by) VALUES (SHA2(%s,256),%s,UNIX_TIMESTAMP(),%s) ON DUPLICATE KEY UPDATE message=VALUES(message),muted_at=VALUES(muted_at),muted_by=VALUES(muted_by)",(row['message'],row['message'][:400],user['id']))
-                        else: cur.execute("DELETE FROM client_error_mutes WHERE message_hash=SHA2(%s,256)",(row['message'],))
+                        if muted: cur.execute("INSERT INTO client_error_mutes (message_hash,message,muted_at,muted_by) VALUES (sha256(?),?,CAST(strftime('%s','now') AS INTEGER),?) ON CONFLICT(message_hash) DO UPDATE SET message=excluded.message,muted_at=excluded.muted_at,muted_by=excluded.muted_by",(row['message'],row['message'][:400],user['id']))
+                        else: cur.execute("DELETE FROM client_error_mutes WHERE message_hash=sha256(?)",(row['message'],))
                         action='client_error.message.muted' if muted else 'client_error.message.unmuted'
                         audit_target_type='client_error'; audit_target_id=str(error_id); log_moderation=False
                     else: return error(self,'admin endpoint not found',404)
-                    cur.execute("INSERT INTO admin_audit_events (actor_id,actor_name,action,target_type,target_id,detail,created_at) VALUES (%s,%s,%s,%s,%s,%s,UNIX_TIMESTAMP())",(user['id'],user['username'],action,audit_target_type,audit_target_id,json.dumps(form)))
+                    cur.execute("INSERT INTO admin_audit_events (actor_id,actor_name,action,target_type,target_id,detail,created_at) VALUES (?,?,?,?,?,?,CAST(strftime('%s','now') AS INTEGER))",(user['id'],user['username'],action,audit_target_type,audit_target_id,audit_detail))
                     # Moderation timeline: append to the dedicated history table
-                    # (migration 0004) so the admin CP can show per-user history.
-                    if log_moderation: cur.execute("INSERT INTO user_moderation_history (user_id,action,actor_id,actor_name,detail,created_at) VALUES (%s,%s,%s,%s,%s,UNIX_TIMESTAMP())",(str(form.get('user_id','')),action,user['id'],user['username'],mod_detail))
+                    # so the admin CP can show per-user history.
+                    if log_moderation: cur.execute("INSERT INTO user_moderation_history (user_id,action,actor_id,actor_name,detail,created_at) VALUES (?,?,?,?,?,CAST(strftime('%s','now') AS INTEGER))",(str(form.get('user_id','')),action,user['id'],user['username'],mod_detail))
             return oidc_json(self,{"ok":True})
         except Exception as exc: return error(self,f"admin unavailable: {exc}",503)
 
@@ -435,12 +644,12 @@ class Proxy(BaseHTTPRequestHandler):
         try:
             with db() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("SELECT username FROM users WHERE id=%s",(uid,)); row=cur.fetchone()
+                    cur.execute("SELECT username FROM users WHERE id=?",(uid,)); row=cur.fetchone()
                     if not row: return error(self,"user not found",404)
                     for table in ('support_ticket_replies','support_tickets','rust_sessions','sessions','email_verifications'):
-                        cur.execute(f"DELETE FROM {table} WHERE user_id=%s",(uid,))
-                    cur.execute("DELETE FROM users WHERE id=%s",(uid,))
-                    cur.execute("INSERT INTO admin_audit_events (actor_id,actor_name,action,target_type,target_id,detail,created_at) VALUES (%s,%s,%s,'user',%s,%s,UNIX_TIMESTAMP())",(user['id'],user['username'],'admin.user.deleted',uid,json.dumps({'deleted_username':row['username']})))
+                        cur.execute(f"DELETE FROM {table} WHERE user_id=?",(uid,))
+                    cur.execute("DELETE FROM users WHERE id=?",(uid,))
+                    cur.execute("INSERT INTO admin_audit_events (actor_id,actor_name,action,target_type,target_id,detail,created_at) VALUES (?,?,?,'user',?,?,CAST(strftime('%s','now') AS INTEGER))",(user['id'],user['username'],'admin.user.deleted',uid,json.dumps({'deleted_username':row['username']})))
             return oidc_json(self,{"ok":True,"deleted":uid})
         except Exception as exc: return error(self,f"admin unavailable: {exc}",503)
 
@@ -453,15 +662,33 @@ class Proxy(BaseHTTPRequestHandler):
             if not isinstance(before,int) or before < 1: return error(self,"integer before_id required")
             with db() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("SELECT COUNT(*) AS n FROM admin_audit_events WHERE id<%s",(before,)); count=cur.fetchone()['n']
-                    cur.execute("DELETE FROM admin_audit_events WHERE id<%s",(before,))
-                    cur.execute("INSERT INTO admin_audit_events (actor_id,actor_name,action,target_type,target_id,detail,created_at) VALUES (%s,%s,%s,'audit',%s,%s,UNIX_TIMESTAMP())",(user['id'],user['username'],'admin.audit.pruned',str(before),json.dumps({'deleted':count,'before_id':before})))
+                    cur.execute("SELECT COUNT(*) AS n FROM admin_audit_events WHERE id<?",(before,)); count=cur.fetchone()['n']
+                    cur.execute("DELETE FROM admin_audit_events WHERE id<?",(before,))
+                    cur.execute("INSERT INTO admin_audit_events (actor_id,actor_name,action,target_type,target_id,detail,created_at) VALUES (?,?,?,'audit',?,?,CAST(strftime('%s','now') AS INTEGER))",(user['id'],user['username'],'admin.audit.pruned',str(before),json.dumps({'deleted':count,'before_id':before})))
             return oidc_json(self,{"ok":True,"deleted":count})
         except Exception as exc: return error(self,f"admin unavailable: {exc}",503)
 
     def portal_data(self):
         health=self.game_status_value()
         return oidc_json(self, {"health":health,"players_online":None,"server_metrics":None,"season":None,"character":None,"news":[],"regions":[]})
+
+    def online_presence(self):
+        try:
+            length=int(self.headers.get("Content-Length","0"))
+            if length > 256: return error(self,"invalid visitor id")
+            form=json.loads(self.rfile.read(length) or b'{}')
+            visitor_id=form.get('visitor_id') if isinstance(form,dict) else None
+            if not isinstance(visitor_id,str) or not re.fullmatch(r'[0-9a-fA-F-]{36}',visitor_id):
+                return error(self,"invalid visitor id")
+            website_count=record_online_visitor(visitor_id)
+        except Exception:
+            return error(self,"invalid visitor id")
+        try:
+            url=CONFIG["paws_online_url"]
+            with urlopen(url,timeout=2) as response: game_count=max(0,int(json.loads(response.read()).get('online_count',0)))
+        except Exception:
+            game_count=0
+        return oidc_json(self,{"online_users":website_count+game_count})
 
     def games_list(self):
         """Public read-only list of studio games for the homepage."""
@@ -510,11 +737,59 @@ class Proxy(BaseHTTPRequestHandler):
 
     def game_status(self):
         try:
-            with urlopen(os.environ.get("PAWS_HEALTH_URL", "http://127.0.0.1:3003/api/health"), timeout=5) as response:
+            with urlopen(CONFIG["paws_health_url"], timeout=5) as response:
                 data=json.loads(response.read())
             return oidc_json(self, {"online": data.get("status") == "ok", "source": "paws-and-parcels", "health": data})
         except Exception as exc:
             return oidc_json(self, {"online": False, "source": "paws-and-parcels", "error": str(exc)}, 200)
+
+    def ticket_user(self):
+        cookies = {item.split('=', 1)[0]: item.split('=', 1)[1] for item in self.headers.get('Cookie', '').split('; ') if '=' in item}
+        with db() as conn:
+            with conn.cursor() as cur:
+                token=cookies.get('ashat_rust_sid')
+                if token:
+                    cur.execute("SELECT u.id,u.username,u.email,u.display_name,u.role,u.is_active,u.banned_at,s.csrf_hash FROM rust_sessions s JOIN users u ON u.id=s.user_id WHERE s.session_hash=? AND s.expires_at>CURRENT_TIMESTAMP LIMIT 1", (sha256(token.encode()).hexdigest(),))
+                    user=cur.fetchone()
+                    if user: return user
+                legacy=cookies.get('ashat_sid')
+                if legacy:
+                    cur.execute("SELECT u.id,u.username,u.email,u.display_name,u.role,u.is_active,u.banned_at,'' AS csrf_hash FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires_at>CURRENT_TIMESTAMP LIMIT 1", (legacy,))
+                    return cur.fetchone()
+        return None
+
+    def game_ticket(self):
+        try:
+            user=self.ticket_user()
+        except Exception:
+            return error(self,"ticket_unavailable",503)
+        if not user: return error(self,"authentication_required",401)
+        if not self.csrf_ok(user): return error(self,"csrf_failed",403)
+        if not user.get('is_active') or user.get('banned_at'): return error(self,"suspended",403)
+        try:
+            with db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT user_id FROM world_of_ra_entitlements WHERE user_id=?",(user['id'],))
+                    if not cur.fetchone(): return error(self,"alpha_not_granted",403)
+        except Exception:
+            return error(self,"ticket_unavailable",503)
+
+        if not allow_game_ticket(str(user['id'])): return error(self,"ticket_rate_limited",429)
+
+        mint_url=CONFIG["world_of_ra_mint_url"].rstrip('/')
+        mint_key=CONFIG["world_of_ra_mint_key"]
+        if not mint_url or not mint_key: return error(self,"mint_unavailable",503)
+        payload=json.dumps({"user_id":str(user['id']),"username":user['username']}).encode()
+        request=Request(mint_url, data=payload, headers={"Authorization":f"Bearer {mint_key}","Content-Type":"application/json"}, method="POST")
+        try:
+            with urlopen(request, timeout=8) as response:
+                minted=json.loads(response.read())
+            ticket=minted.get('ticket') if isinstance(minted,dict) else None
+            if not isinstance(ticket,str) or not re.fullmatch(r'[A-Za-z0-9_-]{43}',ticket):
+                return error(self,"mint_unavailable",503)
+            return oidc_json(self,{"ticket":ticket,"expires_in":300,"user":{"id":str(user['id']),"username":user['username']}})
+        except Exception:
+            return error(self,"mint_unavailable",503)
 
     def current_user(self):
         cookies = {item.split('=', 1)[0]: item.split('=', 1)[1] for item in self.headers.get('Cookie', '').split('; ') if '=' in item}
@@ -522,12 +797,12 @@ class Proxy(BaseHTTPRequestHandler):
             with conn.cursor() as cur:
                 token=cookies.get('ashat_rust_sid')
                 if token:
-                    cur.execute("SELECT u.id,u.username,u.email,u.display_name,u.role,u.diamonds,s.csrf_hash FROM rust_sessions s JOIN users u ON u.id=s.user_id WHERE s.session_hash=%s AND s.expires_at>UTC_TIMESTAMP() AND u.is_active=1 LIMIT 1", (sha256(token.encode()).hexdigest(),))
+                    cur.execute("SELECT u.id,u.username,u.email,u.display_name,u.role,u.diamonds,s.csrf_hash FROM rust_sessions s JOIN users u ON u.id=s.user_id WHERE s.session_hash=? AND s.expires_at>CURRENT_TIMESTAMP AND u.is_active=1 LIMIT 1", (sha256(token.encode()).hexdigest(),))
                     user=cur.fetchone()
                     if user: return user
                 legacy=cookies.get('ashat_sid')
                 if legacy:
-                    cur.execute("SELECT u.id,u.username,u.email,u.display_name,u.role,u.diamonds,'' AS csrf_hash FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=%s AND s.expires_at>UTC_TIMESTAMP() AND u.is_active=1 LIMIT 1", (legacy,))
+                    cur.execute("SELECT u.id,u.username,u.email,u.display_name,u.role,u.diamonds,'' AS csrf_hash FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires_at>CURRENT_TIMESTAMP AND u.is_active=1 LIMIT 1", (legacy,))
                     return cur.fetchone()
         return None
 
@@ -546,14 +821,15 @@ class Proxy(BaseHTTPRequestHandler):
             with db() as conn:
                 with conn.cursor() as cur:
                     if path == "/api/account/summary":
-                        cur.execute("SELECT COUNT(*) AS n FROM support_tickets WHERE user_id=%s", (user["id"],)); tickets=cur.fetchone()["n"]
-                        return oidc_json(self, {"user":self.safe_user(user),"stats":{"support_tickets":tickets}})
+                        cur.execute("SELECT COUNT(*) AS n FROM support_tickets WHERE user_id=?", (user["id"],)); tickets=cur.fetchone()["n"]
+                        cur.execute("SELECT acoins_balance FROM users WHERE id=?", (user["id"],)); balance=cur.fetchone()["acoins_balance"]
+                        return oidc_json(self, {"user":{**self.safe_user(user),"acoins_balance":balance},"stats":{"support_tickets":tickets}})
                     ticket_id=path.removeprefix('/api/support/').strip('/')
                     if ticket_id:
-                        cur.execute("SELECT id,user_id,subject,status,priority,category,message,created_at,updated_at FROM support_tickets WHERE id=%s AND user_id=%s",(ticket_id,user["id"])); ticket=cur.fetchone()
+                        cur.execute("SELECT id,user_id,subject,status,priority,category,message,created_at,updated_at FROM support_tickets WHERE id=? AND user_id=?",(ticket_id,user["id"])); ticket=cur.fetchone()
                         if not ticket: return error(self,"ticket not found",404)
-                        cur.execute("SELECT id,ticket_id,user_id,message,is_staff,created_at FROM support_ticket_replies WHERE ticket_id=%s ORDER BY created_at",(ticket_id,)); return oidc_json(self,{"ticket":ticket,"replies":cur.fetchall()})
-                    cur.execute("SELECT id,subject,status,priority,category,SUBSTRING(message,1,120) AS preview,created_at,updated_at FROM support_tickets WHERE user_id=%s ORDER BY updated_at DESC LIMIT 100",(user["id"],)); return oidc_json(self,{"tickets":cur.fetchall()})
+                        cur.execute("SELECT id,ticket_id,user_id,message,is_staff,created_at FROM support_ticket_replies WHERE ticket_id=? ORDER BY created_at",(ticket_id,)); return oidc_json(self,{"ticket":ticket,"replies":cur.fetchall()})
+                    cur.execute("SELECT id,subject,status,priority,category,SUBSTRING(message,1,120) AS preview,created_at,updated_at FROM support_tickets WHERE user_id=? ORDER BY updated_at DESC LIMIT 100",(user["id"],)); return oidc_json(self,{"tickets":cur.fetchall()})
         except Exception as exc: return error(self, f"member unavailable: {exc}",503)
 
     def member_post(self):
@@ -566,12 +842,12 @@ class Proxy(BaseHTTPRequestHandler):
                 with conn.cursor() as cur:
                     if path == "/api/support":
                         if not form.get("subject", "").strip() or not form.get("message", "").strip(): return error(self,"subject and message required")
-                        ticket_id=secrets.token_hex(16); cur.execute("INSERT INTO support_tickets (id,user_id,subject,status,priority,category,message) VALUES (%s,%s,%s,'open',%s,%s,%s)",(ticket_id,user["id"],form["subject"].strip(),form.get("priority","normal"),form.get("category","other"),form["message"].strip())); return oidc_json(self,{"id":ticket_id,"status":"open"},201)
+                        ticket_id=secrets.token_hex(16); cur.execute("INSERT INTO support_tickets (id,user_id,subject,status,priority,category,message) VALUES (?,?,?,'open',?,?,?)",(ticket_id,user["id"],form["subject"].strip(),form.get("priority","normal"),form.get("category","other"),form["message"].strip())); return oidc_json(self,{"id":ticket_id,"status":"open"},201)
                     ticket_id=path.removeprefix('/api/support/').removesuffix('/reply')
                     if not form.get("message", "").strip(): return error(self,"message required")
-                    cur.execute("SELECT id FROM support_tickets WHERE id=%s AND user_id=%s",(ticket_id,user["id"]))
+                    cur.execute("SELECT id FROM support_tickets WHERE id=? AND user_id=?",(ticket_id,user["id"]))
                     if not cur.fetchone(): return error(self,"ticket not found",404)
-                    reply_id=secrets.token_hex(16); cur.execute("INSERT INTO support_ticket_replies (id,ticket_id,user_id,message,is_staff) VALUES (%s,%s,%s,%s,0)",(reply_id,ticket_id,user["id"],form["message"].strip())); cur.execute("UPDATE support_tickets SET updated_at=UTC_TIMESTAMP() WHERE id=%s",(ticket_id,)); return oidc_json(self,{"ok":True,"id":reply_id})
+                    reply_id=secrets.token_hex(16); cur.execute("INSERT INTO support_ticket_replies (id,ticket_id,user_id,message,is_staff) VALUES (?,?,?,?,0)",(reply_id,ticket_id,user["id"],form["message"].strip())); cur.execute("UPDATE support_tickets SET updated_at=CURRENT_TIMESTAMP WHERE id=?",(ticket_id,)); return oidc_json(self,{"ok":True,"id":reply_id})
         except Exception as exc: return error(self, f"support unavailable: {exc}",503)
 
     def account_update(self):
@@ -583,9 +859,9 @@ class Proxy(BaseHTTPRequestHandler):
             if not username or not email or not display: return error(self,"username, email, and display_name are required")
             with db() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("SELECT id FROM users WHERE (username=%s OR email=%s) AND id<>%s LIMIT 1",(username,email,user["id"]))
+                    cur.execute("SELECT id FROM users WHERE (username=? OR email=?) AND id<>? LIMIT 1",(username,email,user["id"]))
                     if cur.fetchone(): return error(self,"username or email already in use",409)
-                    cur.execute("UPDATE users SET username=%s,email=%s,display_name=%s WHERE id=%s",(username,email,display,user["id"]))
+                    cur.execute("UPDATE users SET username=?,email=?,display_name=? WHERE id=?",(username,email,display,user["id"]))
             return oidc_json(self,{"user":{**self.safe_user(user),"username":username,"email":email,"display_name":display}})
         except Exception as exc: return error(self,f"account unavailable: {exc}",503)
 
@@ -599,8 +875,8 @@ class Proxy(BaseHTTPRequestHandler):
             with db() as conn:
                 with conn.cursor() as cur:
                     for table in ('support_ticket_replies','support_tickets','rust_sessions','sessions','email_verifications'):
-                        cur.execute(f"DELETE FROM {table} WHERE user_id=%s",(user['id'],))
-                    cur.execute("DELETE FROM users WHERE id=%s",(user['id'],))
+                        cur.execute(f"DELETE FROM {table} WHERE user_id=?",(user['id'],))
+                    cur.execute("DELETE FROM users WHERE id=?",(user['id'],))
             # Session cleanup: the DB rows are gone, but the browser still holds
             # ashat_rust_sid/ashat_csrf. Expire both cookies so the deleted
             # account's session is fully gone client-side too (and so a stale
@@ -621,7 +897,7 @@ class Proxy(BaseHTTPRequestHandler):
         try:
             if token:
                 with db() as conn:
-                    with conn.cursor() as cur: cur.execute("DELETE FROM rust_sessions WHERE session_hash=%s", (sha256(token.encode()).hexdigest(),))
+                    with conn.cursor() as cur: cur.execute("DELETE FROM rust_sessions WHERE session_hash=?", (sha256(token.encode()).hexdigest(),))
             self.send_response(200); self.send_header("Set-Cookie", "ashat_rust_sid=; Domain=agpstudios.org; Path=/; Max-Age=0; HttpOnly; SameSite=Lax; Secure"); self.send_header("Content-Length", "0"); self.end_headers()
         except Exception as exc: error(self, f"auth unavailable: {exc}", 503)
 
@@ -630,9 +906,9 @@ class Proxy(BaseHTTPRequestHandler):
             length=int(self.headers.get("Content-Length","0")); form=json.loads(self.rfile.read(length)); identifier=form.get("identifier", "").strip()
             with db() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("SELECT id,email,display_name,email_verified_at FROM users WHERE username=%s OR email=%s LIMIT 1",(identifier,identifier)); user=cur.fetchone()
+                    cur.execute("SELECT id,email,display_name,email_verified_at FROM users WHERE username=? OR email=? LIMIT 1",(identifier,identifier)); user=cur.fetchone()
                     if user and not user["email_verified_at"]:
-                        token=secrets.token_urlsafe(32); cur.execute("UPDATE email_verifications SET used=1 WHERE user_id=%s AND used=0",(user["id"],)); cur.execute("INSERT INTO email_verifications (id,user_id,token_hash,expires_at,used) VALUES (%s,%s,%s,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 24 HOUR),0)",(secrets.token_hex(16),user["id"],sha256(token.encode()).hexdigest()))
+                        token=secrets.token_urlsafe(32); cur.execute("UPDATE email_verifications SET used=1 WHERE user_id=? AND used=0",(user["id"],)); cur.execute("INSERT INTO email_verifications (id,user_id,token_hash,expires_at,used) VALUES (?,?,?,datetime('now','+24 hours'),0)",(secrets.token_hex(16),user["id"],sha256(token.encode()).hexdigest()))
                         link='https://www.agpstudios.org/api/auth/verify-email?token='+urlencode({'token':token})[6:]; message=f"From: support@agpstudios.org\nTo: {user['email']}\nSubject: Verify your AGP Studios email\n\nVerify your account: {link}\n"; subprocess.run(['/usr/sbin/sendmail','-f','support@agpstudios.org',user['email']],input=message.encode(),check=True)
             return oidc_json(self,{"sent":True},202)
         except Exception as exc: return error(self,f"verification unavailable: {exc}",503)
@@ -642,9 +918,9 @@ class Proxy(BaseHTTPRequestHandler):
         try:
             with db() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("SELECT user_id FROM email_verifications WHERE token_hash=%s AND used=0 AND expires_at>UTC_TIMESTAMP() LIMIT 1", (sha256(token.encode()).hexdigest(),)); row=cur.fetchone()
+                    cur.execute("SELECT user_id FROM email_verifications WHERE token_hash=? AND used=0 AND expires_at>CURRENT_TIMESTAMP LIMIT 1", (sha256(token.encode()).hexdigest(),)); row=cur.fetchone()
                     if not row: return error(self, "invalid or expired verification token")
-                    cur.execute("UPDATE users SET email_verified_at=UTC_TIMESTAMP() WHERE id=%s", (row["user_id"],)); cur.execute("UPDATE email_verifications SET used=1 WHERE token_hash=%s", (sha256(token.encode()).hexdigest(),))
+                    cur.execute("UPDATE users SET email_verified_at=CURRENT_TIMESTAMP WHERE id=?", (row["user_id"],)); cur.execute("UPDATE email_verifications SET used=1 WHERE token_hash=?", (sha256(token.encode()).hexdigest(),))
             return oidc_json(self, {"verified":True})
         except Exception as exc: return error(self, f"verification unavailable: {exc}",503)
 
@@ -654,10 +930,10 @@ class Proxy(BaseHTTPRequestHandler):
             if not (3 <= len(username) <= 30 and username.replace('_','').isalnum() and '@' in email and len(password) >= 8 and display): return oidc_json(self, {"error":"invalid_registration"},400)
             with db() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("SELECT COUNT(*) AS n FROM users WHERE username=%s OR email=%s", (username,email))
+                    cur.execute("SELECT COUNT(*) AS n FROM users WHERE username=? OR email=?", (username,email))
                     if cur.fetchone()["n"]: return oidc_json(self, {"error":"username_or_email_taken"},409)
                     user_id=secrets.token_hex(16); password_hash=crypt.crypt(password, crypt.mksalt(crypt.METHOD_BLOWFISH))
-                    cur.execute("INSERT INTO users (id,username,email,password_hash,display_name,role,is_active,email_verified_at) VALUES (%s,%s,%s,%s,%s,'Member',1,UTC_TIMESTAMP())",(user_id,username,email,password_hash,display))
+                    cur.execute("INSERT INTO users (id,username,email,password_hash,display_name,role,is_active,email_verified_at) VALUES (?,?,?,?,?,'Member',1,CURRENT_TIMESTAMP)",(user_id,username,email,password_hash,display))
             return oidc_json(self, {"registered":True,"verification_required":False,"user":{"id":user_id,"username":username,"email":email,"display_name":display,"role":"Member"}},201)
         except Exception as exc: return error(self, f"registration unavailable: {exc}",503)
 
@@ -699,7 +975,7 @@ class Proxy(BaseHTTPRequestHandler):
                     user_id = ""
             with db() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("INSERT INTO client_error_log (source,message,detail,path,count,occurrences,user_id,user_agent,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,UNIX_TIMESTAMP())",
+                    cur.execute("INSERT INTO client_error_log (source,message,detail,path,count,occurrences,user_id,user_agent,created_at) VALUES (?,?,?,?,?,?,?,?,CAST(strftime('%s','now') AS INTEGER))",
                                 (source, message[:400], detail, page_path, count, occurrences[:2000], user_id, self.headers.get("User-Agent", "")[:200]))
                     self.prune_client_errors(cur)
             print(f"[client-error] {source} x{count} {page_path or '/'}: {message[:200]}", flush=True)
@@ -714,10 +990,10 @@ class Proxy(BaseHTTPRequestHandler):
         if now - CLIENT_ERROR_PRUNED_AT < 3600:
             return
         CLIENT_ERROR_PRUNED_AT = now
-        cur.execute("DELETE FROM client_error_log WHERE created_at < UNIX_TIMESTAMP() - %s", (CLIENT_ERROR_RETENTION,))
+        cur.execute("DELETE FROM client_error_log WHERE created_at < CAST(strftime('%s','now') AS INTEGER) - ?", (CLIENT_ERROR_RETENTION,))
         # Triage rows for pruned reports have nothing left to describe. The mutes
         # table is deliberately untouched: a muted message stays muted.
-        cur.execute("DELETE t FROM client_error_triage t LEFT JOIN client_error_log e ON e.id=t.error_id WHERE e.id IS NULL")
+        cur.execute("DELETE FROM client_error_triage WHERE NOT EXISTS (SELECT 1 FROM client_error_log WHERE id=client_error_triage.error_id)")
 
     def auth_session(self):
         cookies = {item.split('=', 1)[0]: item.split('=', 1)[1] for item in self.headers.get('Cookie', '').split('; ') if '=' in item}
@@ -727,7 +1003,7 @@ class Proxy(BaseHTTPRequestHandler):
         try:
             with db() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("SELECT u.id,u.username,u.email,u.display_name,u.role,u.diamonds FROM rust_sessions s JOIN users u ON u.id=s.user_id WHERE s.session_hash=%s AND s.expires_at>UTC_TIMESTAMP() AND u.is_active=1 LIMIT 1", (sha256(token.encode()).hexdigest(),))
+                    cur.execute("SELECT u.id,u.username,u.email,u.display_name,u.role,u.diamonds FROM rust_sessions s JOIN users u ON u.id=s.user_id WHERE s.session_hash=? AND s.expires_at>CURRENT_TIMESTAMP AND u.is_active=1 LIMIT 1", (sha256(token.encode()).hexdigest(),))
                     user = cur.fetchone()
             return oidc_json(self, {"authenticated": bool(user), "user": user})
         except Exception as exc:
@@ -744,13 +1020,13 @@ class Proxy(BaseHTTPRequestHandler):
             identifier=form.get("identifier", "").strip(); password=form.get("password", "")
             with db() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("SELECT id,username,email,display_name,role,password_hash,is_active,email_verified_at FROM users WHERE username=%s OR email=%s LIMIT 1", (identifier, identifier))
+                    cur.execute("SELECT id,username,email,display_name,role,password_hash,is_active,email_verified_at FROM users WHERE username=? OR email=? LIMIT 1", (identifier, identifier))
                     user=cur.fetchone()
                     if not user or not user["is_active"] or crypt.crypt(password, user["password_hash"].replace("$2y$","$2b$")) != user["password_hash"].replace("$2y$","$2b$"):
                         return oidc_json(self, {"error":{"code":"invalid_credentials","message":"Invalid credentials"}}, 401)
                     LOGIN_ATTEMPTS.pop(client, None)
                     session=secrets.token_urlsafe(32); csrf=secrets.token_urlsafe(32); h=lambda x:sha256(x.encode()).hexdigest()
-                    cur.execute("INSERT INTO rust_sessions (session_hash,user_id,csrf_hash,created_at,last_seen,expires_at) VALUES (%s,%s,%s,UTC_TIMESTAMP(),UTC_TIMESTAMP(),DATE_ADD(UTC_TIMESTAMP(),INTERVAL 7200 SECOND))", (h(session),user["id"],h(csrf)))
+                    cur.execute("INSERT INTO rust_sessions (session_hash,user_id,csrf_hash,created_at,last_seen,expires_at) VALUES (?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,datetime('now','+7200 seconds'))", (h(session),user["id"],h(csrf)))
             public={k:user[k] for k in ("id","username","email","display_name","role")}
             body=json.dumps({"user":public}).encode(); self.send_response(200); self.send_header("Content-Type","application/json"); self.send_header("Set-Cookie",f"ashat_rust_sid={session}; Domain=agpstudios.org; Path=/; HttpOnly; SameSite=Lax; Secure"); self.send_header("Set-Cookie",f"ashat_csrf={csrf}; Domain=agpstudios.org; Path=/; SameSite=Lax; Secure"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body)
         except Exception as exc:
@@ -805,11 +1081,11 @@ class Proxy(BaseHTTPRequestHandler):
             try:
                 with db() as conn:
                     with conn.cursor() as cur:
-                        cur.execute("SELECT id,username,email,role,password_hash FROM users WHERE (username=%s OR email=%s) AND is_active=1 LIMIT 1", (form.get("username",""),form.get("username","")))
+                        cur.execute("SELECT id,username,email,role,password_hash FROM users WHERE (username=? OR email=?) AND is_active=1 LIMIT 1", (form.get("username",""),form.get("username","")))
                         user=cur.fetchone()
                         if not user or not crypt.crypt(form.get("password",""), user["password_hash"].replace("$2y$","$2b$")) == user["password_hash"].replace("$2y$","$2b$"): return error(self,"invalid credentials")
                         session=secrets.token_urlsafe(32); csrf=secrets.token_urlsafe(32); h=lambda x:sha256(x.encode()).hexdigest()
-                        cur.execute("INSERT INTO rust_sessions (session_hash,user_id,csrf_hash,ip,user_agent,created_at,last_seen,expires_at) VALUES (%s,%s,%s,'oidc-authorize','oidc-authorize',UTC_TIMESTAMP(),UTC_TIMESTAMP(),DATE_ADD(UTC_TIMESTAMP(),INTERVAL 7200 SECOND))",(h(session),user["id"],h(csrf)))
+                        cur.execute("INSERT INTO rust_sessions (session_hash,user_id,csrf_hash,ip,user_agent,created_at,last_seen,expires_at) VALUES (?,?,?,'oidc-authorize','oidc-authorize',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,datetime('now','+7200 seconds'))",(h(session),user["id"],h(csrf)))
                 entry={"client_id":form["client_id"],"redirect_uri":form["redirect_uri"],"code_challenge":form.get("code_challenge",""),"user_id":user["id"],"username":user["username"],"email":user["email"],"role":user["role"],"expires":time.time()+600}
                 code=secrets.token_urlsafe(32); CODES[code]=entry
                 target=entry["redirect_uri"]+('&' if '?' in entry["redirect_uri"] else '?')+urlencode({"code":code,"state":form["state"]})
@@ -831,4 +1107,6 @@ class Proxy(BaseHTTPRequestHandler):
 
     def log_message(self, format, *args): print(f"{self.address_string()} - {format % args}",flush=True)
 
-if __name__ == "__main__": ThreadingHTTPServer(("127.0.0.1",int(os.environ.get("PORT","3110"))),Proxy).serve_forever()
+if __name__ == "__main__":
+    with db() as conn: conn.execute("PRAGMA journal_mode=WAL")
+    ThreadingHTTPServer(("127.0.0.1", int(CONFIG["port"])), Proxy).serve_forever()

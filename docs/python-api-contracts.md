@@ -1,13 +1,14 @@
 # Ashat Hub Python API contracts
 
 These are the retained public contracts for the Vite portal and Paws & Parcels.
-The Python service is the public API at `/api/*`; Rust is not part of the contract.
+The Python service owns the public `/api/*` contract.
 
 ## Public endpoints
 
 | Method | Path | Success | Purpose |
 |---|---|---:|---|
 | GET | `/api/game-status` | 200 | Paws health projection: `online`, `source`, `health` |
+| POST | `/api/online-presence` | 200 | Public browser heartbeat with `{visitor_id}`; returns `{online_users}` from recent website visitors plus live Paws players |
 | GET | `/api/games` | 200/503 | Public homepage games list: `{games: [{slug, title, summary, status, tags, url, poster, featured}]}` sorted by `sort_order` |
 | GET | `/api/news` | 200/503 | Public homepage studio news: `{news: [{id, title, summary, url, published_at}]}` newest first |
 | GET | `/api/auth/session` | 200 | `{authenticated: boolean, user?: User}` |
@@ -17,6 +18,9 @@ The Python service is the public API at `/api/*`; Rust is not part of the contra
 | GET | `/api/auth/verify-email?token=...` | 200 | Verifies a single-use email token |
 | POST | `/api/auth/verify-email/resend` | 202 | JSON `{identifier}`; sends a fresh verification mail |
 | POST | `/api/telemetry/client-error` | 202 | Unauthenticated browser error report for after-the-fact review; shape and limits documented below |
+| POST | `/api/game/ticket` | 200/401/403/429/503 | CSRF-protected World of Ra one-time ticket; requires alpha entitlement |
+| POST | `/api/acoins/order` | 201/400/401/403/503 | Creates a PayPal order for one fixed ACoins package; returns an approval URL |
+| POST | `/api/acoins/capture` | 200/401/403/404/409/503 | Captures the signed-in user's PayPal order and credits ACoins once after verified capture |
 | POST | `/api/auth/password-reset/request` | 200/400 | JSON `{identifier}`; requests a password-reset email without revealing account existence |
 | GET | `/api/auth/github` | 302 | Starts GitHub OAuth sign-in/link flow |
 | GET | `/api/auth/me` | 200/401 | Alias of session for authenticated callers |
@@ -38,6 +42,7 @@ The Python service is the public API at `/api/*`; Rust is not part of the contra
 | POST | `/api/admin/client-errors/status` | 200 | JSON `{id, status: 'new'|'resolved'}`; row-level triage |
 | POST | `/api/admin/client-errors/mute` | 200 | JSON `{id, muted: bool}`; message-level mute |
 | POST | `/api/admin/users/role` | 200 | JSON `{user_id, role}`; see request-body reference below |
+| POST | `/api/admin/world-of-ra/grant` | 200 | JSON `{user_id}`; grants World of Ra alpha entitlement |
 | POST | `/api/admin/users/ban` | 200 | JSON `{user_id, banned: bool}`; see request-body reference below |
 | POST | `/api/admin/users/status` | 200 | JSON `{user_id, status}`; see request-body reference below |
 | GET | `/api/admin/summary` | 200 | Admin overview counts |
@@ -46,8 +51,9 @@ The Python service is the public API at `/api/*`; Rust is not part of the contra
 | GET | `/api/admin/database/status` | 200 | Database/Paws health plus the schema-migration summary |
 | POST | `/api/admin/database/migrations/apply` | 200 | Run pending migrations (or baseline existing ones) |
 | GET | `/api/admin/settings` | 200 | Runtime API settings |
+| GET | `/api/admin/payments/settings` | 200 | PayPal ACoins settings; never returns the client secret |
+| POST | `/api/admin/payments/settings` | 200 | Save PayPal email, Client ID, encrypted Client Secret, and sandbox/live mode |
 | GET | `/api/admin/repo-status` | 200 | Live/repository commit comparison |
-| GET | `/api/admin/alpha/status` | 200 | Alpha Qwen Coder and Vision model health |
 | GET | `/api/admin/games` | 200 | Admin game list incl. poster URLs |
 | PUT | `/api/admin/games/:slug` | 200 | Update game poster URL without a migration; see shape reference below |
 | POST | `/api/admin/github/push` | 200 | Pushes committed changes to GitHub main |
@@ -69,6 +75,21 @@ applied" and simply re-fetch the user list. Different endpoints and different
 
 The two client-error triage endpoints share that guard, keyed by `id` instead of
 `user_id` — so two different reports triaged in quick succession do not collide.
+
+### World of Ra ticket
+
+`POST /api/game/ticket` requires the signed-in session cookie and `X-CSRF-Token`.
+Email verification is disabled: signup still requires and stores an email address,
+but ticket eligibility does not require email confirmation. Eligibility errors are
+checked in order: `suspended`, then `alpha_not_granted`. Eligible accounts may
+request at most 10 tickets per five minutes. A successful ticket lasts 300 seconds. The API sends `{user_id, username}`
+to `world_of_ra_mint_url` from `config.json`, using the configured
+`world_of_ra_mint_key` as the Bearer token; the mint service
+must return `{ticket}` with a 43-character URL-safe token. Missing configuration,
+network errors, or invalid mint responses return `503 mint_unavailable`.
+
+`POST /api/admin/world-of-ra/grant` takes `{user_id}` and records the admin grant
+in `world_of_ra_entitlements`; it is session-, role-, and CSRF-protected.
 
 #### POST `/api/admin/users/role`
 
@@ -111,16 +132,27 @@ object keyed by what the API actually tracks:
 
 ```json
 {
-  "user": { "id", "username", "email", "display_name", "role", "diamonds" },
+  "user": { "id", "username", "email", "display_name", "role", "diamonds", "acoins_balance" },
   "stats": { "support_tickets": 0 }
 }
 ```
 
-`stats.support_tickets` counts the member's support tickets. Fields the frontend
+`user.acoins_balance` is the AGP-wide ACoins account balance. `stats.support_tickets` counts the member's support tickets. Fields the frontend
 previously assumed here — `projects`, `deployments`, `conversation_messages` —
 are **not** part of this response; consuming them crashes on `undefined`.
 
-#### PUT `/api/account`
+#### ACoins PayPal purchases
+
+`POST /api/acoins/order` and `/api/acoins/capture` require an authenticated session and
+CSRF token. Only the fixed USD packages `{acoins: 1000}`, `{acoins: 5000}`, and
+`{acoins: 10000}` are accepted. Credentials are stored encrypted with `payment_encryption_key` from the ignored
+root `config.json`; generate a Fernet key with
+`python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'`
+and keep the config file private. Capture
+amount, currency, PayPal order identity, and completion status are checked server-side
+before the account balance is credited. The Admin CP never returns the saved secret.
+
+### PUT `/api/account`
 
 Requires an authenticated session and the CSRF header. Body must contain all three
 required fields — omitted/blank fields return 400 `username, email, and display_name
@@ -192,17 +224,17 @@ in `services/python-api/migrate.py`; this endpoint only reports and applies.)
 ```json
 {
   "database": "healthy",
-  "version": "8.0.36",
+  "version": "3.x",
   "paws": { "status": "ok" },
   "migrations": {
     "tracked": true,
     "tracking_table": "schema_migrations",
-    "current_revision": "0004_user_moderation_history.sql",
+    "current_revision": "0001_initial_sqlite.sql",
     "applied": [
-      { "filename": "0001_diamonds.sql", "applied_at": 1700000000, "statements": 1, "applied_by": "admin:boss" }
+      { "filename": "0001_initial_sqlite.sql", "applied_at": 1700000000, "statements": 31, "applied_by": "admin:boss" }
     ],
-    "pending": [{ "filename": "0005_next.sql", "statements": 3 }],
-    "drifted": ["0002_homepage_content.sql"],
+    "pending": [{ "filename": "0002_next.sql", "statements": 3 }],
+    "drifted": ["0001_initial_sqlite.sql"],
     "missing": ["0099_removed.sql"]
   }
 }
@@ -227,7 +259,7 @@ Requires an admin session and the CSRF header.
 
 - Default (`baseline` omitted/false): executes every **pending** migration in
   filename order and records each one only after all of its statements succeed.
-  Returns `{"ok": true, "baseline": false, "applied": ["0005_next.sql"]}`;
+  Returns `{"ok": true, "baseline": false, "applied": ["0002_next.sql"]}`;
   `applied` is empty when nothing was pending (safe to call repeatedly).
 - `{"baseline": true}`: records pending **and** drifted files as applied
   **without executing them** — for a database migrated by hand, so its history is
@@ -235,18 +267,16 @@ Requires an admin session and the CSRF header.
   host when you have shell access.
 - Audit events: `admin.migrations.applied` / `admin.migrations.baselined`,
   `target_type='migrations'`, `detail={baseline, files}`.
-- DDL runs in the API process, so a migration that fails partway leaves the
-  statements before the failure applied and the file unrecorded (MySQL commits
-  DDL implicitly). Fix the file and call again; 503 `migration unavailable: …`
-  carries the driver message.
+- DDL runs in a SQLite transaction. A migration that fails is rolled back and
+  left unrecorded. Fix the file and call again; 503 `migration unavailable: …`
+  carries the SQLite error.
 - This is the convenience path. Deployments should still gate on
   `services/python-api/migrate.py --check`.
 
 #### GET `/api/admin/users/:id/moderation`
 
 Requires an admin session (403 otherwise). Returns the user's moderation
-timeline, newest first, from the `user_moderation_history` table (migration
-0004):
+timeline, newest first, from the `user_moderation_history` table.
 
 ```json
 {
@@ -376,7 +406,7 @@ triage state, so a client never has to derive it:
 seconds, and `user_id` is empty for signed-out visitors. `triage_status` is
 `new`, `resolved`, or `muted`; **a message mute outranks the row's own state**,
 which is why a resolved row whose message is muted reports `muted`.
-`message_hash` is `SHA2(message, 256)` — it identifies the message, not the row.
+`message_hash` is the lower-hex SHA-256 of the message — it identifies the message, not the row.
 This is client-reported log data: it may repeat, and it must never be treated as
 fact or joined against users. The admin CP renders it in the System tab's
 **Client errors** panel.
@@ -387,7 +417,7 @@ fact or joined against users. The admin CP renders it in the System tab's
 { "id": 12, "status": "resolved" | "new" }
 ```
 
-Row-level triage (migration 0006). `resolved` records the judgement for that one
+Row-level triage. `resolved` records the judgement for that one
 report; `new` removes it, reopening the report. Any other value returns 400
 `invalid status`, a non-numeric `id` returns 400 `invalid client error id`, and an
 id with no log row returns 404 `client error not found`. Audit event:
@@ -403,7 +433,7 @@ moderation-history entry is written).
 Message-level mute. The row only identifies **which message** to mute — the mute
 then covers every report of that message, including ones already logged and ones
 arriving later, until it is unmuted. `muted` defaults to `true`, mirroring
-`/api/admin/users/ban`. Mutes key on `SHA2(message, 256)` and are applied when the
+`/api/admin/users/ban`. Mutes key on the lower-hex SHA-256 of the message and are applied when the
 list is read, so they also survive the log's 30-day retention pass; the mutes
 table is deliberately never pruned. Audit event: `client_error.message.muted` /
 `client_error.message.unmuted`.
@@ -443,8 +473,8 @@ Issuer: `https://www.agpstudios.org/api/oauth`
 - `GET /userinfo`
 
 The authorization flow is `code` + PKCE `S256`. ID tokens use RS256. The signing
-key is loaded from `ASHAT_OIDC_PRIVATE_KEY_FILE`; private material is not stored
-in the repository. Authorization codes are single-use and expire after 10 minutes.
+key path is set by `oidc_private_key_file` in the ignored `config.json`; private
+material is not stored in the repository. Authorization codes are single-use and expire after 10 minutes.
 
 ## User shape
 

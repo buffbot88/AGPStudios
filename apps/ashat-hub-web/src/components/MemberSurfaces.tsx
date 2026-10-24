@@ -5,7 +5,7 @@ import { confirmModal, toast } from './toast';
 import { maybeCrash } from './devCrash';
 import { UnexpectedDataNotice, UnexpectedDataPanel } from './UnexpectedDataNotice';
 
-type User = { id: string; username: string; email: string; display_name: string; tag_name?: string | null; discord_tag?: string | null; location?: string | null; interests?: string | null; role: string };
+type User = { id: string; username: string; email: string; display_name: string; tag_name?: string | null; discord_tag?: string | null; location?: string | null; interests?: string | null; role: string; acoins_balance?: number };
 export type MemberTab = 'support' | 'account';
 
 type Project = { id: string; name: string };
@@ -141,7 +141,7 @@ export function MemberSurfaces({ user, initialTab = 'support' }: { user: User | 
 
       {tab === 'support' && <div className="member-panel support-layout">{!user ? <div className="tool-empty"><p>Sign in to create and view support tickets.</p></div> : <><div className="support-sidebar"><div className="member-toolbar"><span className="eyebrow">Your tickets</span><button type="button" className="secondary-button" onClick={() => setSelectedTicket(null)}>New</button></div>{tickets.map((ticket) => <button type="button" className={selectedTicket?.ticket.id === ticket.id ? 'ticket-row selected' : 'ticket-row'} key={safeText(ticket.id)} onClick={() => void showTicket(safeText(ticket.id))}><strong>{safeText(ticket.subject)}</strong><small>{safeText(ticket.status)} · {safeText(ticket.priority)}</small></button>)}{!tickets.length && <p className="muted">No tickets yet.</p>}</div><div className="support-detail">{selectedTicket ? <><button type="button" className="back-button" onClick={() => setSelectedTicket(null)}>← New ticket</button><span className="eyebrow">{safeText(selectedTicket.ticket.status)} · {safeText(selectedTicket.ticket.priority)}</span><h3>{safeText(selectedTicket.ticket.subject)}</h3><p className="ticket-message">{safeText(selectedTicket.ticket.message)}</p><div className="ticket-replies">{safeList<TicketReply>(selectedTicket.replies).map((item) => <article className={item.is_staff ? 'ticket-reply staff' : 'ticket-reply'} key={safeText(item.id)}><small>{safeText(item.display_name) || safeText(item.username) || 'Member'} · {safeTime(item.created_at)}</small><p>{safeText(item.message)}</p></article>)}</div><form className="member-form" onSubmit={(event) => void sendReply(event)}><textarea value={reply} onChange={(event) => setReply(event.target.value)} placeholder="Reply to this ticket" rows={3} required /><button type="submit" disabled={busy}>Reply</button></form></> : <form className="member-form" onSubmit={(event) => void createTicket(event)}><span className="eyebrow">New support ticket</span><input value={supportSubject} onChange={(event) => setSupportSubject(event.target.value)} placeholder="Subject" required /><div className="form-row"><select value={supportCategory} onChange={(event) => setSupportCategory(event.target.value)}><option value="bug">Bug</option><option value="feature">Feature</option><option value="account">Account</option><option value="billing">Billing</option><option value="other">Other</option></select><select value={supportPriority} onChange={(event) => setSupportPriority(event.target.value)}><option value="low">Low</option><option value="normal">Normal</option><option value="high">High</option><option value="urgent">Urgent</option></select></div><textarea value={supportMessage} onChange={(event) => setSupportMessage(event.target.value)} placeholder="Describe the issue or request" rows={7} required /><button type="submit" disabled={busy}>Create ticket</button></form>}</div></>}</div>}
 
-      {tab === 'account' && <div className="member-panel account-grid">{!user ? <div className="tool-empty"><p>Sign in to view your account.</p></div> : !accountLoaded ? <div className="tool-empty"><p>Loading account...</p></div> : !account?.user ? <UnexpectedDataPanel what="Your account details" reason={error ?? undefined} onRetry={() => { setAccountLoaded(false); void loadAccount(); }} /> : <><AccountForm user={account.user} githubLinked={!!account.github_linked} onSaved={(next) => setAccount({ ...account, user: next })} onGithubChange={(linked) => setAccount({ ...account, github_linked: linked })} onDeleted={() => window.location.reload()} /><div className="account-stats"><Metric label="Support tickets" value={safeNumber(account.stats?.support_tickets)} /></div></>}</div>}
+      {tab === 'account' && <div className="member-panel account-grid">{!user ? <div className="tool-empty"><p>Sign in to view your account.</p></div> : !accountLoaded ? <div className="tool-empty"><p>Loading account...</p></div> : !account?.user ? <UnexpectedDataPanel what="Your account details" reason={error ?? undefined} onRetry={() => { setAccountLoaded(false); void loadAccount(); }} /> : <><AccountForm user={account.user} githubLinked={!!account.github_linked} onSaved={(next) => setAccount({ ...account, user: next })} onGithubChange={(linked) => setAccount({ ...account, github_linked: linked })} onDeleted={() => window.location.reload()} /><div className="account-stats"><Metric label="Support tickets" value={safeNumber(account.stats?.support_tickets)} /><AcoinsPanel balance={safeNumber(account.user.acoins_balance)} onBalanceChange={(balance) => setAccount({ ...account, user: { ...account.user, acoins_balance: balance } })} /></div></>}</div>}
 
 
     </section>
@@ -201,6 +201,56 @@ function AccountForm({ user, githubLinked, onSaved, onGithubChange, onDeleted }:
   return <form className="member-form account-form" onSubmit={(event) => void save(event)}><span className="eyebrow">Account details</span><div className="form-row"><input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} placeholder="Username" required /><input value={form.tag_name} onChange={(e) => setForm({ ...form, tag_name: e.target.value })} placeholder="Display name" required /></div><input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="Email" type="email" required /><button type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save account'}</button><div className="account-danger"><strong>GitHub connection</strong><span>{githubLinked ? 'GitHub account linked.' : 'No GitHub account linked.'}</span>{githubLinked
               ? <button type="button" className="secondary-button" onClick={() => void unlinkGithub()} disabled={busy} title="Unlinking is not available on the API yet">Unlink GitHub</button>
               : <a className="secondary-button" href={`${API}/auth/github`}>Link GitHub account</a>}</div><button type="button" className="delete-account-button" onClick={() => void deleteAccount()} disabled={busy}>Delete account and all data</button>{message && <small className="auth-success">{message}</small>}{error && <small className="auth-error">{error}</small>}</form>;
+}
+
+function AcoinsPanel({ balance, onBalanceChange }: { balance: number; onBalanceChange: (balance: number) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+  const [pendingOrder, setPendingOrder] = useState('');
+  const packages = [[1000, 1], [5000, 5], [10000, 10]] as const;
+
+  async function capture(orderId: string) {
+    setBusy(true);
+    try {
+      const result = await request<{ balance: number; credited: number }>(`${API}/acoins/capture`, {
+        method: 'POST', body: JSON.stringify({ order_id: orderId }),
+      });
+      onBalanceChange(result.balance);
+      setPendingOrder('');
+      setMessage(`${safeNumber(result.credited).toLocaleString()} ACoins added.`);
+      const url = new URL(window.location.href);
+      url.search = '';
+      window.history.replaceState({}, '', `${url.pathname}${url.hash}`);
+    } catch (reason) {
+      setMessage(reason instanceof Error ? reason.message : 'Payment confirmation failed. Retry below.');
+    } finally { setBusy(false); }
+  }
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('acoins') === 'return' && params.get('token')) {
+      setPendingOrder(params.get('token')!);
+      void capture(params.get('token')!);
+    } else if (params.get('acoins') === 'cancel') {
+      setMessage('Payment canceled. No ACoins were added.');
+      window.history.replaceState({}, '', `${window.location.pathname}${window.location.hash}`);
+    }
+  }, []);
+
+  async function buy(acoins: number) {
+    setBusy(true); setMessage('');
+    try {
+      const order = await request<{ approval_url: string }>(`${API}/acoins/order`, {
+        method: 'POST', body: JSON.stringify({ acoins }),
+      });
+      window.location.assign(order.approval_url);
+    } catch (reason) {
+      setMessage(reason instanceof Error ? reason.message : 'PayPal checkout unavailable');
+      setBusy(false);
+    }
+  }
+
+  return <section className="acoins-panel" aria-labelledby="acoins-title"><div><span className="eyebrow">AGP Coins</span><h3 id="acoins-title">ACoins balance</h3><strong className="acoins-balance">{safeNumber(balance).toLocaleString()}</strong></div><div className="acoins-packages">{packages.map(([coins, dollars]) => <button key={coins} type="button" disabled={busy} onClick={() => void buy(coins)}>Buy {coins.toLocaleString()} · ${dollars}</button>)}</div>{message && <p role="status">{message}</p>}{pendingOrder && <button type="button" className="secondary-button" disabled={busy} onClick={() => void capture(pendingOrder)}>Retry payment confirmation</button>}</section>;
 }
 
 function Metric({ label, value }: { label: string; value: number | undefined }) {

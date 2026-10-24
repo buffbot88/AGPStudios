@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { FormEvent } from 'react';
 import { API, clearShapeDrifts, request, safeList, safeNumber, safeText, safeTime } from './api';
 import { confirmModal, confirmToast, toast } from './toast';
 import { maybeCrash } from './devCrash';
@@ -19,8 +20,6 @@ type MigrationSummary = {
   drifted: string[]; missing: string[]; error?: string;
 };
 type DatabaseStatus = { database: string; version: string; paws?: { status?: string }; migrations?: MigrationSummary };
-type AdminTelemetry = { servers: { id: string; label: string; online: boolean; active_requests: number; requests_last_5m: number; generation_tokens_per_second: number; prompt_tokens_per_second: number; total_completion_tokens: number; queue_depth: number; queue_limit: number }[]; updated_at: number };
-type AlphaModel = { id: string; label: string; online: boolean; ready: boolean; workers?: number; max_workers: number };
 type AdminGame = { slug: string; title: string; summary: string; status: string; tags: string[]; url: string; poster: string; featured: boolean; sort_order?: number };
 type ClientErrorStatus = 'new' | 'resolved' | 'muted';
 type ClientError = {
@@ -35,7 +34,7 @@ const CLIENT_ERROR_FILTERS: { id: ClientErrorStatus | 'all'; label: string }[] =
   { id: 'muted', label: 'Muted' },
   { id: 'all', label: 'All' },
 ];
-type AdminTab = 'overview' | 'users' | 'games' | 'telemetry' | 'system';
+type AdminTab = 'overview' | 'users' | 'games' | 'payments' | 'system';
 type RepoPair = { live: string; repo: string; state: string };
 type RepoStatus = { ashathub: RepoPair };
 type ModerationEvent = { id: number; user_id: string; action: string; actor_id: string; actor_name: string; detail: string; created_at: number };
@@ -74,13 +73,11 @@ function deployDot(status: string): { dot: string; cls: string } {
 export function AdminSurface({ user }: { user: User | null }) {
   const [tab, setTab] = useState<AdminTab>(() => {
     const value = window.location.hash.slice(1) as AdminTab;
-    return ['overview', 'users', 'telemetry', 'system'].includes(value) ? value : 'overview';
+    return ['overview', 'users', 'games', 'payments', 'system'].includes(value) ? value : 'overview';
   });
   const [summary, setSummary] = useState<AdminSummary | null>(null);
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [database, setDatabase] = useState<DatabaseStatus | null>(null);
-  const [telemetry, setTelemetry] = useState<AdminTelemetry | null>(null);
-  const [alphaModels, setAlphaModels] = useState<AlphaModel[]>([]);
   const [settings, setSettings] = useState<Record<string, string | boolean> | null>(null);
   const [repoStatus, setRepoStatus] = useState<RepoStatus | null>(null);
   const [games, setGames] = useState<AdminGame[]>([]);
@@ -204,10 +201,6 @@ export function AdminSurface({ user }: { user: User | null }) {
   }, [query, user]);
 
   useEffect(() => { void load(); }, [load]);
-  const loadTelemetry = useCallback(async () => { try { setTelemetry(await request<AdminTelemetry>(`${API}/admin/alpha/status`)); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Alpha status unavailable'); } }, []);
-  const loadAlphaModels = useCallback(async () => { try { const data = await request<{ servers: AlphaModel[] }>(`${API}/admin/alpha/status`); setAlphaModels(safeList<AlphaModel>(data.servers)); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Alpha status unavailable'); } }, []);
-  useEffect(() => { if (tab === 'telemetry') { void loadTelemetry(); void loadAlphaModels(); } }, [tab, loadTelemetry, loadAlphaModels]);
-  async function telemetryAction() { setBusy(true); setError(null); try { await loadTelemetry(); await loadAlphaModels(); toast('Alpha status refreshed.', 'success'); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Alpha status refresh failed'); } finally { setBusy(false); } }
   async function pushGithub() { if (!(await confirmToast({ message: 'Push committed Ashat Hub changes to GitHub main?', confirmLabel: 'Push' }))) return; setBusy(true); setError(null); try { await request(`${API}/admin/github/push`, { method: 'POST' }); toast('Changes pushed to GitHub.', 'success'); } catch (reason) { setError(reason instanceof Error ? reason.message : 'GitHub push failed'); } finally { setBusy(false); } }
   async function applyMigrations(baseline: boolean) {
     if (!(await confirmToast({
@@ -309,7 +302,7 @@ export function AdminSurface({ user }: { user: User | null }) {
     { id: 'overview', label: 'Overview' },
     { id: 'users', label: 'Users' },
     { id: 'games', label: 'Games' },
-    { id: 'telemetry', label: 'Alpha' },
+    { id: 'payments', label: 'Payments' },
     { id: 'system', label: 'System' },
   ];
 
@@ -331,18 +324,46 @@ export function AdminSurface({ user }: { user: User | null }) {
       {tab === 'overview' && <OverviewTab summary={summary} onNavigate={setTab} />}
       {tab === 'users' && <UsersTab users={users} query={query} onQueryChange={setQuery} onSearch={load} onSelectUser={selectUser} selectedUser={selectedUser} busy={busy} currentUser={user} onUpdateUser={updateUser} onBanUser={banUser} onDeleteUser={deleteUser} moderation={moderation} moderationError={moderationError} onRefreshModeration={() => selectedUser && void loadModeration(selectedUser.id)} />}
       {tab === 'games' && <GamesTab games={games} busy={busy} onUpdatePoster={updateGamePoster} />}
-      {tab === 'telemetry' && <TelemetryTab telemetry={telemetry} servers={alphaModels} busy={busy} onAction={telemetryAction} />}
+      {tab === 'payments' && <PaymentsTab />}
       {tab === 'system' && <SystemTab loaded={loaded} database={database} settings={settings} onPush={pushGithub} onUpdate={systemUpdate} status={repoStatus} busy={busy} onApplyMigrations={applyMigrations} clientErrors={clientErrors} clientErrorsError={clientErrorsError} clientErrorsBusy={clientErrorsBusy} clientErrorsFilter={clientErrorsFilter} onFilterClientErrors={setClientErrorsFilter} onRefreshClientErrors={loadClientErrors} onTriageClientError={triageClientError} onMuteClientErrorMessage={muteClientErrorMessage} />}
     </section>
   );
 }
 
-function TelemetryTab({ telemetry, servers, busy, onAction }: { telemetry: AdminTelemetry | null; servers: AlphaModel[]; busy: boolean; onAction: () => void }) {
-  return <div className="adm-telemetry-page">
-    <section className="adm-update-card"><div className="adm-update-card-copy"><span className="eyebrow">Alpha Inference</span><h3>Qwen + Vision</h3><p>Alpha hosts Qwen for coding and the Vision model for image understanding.</p><div className="adm-agent-flow"><span>Qwen · coding</span><b>→</b><span>Vision · image understanding</span></div></div></section>
-    <div className="adm-toolbar adm-telemetry-toolbar"><button type="button" className="secondary-button" onClick={onAction} disabled={busy}>Refresh Alpha status</button><span className="refresh-state">{telemetry ? `Updated ${safeTime(telemetry.updated_at * 1000).split(', ').pop() ?? ''}` : 'Loading…'}</span></div>
-    <div className="admin-telemetry-grid">{safeList<AlphaModel>(servers).map((server) => <div className={`admin-server ${server.online ? 'online' : 'offline'}`} key={safeText(server.id)}><div className="admin-server-heading"><strong>{safeText(server.label)}</strong><span className="admin-server-status">{server.online ? '● Online' : '○ Offline'}</span></div><small>{server.ready ? 'Ready' : 'Not ready'} · {safeNumber(server.workers)}/{safeNumber(server.max_workers)} workers</small><small>Managed locally by Alpha</small></div>)}</div>
-  </div>;
+type PaymentSettings = { paypal_email: string; paypal_client_id: string; client_secret_configured: boolean; environment: 'sandbox' | 'live'; encryption_key_configured: boolean };
+
+function PaymentsTab() {
+  const [settings, setSettings] = useState<PaymentSettings | null>(null);
+  const [secret, setSecret] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+
+  async function loadSettings() {
+    try {
+      const data = await request<PaymentSettings>(`${API}/admin/payments/settings`);
+      setSettings({ ...data, paypal_email: data.paypal_email || 'buffbot88@gmail.com' });
+      setError('');
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Payment settings unavailable'); }
+  }
+  useEffect(() => { void loadSettings(); }, []);
+
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    if (!settings) return;
+    setBusy(true); setError(''); setMessage('');
+    try {
+      await request(`${API}/admin/payments/settings`, {
+        method: 'POST',
+        body: JSON.stringify({ ...settings, paypal_client_secret: secret }),
+      });
+      setSecret(''); setMessage('PayPal settings saved.'); await loadSettings();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Unable to save payment settings'); }
+    finally { setBusy(false); }
+  }
+
+  if (!settings) return <section className="adm-panel"><p>{error || 'Loading payment settings…'}</p></section>;
+  return <section className="adm-panel adm-payments"><span className="eyebrow">ACoins checkout</span><h3>PayPal settings</h3><p>Choose Sandbox while testing. Live purchases credit ACoins only after PayPal confirms capture.</p>{!settings.encryption_key_configured && <p className="workspace-error">Set payment_encryption_key in the API's config.json before saving the client secret.</p>}<form className="adm-payment-form" onSubmit={(event) => void save(event)}><label>PayPal merchant email<input type="email" required value={settings.paypal_email} onChange={(event) => setSettings({ ...settings, paypal_email: event.target.value })} /></label><label>PayPal app Client ID<input required value={settings.paypal_client_id} onChange={(event) => setSettings({ ...settings, paypal_client_id: event.target.value })} /></label><label>PayPal app Secret<input type="password" autoComplete="new-password" required={!settings.client_secret_configured} placeholder={settings.client_secret_configured ? 'Saved — leave blank to keep current secret' : 'Enter app secret'} value={secret} onChange={(event) => setSecret(event.target.value)} /></label><label>Environment<select value={settings.environment} onChange={(event) => setSettings({ ...settings, environment: event.target.value as 'sandbox' | 'live' })}><option value="sandbox">Sandbox</option><option value="live">Live</option></select></label><button type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save PayPal settings'}</button></form>{message && <p role="status">{message}</p>}{error && <p className="workspace-error" role="alert">{error}</p>}</section>;
 }
 
 // ── Games Tab ──
@@ -410,7 +431,6 @@ function OverviewTab({ summary, onNavigate }: { summary: AdminSummary | null; on
       </div>
       <div className="adm-overview-actions">
         <button type="button" className="adm-action-card" onClick={() => onNavigate('users')}><span className="adm-action-icon">♙</span><span><strong>Manage Users</strong><small>Accounts, roles, and access</small></span><b>→</b></button>
-        <button type="button" className="adm-action-card" onClick={() => onNavigate('telemetry')}><span className="adm-action-icon">⌁</span><span><strong>Alpha</strong><small>Qwen and Vision status</small></span><b>→</b></button>
         <button type="button" className="adm-action-card" onClick={() => onNavigate('system')}><span className="adm-action-icon">⚙</span><span><strong>System Health</strong><small>Database and configuration</small></span><b>→</b></button>
       </div>
 
@@ -729,7 +749,7 @@ function SystemTab({ loaded, database, settings, onPush, onUpdate, status, busy,
         </section>
         <section className="adm-panel">
           <span className="eyebrow">Application Runtime</span>
-          <h3>Services</h3><div className="adm-field"><span className="adm-field-label">Backend</span><span className="adm-field-value">Rust · <b className="system-status-ok">● Running</b></span></div><div className="adm-field"><span className="adm-field-label">Frontend</span><span className="adm-field-value">Vite · <b className="system-status-ok">● Available</b></span></div><span className="eyebrow">Security & Configuration</span>
+          <h3>Services</h3><div className="adm-field"><span className="adm-field-label">Backend</span><span className="adm-field-value">Python · <b className="system-status-ok">● Running</b></span></div><div className="adm-field"><span className="adm-field-label">Frontend</span><span className="adm-field-value">Vite · <b className="system-status-ok">● Available</b></span></div><span className="eyebrow">Security & Configuration</span>
           <div className={`adm-system-updates adm-repo-${safeText(status?.ashathub?.state) || 'unknown'}`}><span className="adm-field-label">System Updates</span><div className="adm-commit-comparison"><div><span>Live commit</span><code>{safeText(status?.ashathub?.live).slice(0, 8) || '—'}</code></div><div><span>Repo commit</span><code>{safeText(status?.ashathub?.repo).slice(0, 8) || '—'}</code></div></div><div className="adm-system-update-actions"><button type="button" className="secondary-button" onClick={onPush}>Push Changes to GitHub</button><button type="button" className="secondary-button" onClick={onUpdate}>Pull, Build & Restart</button></div></div>
           {settings && Object.entries(settings)
             .filter(([key]) => key !== 'backend') // internal value, not a user-facing setting

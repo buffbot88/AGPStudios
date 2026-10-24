@@ -189,6 +189,8 @@ def run():
     check(code == 200, "/api/account/summary returns 200", str(code))
     stats = (body or {}).get("stats")
     check(isinstance(stats, dict), "/api/account/summary: stats is an object", repr(stats))
+    check(is_num((body or {}).get("user", {}).get("acoins_balance")),
+          "/api/account/summary: includes numeric ACoins balance", repr((body or {}).get("user")))
     # THE regression: frontend reads stats.support_tickets; conversation_messages crashed the app
     check(isinstance(stats, dict) and is_num(stats.get("support_tickets")),
           "/api/account/summary: stats.support_tickets is a number (the conversation_messages regression)", repr(stats))
@@ -297,6 +299,18 @@ def run():
 
     code, body = admin.req("/api/admin/settings")
     check(code == 200 and isinstance(body, dict), "/api/admin/settings: 200 object", str(code))
+
+    code, body = admin.req("/api/admin/payments/settings")
+    check(code == 200 and (body or {}).get("client_secret_configured") is False,
+          "payment settings never return the client secret", f"{code} {repr(body)[:120]}")
+    code, body = admin.req("/api/admin/payments/settings", "POST", {
+        "paypal_email": "merchant@example.test", "paypal_client_id": "mock-id",
+        "paypal_client_secret": "mock-secret", "environment": "sandbox",
+    }, admin_csrf)
+    check(code == 200, "admin can save PayPal settings", str(code))
+    _, body = admin.req("/api/admin/payments/settings")
+    check((body or {}).get("client_secret_configured") is True and "paypal_client_secret" not in (body or {}),
+          "saved client secret is redacted from settings reads", repr(body)[:160])
 
     # role change (AdminSurface updateUser)
     if target:

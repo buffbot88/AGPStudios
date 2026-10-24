@@ -27,13 +27,9 @@ server. See `apps/ashat-hub-web/vite.config.ts`.
 This repository does **not** contain an AI inference runtime, model host, or
 agent gateway.
 
-Components that used to live here as active runtime code — including the Rust
-Alpha gateway, Omega inference supervisor, Galileo app shell, and related
-crates — were removed from the workspace. Any remaining AI-related integration
-is an external dependency or interface, not an in-repo runtime.
-
-If you are looking for an AI platform, agent runtime, or model hosting surface,
-this is not it.
+AI inference, model hosting, and agent runtimes are not part of this portal. Any
+AI services deployed separately are external dependencies, not components of this
+repository.
 
 ## Ports
 
@@ -46,5 +42,5 @@ The public API contract is documented in `docs/python-api-contracts.md`.
 
 ## What was removed
 
-See `docs/retired-components.md` for the list of subsystems that used to live in
-this repo and where archival material is kept.
+The retired Rust runtime is kept in Git history only; it is not built or deployed
+from this checkout.

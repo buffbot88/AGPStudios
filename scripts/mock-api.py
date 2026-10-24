@@ -4,7 +4,7 @@
 A documented dev utility, NOT a reference implementation. It implements the
 endpoints from docs/python-api-contracts.md that the portal consumes:
 
-  auth/session, register (with optional email verification), login, logout,
+  auth/session, register (email verification disabled by default), login, logout,
   verify-email (+resend), account summary / PUT / DELETE, support tickets +
   replies, games, news, and the admin surface (summary, users incl. role /
   status / ban / delete, settings, database status, repo-status, telemetry,
@@ -13,8 +13,8 @@ endpoints from docs/python-api-contracts.md that the portal consumes:
 Behavior notes:
 - In-memory state only; everything is lost on restart. Pre-seeded admin:
   username `boss`, password `admin-pass-1`.
-- Verification codes are printed to stdout so tests can complete the verify
-  flow; run with --no-verification to activate accounts immediately.
+- Email verification is off by default; `--verification-required` enables it
+  for tests that exercise the verification flow.
 - Listens on 127.0.0.1:3110 by default (override with `PORT`); request shapes
   mirror services/python-api/proxy.py, including its quirks (POST
   /admin/users/ban accepts `{user_id, banned}`; /admin/users/status takes
@@ -28,7 +28,7 @@ Behavior notes:
   pending verification tokens — the portal has no token-entry screen, so that is
   how a test completes the emailed link. `POST /__reset` restores seed data,
   clears sessions, and returns controls to how the process was started, so
-  `--no-verification` and `--hostile` survive it; `{"verification_required":
+  `--verification-required` and `--hostile` survive it; `{"verification_required":
   false}` may be included in the reset body.
 
 Run via `npm run mock-api` (alone) or `npm run dev:mock` (alongside vite) from
@@ -41,6 +41,7 @@ import os
 import secrets
 import sys
 import time
+import uuid
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -48,12 +49,12 @@ from urllib.parse import parse_qs, urlparse
 # Dev-only controls. /__config and /__reset intentionally require no auth:
 # this server binds to loopback and is never used as a production API.
 # Controls the process was started with. `/__reset` restores these rather than
-# the bare defaults, so a flag like --no-verification or --hostile survives a
+# the bare defaults, so a flag like --verification-required or --hostile survives a
 # reset instead of silently switching the mock back to normal behavior.
 STARTUP_CONTROLS = {}
 
 DEFAULT_CONTROLS = {
-    "verification_required": True,
+    "verification_required": False,
     "hostile": [],
     "latency_ms": 0,
     "error_status": 0,
@@ -72,6 +73,8 @@ USERS = {
 SESSIONS = {}          # session token -> user id
 CSRF = {}              # session token -> csrf token
 VERIFICATIONS = {}     # username -> verification code
+ONLINE_VISITORS = {}   # visitor id -> last heartbeat
+PAYMENT_SETTINGS = {"paypal_email": "", "paypal_client_id": "", "client_secret_configured": False, "environment": "sandbox", "encryption_key_configured": True}
 TICKETS = []           # list of ticket dicts
 GAMES = {"games": [
     {"slug": "paws-and-parcels", "title": "Paws & Parcels",
@@ -106,19 +109,14 @@ MOCK_JWKS = {
 
 INITIAL_USERS = copy.deepcopy(USERS)
 INITIAL_TICKETS = copy.deepcopy(TICKETS)
-MODERATION = []  # user_moderation_history mirror (migration 0004)
-CLIENT_ERRORS = []  # client_error_log mirror (migration 0005)
+MODERATION = []  # user_moderation_history mirror
+CLIENT_ERRORS = []  # client_error_log mirror
 CLIENT_ERROR_TRIAGE = {}  # client_error_log.id -> {status, triaged_at, triaged_by} (0006)
 CLIENT_ERROR_MUTES = {}   # message hash -> {message, muted_at, muted_by} (0006)
 
 
 def message_hash(text):
-    """SHA2(message, 256) as the API computes it: lower-hex of the UTF-8 bytes.
-
-    Keep in step with the real API — it mutes by SHA2(message,256) in MySQL, so
-    a hash computed differently here would make the mock and the API disagree
-    about which reports a mute covers.
-    """
+    """Lower-hex SHA-256 of UTF-8 bytes, matching the API's SQLite function."""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 # Mirrors proxy.py's public telemetry limits so the 429/413 paths are testable.
@@ -181,7 +179,8 @@ def reset_state():
     SESSIONS.clear()
     CSRF.clear()
     VERIFICATIONS.clear()
-
+    ONLINE_VISITORS.clear()
+    PAYMENT_SETTINGS.update({"paypal_email": "", "paypal_client_id": "", "client_secret_configured": False, "environment": "sandbox", "encryption_key_configured": True})
 
 def path_matches(path, configured):
     """Match an injected-error path exactly or as a path prefix."""
@@ -203,7 +202,8 @@ def cookies(handler):
 
 
 def public(user):
-    return {k: user[k] for k in ("id", "username", "email", "display_name", "role")}
+    return {**{k: user[k] for k in ("id", "username", "email", "display_name", "role")},
+            "acoins_balance": user.get("acoins_balance", 0)}
 
 
 # ---------------------------------------------------------------------------
@@ -517,7 +517,7 @@ class Handler(BaseHTTPRequestHandler):
                                    muted_by=(mute or {}).get("muted_by", "")))
             return self.reply(200, {"errors": listed[:50], "page": 1, "page_size": 50, "status": status})
         if path in ("/api/admin/summary", "/api/admin/users", "/api/admin/settings",
-                    "/api/admin/database/status", "/api/admin/repo-status",
+                    "/api/admin/payments/settings", "/api/admin/database/status", "/api/admin/repo-status",
                     "/api/admin/telemetry", "/api/admin/omega/servers"):
             user, failure = self.require_admin()
             if failure:
@@ -538,6 +538,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/admin/settings":
                 return self.reply(200, {"email_verification_enabled": CONFIG["verification_required"],
                                         "secure_cookie": False, "backend": "python"})
+            if path == "/api/admin/payments/settings":
+                return self.reply(200, dict(PAYMENT_SETTINGS))
             if path == "/api/admin/database/status":
                 return self.reply(200, {"database": "healthy", "version": "mock-8.0",
                                         "paws": {"status": "ok"}, "migrations": self.migrations_summary()})
@@ -585,6 +587,39 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/api/") and self.maybe_inject_fault(path):
             return
         form = self.body_json()
+
+        if path == "/api/admin/payments/settings":
+            user, failure = self.require_admin()
+            if failure:
+                return self.reply(*failure)
+            if not isinstance(form, dict) or form.get("environment") not in ("sandbox", "live"):
+                return self.reply(*err("invalid payment settings", 400))
+            PAYMENT_SETTINGS.update({
+                "paypal_email": str(form.get("paypal_email", "")),
+                "paypal_client_id": str(form.get("paypal_client_id", "")),
+                "client_secret_configured": bool(form.get("paypal_client_secret")) or PAYMENT_SETTINGS["client_secret_configured"],
+                "environment": form["environment"],
+            })
+            return self.reply(200, {"ok": True})
+
+        if path in ("/api/acoins/order", "/api/acoins/capture"):
+            _, user, failure = self.require_auth()
+            if failure:
+                return self.reply(*failure)
+            return self.reply(*err("PayPal is unavailable in the mock API", 503))
+
+        if path == "/api/online-presence":
+            visitor_id = form.get("visitor_id") if isinstance(form, dict) else None
+            try:
+                visitor_id = str(uuid.UUID(visitor_id))
+            except (ValueError, TypeError, AttributeError):
+                return self.reply(*err("invalid visitor id", 400))
+            now = time.time()
+            for key, seen in list(ONLINE_VISITORS.items()):
+                if now - seen >= 90:
+                    ONLINE_VISITORS.pop(key, None)
+            ONLINE_VISITORS[visitor_id] = now
+            return self.reply(200, {"online_users": len(ONLINE_VISITORS)})
 
         if path == "/api/telemetry/client-error":
             if int(self.headers.get("Content-Length", "0") or 0) > CLIENT_ERROR_MAX_BODY:
@@ -969,7 +1004,7 @@ def hostile_selection(argv):
 
 
 if __name__ == "__main__":
-    required_verification = "--no-verification" not in sys.argv
+    required_verification = "--verification-required" in sys.argv
     hostile = hostile_selection(sys.argv)
     unknown = [item for item in hostile if item not in HOSTILE_SHAPES]
     if unknown:

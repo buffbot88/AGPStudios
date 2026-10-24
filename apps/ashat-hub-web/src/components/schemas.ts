@@ -17,7 +17,7 @@ import {
 const user = obj<{
   id: string; username: string; email: string; display_name: string; role: string;
   tag_name?: string | null; discord_tag?: string | null; location?: string | null;
-  interests?: string | null;
+  interests?: string | null; acoins_balance?: number;
 }>({
   id: str,
   username: str,
@@ -28,6 +28,7 @@ const user = obj<{
   discord_tag: optional(nullable(str), null),
   location: optional(nullable(str), null),
   interests: optional(nullable(str), null),
+  acoins_balance: optional(numish, 0),
 });
 
 const gameStatus = lit('live', 'in-development', 'coming-soon');
@@ -141,6 +142,10 @@ const clientError = obj<{
 
 /** Endpoints whose whole response shape is known. Keyed by path after `/api`. */
 const byPath: Record<string, Schema<unknown>> = {
+  '/online-presence': obj<{ online_users: number }>({ online_users: numish }),
+  '/admin/payments/settings': obj<{ paypal_email: string; paypal_client_id: string; client_secret_configured: boolean; environment: string; encryption_key_configured: boolean }>({ paypal_email: str, paypal_client_id: str, client_secret_configured: bool, environment: str, encryption_key_configured: bool }),
+  '/acoins/order': obj<{ approval_url: string; order_id: string; acoins: number; amount_cents: number }>({ approval_url: str, order_id: str, acoins: numish, amount_cents: numish }),
+  '/acoins/capture': obj<{ balance: number; credited: number }>({ balance: numish, credited: numish }),
   '/games': obj<{ games: unknown[] }>({ games: list(game) }),
   '/news': obj<{ news: unknown[] }>({
     news: list(obj<{ id: string; title: string; summary: string; url: string; published_at: number }>({
@@ -161,6 +166,11 @@ const byPath: Record<string, Schema<unknown>> = {
     stats: obj<{ support_tickets: number }>({ support_tickets: numish }),
   }),
   '/support': obj<{ tickets: unknown[] }>({ tickets: list(ticketSummary) }),
+  '/game/ticket': obj<{ ticket: string; expires_in: number; user: { id: string; username: string } }>({
+    ticket: str,
+    expires_in: num,
+    user: obj<{ id: string; username: string }>({ id: str, username: str }),
+  }),
   '/admin/summary': obj<{
     users: number; active_users: number; disabled_users: number;
     open_tickets: number; active_projects: number; active_deploys: number;

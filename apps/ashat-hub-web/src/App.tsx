@@ -10,6 +10,7 @@ import { SectionHeader } from './components/home/primitives';
 import { SiteFooter } from './components/home/SiteFooter';
 import { MemberSurfaces } from './components/MemberSurfaces';
 import { AdminSurface } from './components/AdminSurface';
+import { WorldOfRaHandoff } from './components/WorldOfRaHandoff';
 import { SurfaceErrorBoundary } from './components/SurfaceErrorBoundary';
 import { AuthPanel } from './components/AuthPanel';
 import { getSession, onSessionChange, onSessionExpired, peekSession, setSessionUser } from './components/session';
@@ -54,14 +55,15 @@ function AccountIcon() {
   );
 }
 
-type Route = 'home' | 'account' | 'support' | 'admin';
+type Route = 'home' | 'account' | 'support' | 'admin' | 'world-of-ra';
 
 function routeFromHash(): Route {
   // AdminSurface deep-links tabs as /admin#users etc.; the path, not just the
   // hash, must keep the admin route across a reload.
-  if (window.location.pathname.replace(/\/+$/, '').endsWith('/admin')) {
-    return 'admin';
-  }
+  const path = window.location.pathname.replace(/\/+$/, '');
+  if (['return', 'cancel'].includes(new URLSearchParams(window.location.search).get('acoins') || '')) return 'account';
+  if (path.endsWith('/admin')) return 'admin';
+  if (path === '/play/world-of-ra') return 'world-of-ra';
   switch (window.location.hash) {
     case '#account':
       return 'account';
@@ -167,6 +169,7 @@ function App() {
             <AdminSurface user={user} />
           </SurfaceErrorBoundary>
         )}
+        {route === 'world-of-ra' && <WorldOfRaHandoff signedIn={!!user} />}
         {route === 'account' &&
           (user ? (
             <SurfaceErrorBoundary fallbackTitle="Your account couldn't load">

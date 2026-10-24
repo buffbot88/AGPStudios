@@ -344,7 +344,7 @@ def phase2():
     assert drift and drift["path"] == "/" and drift["count"] == 2, \
         ("shape-drift source round-trips", drift)
 
-    # -- triage (migration 0006): row resolve + message-level mute ----------
+    # -- triage: row resolve + message-level mute ----------------------------
     error_id = first["id"]
 
     code, body = admin.req("/api/admin/client-errors?status=resolved")

@@ -52,7 +52,7 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: `npm run dev:mock -- --no-verification${HOSTILE} --port ${PORT} --mock-port ${MOCK_PORT}`,
+    command: `npm run dev:mock -- --port ${PORT} --mock-port ${MOCK_PORT}${HOSTILE}`,
     url: `http://localhost:${PORT}`,
     reuseExistingServer: false,
     timeout: 120_000,

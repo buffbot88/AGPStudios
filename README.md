@@ -5,14 +5,12 @@ AGP Studios is the web portal and Python API project for AGP Studios.
 ## What this repo is
 
 - `apps/ashat-hub-web/` — Vite + React portal. Public site, member area, and admin UI.
-- `services/python-api/` — Python API service. Serves the public `/api/*` surface: auth,
-  OIDC, account, support, and admin endpoints. SQL migrations for its MySQL schema
+- `services/python-api/` — Python API service and SQLite persistence for the public
+  `/api/*` surface: auth, OIDC, account, support, and admin endpoints. SQL migrations
   live in `services/python-api/migrations/` and are applied by the tracked runner
-  (`python3 migrate.py`), which records each file in a `schema_migrations` table so
-  it runs exactly once, in filename order.
+  (`python3 migrate.py`), which records each file in `schema_migrations`.
 - `docs/system-architecture.md` — what the active system is and its request boundary.
 - `docs/python-api-contracts.md` — the public API contract source of truth.
-- `docs/retired-components.md` — what was removed and where archival material lives.
 - `docs/provider-credentials.md` — provider credential handling rules.
 - `docs/security-remediation-ledger.md` — security remediation status.
 
@@ -29,24 +27,24 @@ gateway.
 
 ```bash
 cd apps/ashat-hub-web && npm install && npm run build
-cd services/python-api && python3 proxy.py
+cd services/python-api && python3 migrate.py && python3 proxy.py
 ```
 
 ### Frontend with the mock API
 
 `scripts/mock-api.py` is a documented dev utility: an in-memory stand-in for the
 Python API implementing the endpoints the portal consumes (session, register with
-optional email verification, login, logout, account, support, games, news, and the
-admin surface). It exists so the frontend can be developed and E2E-tested without
-MySQL, an OIDC key, or the production service. Verification codes are printed to
-stdout. It is a test double only — not a reference implementation, and never
-pointed at production.
+login, logout, account, support, games, news, and the admin surface). Email
+verification is disabled by default to match production; it can be enabled for
+focused tests. The mock exists so the frontend can be developed and E2E-tested
+without a database, an OIDC key, or the production service. It is a test double only —
+not a reference implementation, and never pointed at production.
 
 ```bash
 cd apps/ashat-hub-web
 npm run dev:mock        # mock API (127.0.0.1:3110) + vite (localhost:3101) together
 npm run mock-api        # mock API only, if you're running vite yourself
-npm run dev:mock -- --no-verification   # register activates immediately (E2E style)
+npm run dev:mock -- --verification-required   # opt in to test verification
 ```
 
 `npm run dev:mock` starts both processes and tears both down on Ctrl+C, including
@@ -71,8 +69,7 @@ When the real
 `/api/*` to `127.0.0.1:3110` either way.
 
 The mock's other CLI switch is `--hostile[=keys]`, which serves deliberately
-wrong-shape payloads (see **Drift resilience** below). Both it and
-`--no-verification` are remembered as startup controls, so `POST /__reset`
+wrong-shape payloads (see **Drift resilience** below). Both switches are remembered as startup controls, so `POST /__reset`
 returns the server to how it was launched rather than to bare defaults.
 
 ### Frontend contract tests
@@ -130,8 +127,8 @@ notice instead of a blank, and the shell stays usable throughout.
 ```bash
 cd apps/ashat-hub-web
 E2E_HOSTILE=1 npx playwright test drift-resilience          # the hostile pass
-npm run dev:mock -- --no-verification --hostile             # or poke at it by hand
-npm run dev:mock -- --no-verification --hostile=games,news  # only some endpoints
+npm run dev:mock -- --hostile             # or poke at it by hand
+npm run dev:mock -- --hostile=games,news  # only some endpoints
 ```
 
 The spec expects the full default set; a subset (`--hostile=games,news`, or
@@ -159,9 +156,8 @@ hostile pass is its own command; CI runs both (see **Continuous integration**).
   suite, then the hostile pass in the same job, uploading traces on failure.
   Both jobs install their own dependencies; nothing is shared between them.
 
-`api-ci.yml` remains separate because it needs a MySQL 8 service: it applies
-every migration twice (parse + idempotency), runs the migration-runner unit
-tests, and checks the migration files are well formed.
+`api-ci.yml` runs SQLite schema/persistence checks, migration-runner tests, and
+checks that the migration files are well formed.
 
 ### Error reporting
 
@@ -213,7 +209,7 @@ while **Mute this message** covers every report of the same message — the rows
 already logged *and* every burst that arrives later, until it is unmuted. That
 distinction is the reason muting is message-level: one row is one reported burst,
 so muting a row would do nothing about the next one. Mutes key on
-`SHA2(message, 256)` and are applied when the list is read, so they also survive
+`SHA-256(message)` and are applied when the list is read, so they also survive
 the 30-day retention pass (the mutes table is never pruned). The panel's
 **New / Resolved / Muted / All** chips are that filter, the filter defaults to
 New, and both writes are audited (`client_error.status.updated`,
@@ -247,8 +243,15 @@ python3 migrate.py              # apply everything pending
 python3 migrate.py --check      # exit 1 if anything is pending (deploy gate)
 ```
 
-The connection string comes from `ASHAT_DATABASE_URL`
-(`mysql://user:pass@host:3306/database`) — the same variable `proxy.py` uses.
+Runtime settings come from the repository-root `config.json`:
+
+```bash
+cp config.example.json config.json
+chmod 600 config.json
+```
+
+Set private values there; `database_path` defaults to `storage/ashathub.sqlite3`.
+The API, migration runner, and importer read this same ignored file.
 
 **A database migrated by hand before this runner existed** can be baselined once, so
 its files are recorded as applied instead of executed:
@@ -257,41 +260,41 @@ its files are recorded as applied instead of executed:
 python3 migrate.py --baseline   # record current files as applied WITHOUT running them
 ```
 
-Every migration file is written to be idempotent, so baselining is a convenience —
-not a requirement — but a recorded file is never executed twice.
+Migrations are applied once per recorded filename. Baseline only when the SQLite
+schema has already been applied manually and matches the current migration.
 
 Editing an applied migration changes its checksum. The runner reports that as
 **drift** and leaves it alone; converge with `python3 migrate.py --reapply-drifted`.
-A migration that fails partway is left unrecorded (MySQL commits DDL implicitly),
-so fix the file and re-run it.
+Each migration runs in a SQLite transaction, so a failed migration is rolled back
+and left unrecorded; fix the file and re-run it.
 
 Unit tests for the runner need no database — `python3 services/python-api/test_migrate.py`.
 
-Idempotency itself is checked in CI by `services/python-api/test_migrations_mysql.py`,
-which applies every file twice against a throwaway MySQL 8 service and asserts the
-second run succeeds without duplicating rows or columns. Run it locally the same way
-(needs `pymysql` and `ASHAT_DATABASE_URL` pointing at a disposable database):
+SQLite schema and API flows are checked by
+`test_migrations_sqlite.py`, `test_api_sqlite.py`, and `test_import_mysql.py`.
+
+#### Importing the existing MySQL data
+
+The API no longer connects to MySQL. Put the MySQL connection URL in the ignored
+`mysql_source_url` field in `config.json`, back up MySQL, and put the portal in maintenance
+(stop API writes). Run the one-time importer with PyMySQL temporarily installed:
 
 ```bash
 python3 -m pip install pymysql
-ASHAT_DATABASE_URL=mysql://root:root@127.0.0.1:3306/ashat_migrations_test \
-  python3 services/python-api/test_migrations_mysql.py
+python3 services/python-api/import_mysql.py --sqlite-path /secure/path/ashathub.sqlite3
 ```
 
-It exits 0 with a `SKIP:` notice when `ASHAT_DATABASE_URL` is unset. With the variable
-set it is strict: a missing driver or a database whose name doesn't contain `test` is an
-error, because the check applies every migration and its seed rows to whatever the URL
-points at (`ASHAT_ALLOW_ANY_DATABASE=1` overrides the name guard).
+The importer reads a consistent MySQL snapshot, writes a new file, refuses to overwrite
+an existing destination, and stops if it finds unknown tables or columns. It reports known legacy tables outside this API schema that it leaves in MySQL. Review row counts and the foreign-key check,
+then set `database_path` in `config.json` before restarting the API. Keep MySQL available for other consumers and retain the backup until SQLite is verified.
 
-Production services and environment configuration are runtime-managed. Credentials, service
-environment files, logs, databases, `node_modules/`, and generated runtime data must not be
-committed.
+Credentials, `config.json`, logs, databases, `node_modules/`, and generated runtime data
+must not be committed.
 
-## Archive
+## Retired runtime
 
-Historical Rust implementation material is under `archive/retired-rust/`. That material is
-archived record only — not active, not built, and not authoritative. See `archive/README.md`
-and `docs/retired-components.md`.
+The Rust runtime and its local config are not part of the current portal. The old source
+remains recoverable through Git history; the current runtime is Python + React/Vite/TypeScript.
 
 ## Storage boundary
 

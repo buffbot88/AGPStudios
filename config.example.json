@@ -1,0 +1,12 @@
+{
+  "database_path": "storage/ashathub.sqlite3",
+  "mysql_source_url": "",
+  "oidc_issuer": "https://www.agpstudios.org/api/oauth",
+  "oidc_private_key_file": "",
+  "payment_encryption_key": "",
+  "paws_health_url": "http://127.0.0.1:3003/api/health",
+  "paws_online_url": "http://127.0.0.1:3003/api/online-count",
+  "world_of_ra_mint_url": "",
+  "world_of_ra_mint_key": "",
+  "port": 3110
+}

@@ -13,6 +13,7 @@ function Wordmark() {
 
 export function SiteHeader({ user, onUserChange }: { user: User | null; onUserChange: (user: User | null) => void }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [onlineUsers, setOnlineUsers] = useState<number | null>(null);
   const [active, setActive] = useState<string>(() => window.location.hash || '#top');
 
   useEffect(() => {
@@ -22,6 +23,35 @@ export function SiteHeader({ user, onUserChange }: { user: User | null; onUserCh
     };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+
+  useEffect(() => {
+    let visitorId: string = crypto.randomUUID();
+    try {
+      visitorId = localStorage.getItem('agp-presence-id') || visitorId;
+      localStorage.setItem('agp-presence-id', visitorId);
+    } catch {
+      // Storage can be unavailable in private browsing; this tab still counts.
+    }
+    let mounted = true;
+    const heartbeat = async () => {
+      try {
+        const response = await fetch('/api/online-presence', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ visitor_id: visitorId }),
+        });
+        const result = await response.json() as { online_users?: unknown };
+        if (mounted && response.ok && typeof result.online_users === 'number') {
+          setOnlineUsers(result.online_users);
+        }
+      } catch {
+        // Leave the last known count visible during a brief network outage.
+      }
+    };
+    void heartbeat();
+    const timer = window.setInterval(() => void heartbeat(), 30_000);
+    return () => { mounted = false; window.clearInterval(timer); };
   }, []);
 
   const isAdmin = user?.role?.toLowerCase() === 'admin';
@@ -64,6 +94,10 @@ export function SiteHeader({ user, onUserChange }: { user: User | null; onUserCh
           >
             Play <span aria-hidden>→</span>
           </a>
+          <span className="online-count" role="status" aria-label={onlineUsers === null ? 'Online user count loading' : `${onlineUsers} people online`}>
+            <span className="online-dot" aria-hidden="true" />
+            <span>{onlineUsers ?? '—'}<span className="online-label"> online</span></span>
+          </span>
           <button
             type="button"
             className="menu-toggle"

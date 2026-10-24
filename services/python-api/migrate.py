@@ -6,26 +6,29 @@ Usage and failure semantics are in the README under "Database migrations".
 from __future__ import annotations
 
 import argparse
+import getpass
 import hashlib
-import os
+import socket
+import sqlite3
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Iterator, Sequence
-from urllib.parse import urlparse
-
+from typing import Iterable, Sequence
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 TRACKING_TABLE = "schema_migrations"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from config import CONFIG
+from database import connect as sqlite_connect
 
 CREATE_TRACKING_TABLE = f"""
 CREATE TABLE IF NOT EXISTS {TRACKING_TABLE} (
-  filename VARCHAR(255) NOT NULL PRIMARY KEY,
-  checksum CHAR(64) NOT NULL,
-  statements INT NOT NULL DEFAULT 0,
-  applied_at BIGINT UNSIGNED NOT NULL,
-  applied_by VARCHAR(120) NOT NULL DEFAULT ''
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  filename TEXT NOT NULL PRIMARY KEY,
+  checksum TEXT NOT NULL,
+  statements INTEGER NOT NULL DEFAULT 0,
+  applied_at INTEGER NOT NULL,
+  applied_by TEXT NOT NULL DEFAULT ''
+)
 """
 
 
@@ -170,33 +173,9 @@ def plan(migrations: Sequence[Migration], applied: dict[str, str], reapply_drift
 # Database access
 # --------------------------------------------------------------------------
 
-class ConfigurationError(RuntimeError):
-    """Bad connection string or missing driver."""
-
-
-def connect(database_url: str):
-    """Open a MySQL connection; pymysql is imported lazily so the helpers above need no driver."""
-    url = urlparse(database_url)
-    if not url.hostname or not url.path or url.scheme not in ("mysql", "mysql+pymysql"):
-        raise ConfigurationError(
-            "ASHAT_DATABASE_URL must look like mysql://user:pass@host:3306/database "
-            f"(got {database_url!r})"
-        )
-    try:
-        import pymysql
-        from pymysql.cursors import DictCursor
-    except ModuleNotFoundError as error:
-        raise ConfigurationError("pymysql is required to run migrations (pip install pymysql)") from error
-
-    return pymysql.connect(
-        host=url.hostname,
-        port=url.port or 3306,
-        user=url.username,
-        password=url.password,
-        database=url.path.lstrip("/"),
-        cursorclass=DictCursor,
-        autocommit=True,
-    )
+def connect(database_path: str = ""):
+    """Open the local SQLite database without a network driver."""
+    return sqlite_connect(database_path or None)
 
 
 def ensure_tracking_table(cursor) -> None:
@@ -211,9 +190,9 @@ def load_applied(cursor) -> dict[str, str]:
 def record(cursor, migration: Migration, applied_by: str) -> None:
     cursor.execute(
         f"INSERT INTO {TRACKING_TABLE} (filename, checksum, statements, applied_at, applied_by) "
-        "VALUES (%s, %s, %s, %s, %s) "
-        "ON DUPLICATE KEY UPDATE checksum=VALUES(checksum), statements=VALUES(statements), "
-        "applied_at=VALUES(applied_at), applied_by=VALUES(applied_by)",
+        "VALUES (?, ?, ?, ?, ?) ON CONFLICT(filename) DO UPDATE SET "
+        "checksum=excluded.checksum, statements=excluded.statements, "
+        "applied_at=excluded.applied_at, applied_by=excluded.applied_by",
         (migration.name, migration.checksum, len(migration.statements), int(time.time()), applied_by),
     )
 
@@ -221,15 +200,21 @@ def record(cursor, migration: Migration, applied_by: str) -> None:
 def apply_migration(connection, migration: Migration, applied_by: str) -> int:
     """Execute a migration's statements, recording it only after all of them succeed."""
     statements = migration.statements
-    with connection.cursor() as cursor:
-        for statement in statements:
-            cursor.execute(statement)
-        record(cursor, migration, applied_by)
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        with connection.cursor() as cursor:
+            for statement in statements:
+                cursor.execute(statement)
+            record(cursor, migration, applied_by)
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
     return len(statements)
 
 
 def applied_by_label() -> str:
-    return f"{os.environ.get('USER') or os.environ.get('USERNAME') or 'unknown'}@{os.uname().nodename if hasattr(os, 'uname') else 'host'}"
+    return f"{getpass.getuser()}@{socket.gethostname()}"
 
 
 def render(plan_result: Plan) -> str:
@@ -252,7 +237,7 @@ def render(plan_result: Plan) -> str:
 # --------------------------------------------------------------------------
 
 def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Apply AGP Studios Python API SQL migrations in order.")
+    parser = argparse.ArgumentParser(description="Apply AGP Studios Python API SQLite migrations in order.")
     parser.add_argument("--status", action="store_true", help="report status without changing anything")
     parser.add_argument("--dry-run", action="store_true", help="show the plan without executing it")
     parser.add_argument("--check", action="store_true", help="exit 1 when migrations are pending (deploy gate)")
@@ -262,8 +247,8 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--reapply-drifted", action="store_true",
                         help="re-run migrations whose file contents changed since they were applied")
     parser.add_argument("--dir", default=str(MIGRATIONS_DIR), help="migrations directory")
-    parser.add_argument("--database-url", default=os.environ.get("ASHAT_DATABASE_URL", ""),
-                        help="MySQL URL (defaults to $ASHAT_DATABASE_URL)")
+    parser.add_argument("--database-path", default=CONFIG["database_path"],
+                        help="SQLite file path (defaults to config.json)")
     return parser.parse_args(list(argv) if argv is not None else None)
 
 
@@ -280,13 +265,9 @@ def main(argv: Iterable[str] | None = None) -> int:
         print("no migrations found")
         return 0
 
-    if not args.database_url:
-        print("error: ASHAT_DATABASE_URL is not set (or pass --database-url)", file=sys.stderr)
-        return 2
-
     try:
-        connection = connect(args.database_url)
-    except ConfigurationError as error:
+        connection = connect(args.database_path)
+    except (sqlite3.Error, OSError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
     try:

@@ -8,8 +8,8 @@ terminates both. Exits non-zero if either child dies.
 
 Usage:
     python3 scripts/dev.py                 # mock API + vite (foreground)
-    python3 scripts/dev.py --no-verification
-                                           # pass mock-api flags through
+    python3 scripts/dev.py --verification-required
+                                           # enable mock email verification
     python3 scripts/dev.py --port 3111 --mock-port 3112
                                            # isolated stack for E2E runs
 
