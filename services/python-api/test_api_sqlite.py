@@ -45,7 +45,7 @@ def main():
                 return response.status, payload, response.headers
 
         try:
-            origin = "https://mko.agpstudios.org"
+            origin = "https://everenfell.agpstudios.org"
             preflight = Request(base + "/api/auth/login", method="OPTIONS", headers={
                 "Origin": origin,
                 "Access-Control-Request-Method": "POST",
