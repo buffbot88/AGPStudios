@@ -5,7 +5,7 @@ from hashlib import sha256
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import Request, urlopen
-import crypt, json, os, re, secrets, subprocess, sys, threading, time
+import crypt, html, json, os, re, secrets, subprocess, sys, threading, time
 from cryptography.fernet import Fernet
 
 # The migration runner lives next to this file; import it by path so the API
@@ -22,6 +22,7 @@ from config import CONFIG, path as config_path
 ISSUER = CONFIG["oidc_issuer"]
 KEY_FILE = str(config_path(CONFIG["oidc_private_key_file"])) if CONFIG["oidc_private_key_file"] else ""
 CODES = {}
+OIDC_CODES_LOCK = threading.Lock()
 LOGIN_ATTEMPTS = {}
 # Idempotency guard for admin user mutations: (path, user_id) -> last submit
 # time. Double-clicks and retried POSTs within the window get 409 instead of
@@ -133,10 +134,66 @@ def error(handler, message, status=400):
     oidc_json(handler, {"error":{"code":message.replace(' ', '_'),"message":message}}, status)
 
 
-def redirect_ok(uri):
-    parsed = urlparse(uri)
-    return len(uri) <= 512 and parsed.scheme in ("https",) or (
-        parsed.scheme == "http" and parsed.hostname in ("localhost", "127.0.0.1", "::1"))
+def oidc_client(client_id, redirect_uri):
+    clients = CONFIG.get("oidc_clients", {})
+    client = clients.get(client_id) if isinstance(clients, dict) else None
+    if not isinstance(client, dict):
+        return None
+    redirects, origins = client.get("redirect_uris"), client.get("allowed_origins")
+    if (not isinstance(redirects, list) or not isinstance(origins, list)
+            or redirect_uri not in redirects):
+        return None
+    parsed = urlparse(redirect_uri)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    if parsed.scheme != "https" and not (parsed.scheme == "http" and parsed.hostname in ("localhost", "127.0.0.1", "::1")):
+        return None
+    return client if origin in origins else None
+
+
+def store_oidc_code(entry):
+    now = time.time()
+    with OIDC_CODES_LOCK:
+        for code, stored in list(CODES.items()):
+            if stored.get("expires", 0) <= now:
+                del CODES[code]
+        code = secrets.token_urlsafe(32)
+        CODES[code] = entry
+        return code
+
+
+def consume_oidc_code(code):
+    with OIDC_CODES_LOCK:
+        return CODES.pop(code, None)
+
+
+def valid_oidc_params(params):
+    client_id = params.get("client_id", [""])[0]
+    redirect_uri = params.get("redirect_uri", [""])[0]
+    state = params.get("state", [""])[0]
+    challenge = params.get("code_challenge", [""])[0]
+    method = params.get("code_challenge_method", [""])[0]
+    nonce = params.get("nonce", [""])[0]
+    scopes = params.get("scope", [""])[0].split()
+    if not scopes or "openid" not in scopes or set(scopes) - {"openid", "profile"}:
+        return None
+    if not oidc_client(client_id, redirect_uri):
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9._~-]{16,256}", state):
+        return None
+    if method != "S256" or not re.fullmatch(r"[A-Za-z0-9_-]{43}", challenge):
+        return None
+    if nonce and not re.fullmatch(r"[A-Za-z0-9._~-]{16,256}", nonce):
+        return None
+    if client_id == "everenfell" and not nonce:
+        return None
+    return client_id, redirect_uri, state, challenge, nonce
+
+
+def everenfell_entitled(user_id):
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM everenfell_s1_entitlements WHERE user_id=?", (str(user_id),))
+            return cur.fetchone() is not None
 
 
 def verify_token(token):
@@ -154,6 +211,10 @@ def issue_token(entry):
     claims = {"iss": ISSUER, "sub": entry["user_id"], "aud": entry["client_id"],
               "exp": now + 3600, "iat": now, "email": entry["email"],
               "username": entry["username"], "role": entry["role"]}
+    if entry.get("nonce"):
+        claims["nonce"] = entry["nonce"]
+    if entry["client_id"] == "everenfell":
+        claims["everenfell_s1"] = bool(entry.get("everenfell_s1"))
     private = key()
     numbers = private.private_numbers().public_numbers
     kid = b64(sha256(numbers.n.to_bytes((numbers.n.bit_length()+7)//8, "big")).digest())
@@ -393,9 +454,9 @@ class Proxy(BaseHTTPRequestHandler):
                     if path in ('/api/admin/summary','/api/admin/overview'):
                         cur.execute("SELECT COUNT(*) AS n FROM users"); total=cur.fetchone()['n']; cur.execute("SELECT COUNT(*) AS n FROM users WHERE is_active=1"); active=cur.fetchone()['n']; cur.execute("SELECT COUNT(*) AS n FROM support_tickets WHERE status IN ('open','in_progress')"); tickets=cur.fetchone()['n']; return oidc_json(self,{"users":total,"active_users":active,"disabled_users":total-active,"open_tickets":tickets,"active_projects":0,"active_deploys":0})
                     if path == '/api/admin/users':
-                        q=query.get('q',[''])[0]; page=max(1,min(1000,int(query.get('page',['1'])[0]))); like='%'+q+'%'; cur.execute("SELECT id,username,email,display_name,role,diamonds,is_active,banned_at,email_verified_at FROM users WHERE id LIKE ? OR username LIKE ? OR email LIKE ? OR display_name LIKE ? ORDER BY username LIMIT 50 OFFSET ?",(like,like,like,like,(page-1)*50)); return oidc_json(self,{"users":cur.fetchall(),"page":page,"page_size":50})
+                        q=query.get('q',[''])[0]; page=max(1,min(1000,int(query.get('page',['1'])[0]))); like='%'+q+'%'; cur.execute("SELECT u.id,u.username,u.email,u.display_name,u.role,u.diamonds,u.is_active,u.banned_at,u.email_verified_at,EXISTS(SELECT 1 FROM everenfell_s1_entitlements e WHERE e.user_id=u.id) AS everenfell_s1 FROM users u WHERE u.id LIKE ? OR u.username LIKE ? OR u.email LIKE ? OR u.display_name LIKE ? ORDER BY u.username LIMIT 50 OFFSET ?",(like,like,like,like,(page-1)*50)); return oidc_json(self,{"users":cur.fetchall(),"page":page,"page_size":50})
                     if path.startswith('/api/admin/users/'):
-                        uid=path.rsplit('/',1)[1]; cur.execute("SELECT id,username,email,display_name,role,diamonds,is_active,banned_at,email_verified_at FROM users WHERE id=?",(uid,)); row=cur.fetchone(); return oidc_json(self,{"user":row}) if row else error(self,'user not found',404)
+                        uid=path.rsplit('/',1)[1]; cur.execute("SELECT u.id,u.username,u.email,u.display_name,u.role,u.diamonds,u.is_active,u.banned_at,u.email_verified_at,EXISTS(SELECT 1 FROM everenfell_s1_entitlements e WHERE e.user_id=u.id) AS everenfell_s1 FROM users u WHERE u.id=?",(uid,)); row=cur.fetchone(); return oidc_json(self,{"user":row}) if row else error(self,'user not found',404)
                     if path in ('/api/admin/support','/api/admin/tickets'):
                         cur.execute("SELECT id,subject,status,priority,category,created_at,updated_at FROM support_tickets ORDER BY updated_at DESC LIMIT 100"); return oidc_json(self,{"tickets":cur.fetchall()})
                     if path in ('/api/admin/health','/api/admin/database/status'):
@@ -576,6 +637,23 @@ class Proxy(BaseHTTPRequestHandler):
                         cur.execute("INSERT INTO world_of_ra_entitlements (user_id,granted_at,granted_by) VALUES (?,CAST(strftime('%s','now') AS INTEGER),?) ON CONFLICT(user_id) DO UPDATE SET granted_at=excluded.granted_at,granted_by=excluded.granted_by",(uid,str(user['id'])))
                         action='world_of_ra.entitlement.granted'; audit_target_type='world_of_ra_entitlement'; audit_target_id=uid; log_moderation=False
                         mod_detail=''
+                    elif path == '/api/admin/everenfell/s1':
+                        uid=str(form.get('user_id','')).strip()
+                        enabled=form.get('enabled')
+                        if not uid or type(enabled) is not bool: return error(self,'user_id and boolean enabled required')
+                        if self.duplicate_submit(path,form,'grant' if enabled else 'revoke'): return error(self,'duplicate submission; retry shortly',409)
+                        cur.execute("SELECT id,role,is_active FROM users WHERE id=?",(uid,))
+                        target=cur.fetchone()
+                        if not target: return error(self,'user not found',404)
+                        if enabled and (str(target['role']).strip().casefold() != 'admin' or not target['is_active']): return error(self,'only active administrators can receive S1 entitlement',400)
+                        if enabled:
+                            cur.execute("INSERT INTO everenfell_s1_entitlements (user_id,granted_at,granted_by) VALUES (?,CAST(strftime('%s','now') AS INTEGER),?) ON CONFLICT(user_id) DO UPDATE SET granted_at=excluded.granted_at,granted_by=excluded.granted_by",(uid,str(user['id'])))
+                            action='everenfell.s1.entitlement.granted'
+                        else:
+                            cur.execute("DELETE FROM everenfell_s1_entitlements WHERE user_id=?",(uid,))
+                            action='everenfell.s1.entitlement.revoked'
+                        audit_target_type='everenfell_s1_entitlement'; audit_target_id=uid; log_moderation=False
+                        audit_detail=json.dumps({'enabled':enabled}); mod_detail=''
                     elif path == '/api/admin/users/role':
                         if form.get('role') not in ('Member','Pro','Admin'): return error(self,'invalid role')
                         if self.duplicate_submit(path, form): return error(self,"duplicate submission; retry shortly",409)
@@ -1056,49 +1134,106 @@ class Proxy(BaseHTTPRequestHandler):
         return error(self, "not found", 404)
 
     def authorize(self, params):
-        required = ("response_type", "client_id", "redirect_uri", "state")
-        if any(not params.get(k, [""])[0] for k in required) or params["response_type"][0] != "code":
+        if params.get("response_type", [""])[0] != "code":
             return error(self, "invalid authorize request")
-        redirect = params["redirect_uri"][0]
-        if not redirect_ok(redirect): return error(self, "redirect_uri not allowed")
+        values = valid_oidc_params(params)
+        if values is None:
+            return error(self, "invalid client, redirect, state, or PKCE parameters")
+        client_id, redirect, state, challenge, nonce = values
         user = self.current_user()
         if user:
-            code=secrets.token_urlsafe(32); CODES[code]={"client_id":params["client_id"][0],"redirect_uri":redirect,"code_challenge":params.get("code_challenge",[""])[0],"user_id":user["id"],"username":user["username"],"email":user["email"],"role":user["role"],"expires":time.time()+600}
-            target=redirect+('&' if '?' in redirect else '?')+urlencode({"code":code,"state":params["state"][0]})
-            self.send_response(303); self.send_header("Location",target); self.send_header("Content-Length","0"); self.end_headers(); return
-        html = f'''<!doctype html><title>AGP Studios sign in</title><form method="post" action="/api/oauth/authorize">\
-<input type="hidden" name="response_type" value="code"><input type="hidden" name="client_id" value="{params['client_id'][0]}">\
-<input type="hidden" name="redirect_uri" value="{redirect}"><input type="hidden" name="state" value="{params['state'][0]}">\
-<input type="hidden" name="code_challenge" value="{params.get('code_challenge',[''])[0]}"><input type="hidden" name="code_challenge_method" value="S256">\
-<label>Username <input name="username" required></label><label>Password <input name="password" type="password" required></label><button>Sign in</button></form>'''
-        body=html.encode(); self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body)
+            try:
+                entitled = client_id == "everenfell" and everenfell_entitled(user["id"])
+                entry = {"client_id": client_id, "redirect_uri": redirect,
+                         "code_challenge": challenge, "nonce": nonce,
+                         "user_id": user["id"], "username": user["username"],
+                         "email": user["email"], "role": user["role"],
+                         "everenfell_s1": entitled, "expires": time.time() + 600}
+                code = store_oidc_code(entry)
+                target = redirect + ("&" if "?" in redirect else "?") + urlencode({"code": code, "state": state})
+                self.send_response(303)
+                self.send_header("Location", target)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+            except Exception:
+                error(self, "OIDC unavailable", 503)
+            return
+        values = {"response_type": "code", "client_id": client_id,
+                  "redirect_uri": redirect, "state": state,
+                  "scope": params.get("scope", [""])[0],
+                  "code_challenge": challenge, "code_challenge_method": "S256",
+                  "nonce": nonce}
+        hidden = "".join(f'<input type="hidden" name="{html.escape(k, quote=True)}" value="{html.escape(v, quote=True)}">' for k, v in values.items())
+        page = ('<!doctype html><title>AGP Studios sign in</title>'
+                '<form method="post" action="/api/oauth/authorize">' + hidden +
+                '<label>Username <input name="username" required></label>'
+                '<label>Password <input name="password" type="password" required></label>'
+                '<button>Sign in</button></form>')
+        body = page.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def oidc_post(self):
         parsed = urlparse(self.path)
-        length=int(self.headers.get("Content-Length","0")); raw=self.rfile.read(length)
+        length = int(self.headers.get("Content-Length", "0"))
+        if length > 8192:
+            return error(self, "request too large", 413)
+        raw = self.rfile.read(length)
         if parsed.path.endswith("authorize"):
-            form={k:v[0] for k,v in parse_qs(raw.decode()).items()}
+            form = parse_qs(raw.decode("utf-8", "replace"))
+            values = valid_oidc_params(form)
+            if values is None or form.get("response_type", [""])[0] != "code":
+                return error(self, "invalid authorize request")
+            client_id, redirect, state, challenge, nonce = values
             try:
                 with db() as conn:
                     with conn.cursor() as cur:
-                        cur.execute("SELECT id,username,email,role,password_hash FROM users WHERE (username=? OR email=?) AND is_active=1 LIMIT 1", (form.get("username",""),form.get("username","")))
-                        user=cur.fetchone()
-                        if not user or not crypt.crypt(form.get("password",""), user["password_hash"].replace("$2y$","$2b$")) == user["password_hash"].replace("$2y$","$2b$"): return error(self,"invalid credentials")
-                        session=secrets.token_urlsafe(32); csrf=secrets.token_urlsafe(32); h=lambda x:sha256(x.encode()).hexdigest()
-                        cur.execute("INSERT INTO rust_sessions (session_hash,user_id,csrf_hash,ip,user_agent,created_at,last_seen,expires_at) VALUES (?,?,?,'oidc-authorize','oidc-authorize',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,datetime('now','+7200 seconds'))",(h(session),user["id"],h(csrf)))
-                entry={"client_id":form["client_id"],"redirect_uri":form["redirect_uri"],"code_challenge":form.get("code_challenge",""),"user_id":user["id"],"username":user["username"],"email":user["email"],"role":user["role"],"expires":time.time()+600}
-                code=secrets.token_urlsafe(32); CODES[code]=entry
-                target=entry["redirect_uri"]+('&' if '?' in entry["redirect_uri"] else '?')+urlencode({"code":code,"state":form["state"]})
-                self.send_response(303); self.send_header("Location",target); self.send_header("Set-Cookie",f"ashat_rust_sid={session}; Domain=agpstudios.org; Path=/; HttpOnly; SameSite=Lax; Secure"); self.send_header("Set-Cookie",f"ashat_csrf={csrf}; Domain=agpstudios.org; Path=/; SameSite=Lax; Secure"); self.send_header("Content-Length","0"); self.end_headers()
-            except Exception as exc: error(self, f"OIDC unavailable: {exc}", 503)
+                        cur.execute("SELECT id,username,email,role,password_hash FROM users WHERE (username=? OR email=?) AND is_active=1 LIMIT 1", (form.get("username", [""])[0], form.get("username", [""])[0]))
+                        user = cur.fetchone()
+                        if not user or crypt.crypt(form.get("password", [""])[0], user["password_hash"].replace("$2y$", "$2b$")) != user["password_hash"].replace("$2y$", "$2b$"):
+                            return error(self, "invalid credentials", 401)
+                        session = secrets.token_urlsafe(32)
+                        csrf = secrets.token_urlsafe(32)
+                        digest = lambda value: sha256(value.encode()).hexdigest()
+                        cur.execute("INSERT INTO rust_sessions (session_hash,user_id,csrf_hash,ip,user_agent,created_at,last_seen,expires_at) VALUES (?,?,?,'oidc-authorize','oidc-authorize',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,datetime('now','+7200 seconds'))", (digest(session), user["id"], digest(csrf)))
+                entitled = client_id == "everenfell" and everenfell_entitled(user["id"])
+                entry = {"client_id": client_id, "redirect_uri": redirect,
+                         "code_challenge": challenge, "nonce": nonce,
+                         "user_id": user["id"], "username": user["username"],
+                         "email": user["email"], "role": user["role"],
+                         "everenfell_s1": entitled, "expires": time.time() + 600}
+                code = store_oidc_code(entry)
+                target = redirect + ("&" if "?" in redirect else "?") + urlencode({"code": code, "state": state})
+                self.send_response(303)
+                self.send_header("Location", target)
+                self.send_header("Set-Cookie", f"ashat_rust_sid={session}; Domain=agpstudios.org; Path=/; HttpOnly; SameSite=Lax; Secure")
+                self.send_header("Set-Cookie", f"ashat_csrf={csrf}; Domain=agpstudios.org; Path=/; SameSite=Lax; Secure")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+            except Exception:
+                error(self, "OIDC unavailable", 503)
             return
         if parsed.path.endswith("token"):
             try:
-                form=json.loads(raw); entry=CODES.pop(form.get("code",""),None)
-                if not entry or entry["expires"]<time.time() or form.get("redirect_uri") not in (None,entry["redirect_uri"]): return oidc_json(self,{"error":"invalid_grant"},400)
-                if entry["code_challenge"] and b64(sha256(form.get("code_verifier","").encode()).digest()) != entry["code_challenge"]: return oidc_json(self,{"error":"invalid_grant"},400)
-                return oidc_json(self,{"id_token":issue_token(entry),"token_type":"Bearer","expires_in":3600})
-            except Exception: return oidc_json(self,{"error":"invalid_grant"},400)
+                form = json.loads(raw)
+                code = form.get("code", "") if isinstance(form, dict) else ""
+                entry = consume_oidc_code(code)
+                valid = (entry is not None and entry["expires"] >= time.time()
+                         and form.get("grant_type") == "authorization_code"
+                         and form.get("client_id") == entry["client_id"]
+                         and form.get("redirect_uri") == entry["redirect_uri"]
+                         and oidc_client(entry["client_id"], entry["redirect_uri"]))
+                verifier = form.get("code_verifier", "") if isinstance(form, dict) else ""
+                valid = valid and isinstance(verifier, str) and re.fullmatch(r"[A-Za-z0-9._~-]{43,128}", verifier) is not None
+                valid = valid and b64(sha256(verifier.encode()).digest()) == entry["code_challenge"]
+                if not valid:
+                    return oidc_json(self, {"error": "invalid_grant"}, 400)
+                return oidc_json(self, {"id_token": issue_token(entry), "token_type": "Bearer", "expires_in": 3600})
+            except Exception:
+                return oidc_json(self, {"error": "invalid_grant"}, 400)
         return self.forward()
 
     def forward(self):

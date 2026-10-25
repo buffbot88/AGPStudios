@@ -14,6 +14,7 @@ DEFAULTS = {
     "paws_online_url": "http://127.0.0.1:3003/api/online-count",
     "world_of_ra_mint_url": "",
     "world_of_ra_mint_key": "",
+    "oidc_clients": {},
     "port": 3110,
 }
 

@@ -19,7 +19,7 @@ def main():
             for migration in migrations:
                 migrate.apply_migration(conn, migration, "test")
             applied = migrate.load_applied(conn.cursor())
-            assert len(applied) == 1 and not migrate.plan(migrations, applied).pending
+            assert len(applied) == len(migrations) and not migrate.plan(migrations, applied).pending
             assert conn.execute("SELECT COUNT(*) AS n FROM games").fetchone()["n"] == 3
             assert conn.execute("SELECT COUNT(*) AS n FROM studio_news").fetchone()["n"] == 1
             conn.execute("INSERT INTO users(id,username,email,password_hash) VALUES(?,?,?,?)",
@@ -27,6 +27,9 @@ def main():
             conn.execute("INSERT INTO world_of_ra_entitlements(user_id,granted_at,granted_by) VALUES(?,?,?)",
                          ("u1", 1, "admin"))
             assert conn.execute("SELECT user_id FROM world_of_ra_entitlements").fetchone()["user_id"] == "u1"
+            conn.execute("INSERT INTO everenfell_s1_entitlements(user_id,granted_at,granted_by) VALUES(?,?,?)",
+                         ("u1", 1, "admin"))
+            assert conn.execute("SELECT user_id FROM everenfell_s1_entitlements").fetchone()["user_id"] == "u1"
             assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
         with db(database) as conn:
             assert conn.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"] == 1

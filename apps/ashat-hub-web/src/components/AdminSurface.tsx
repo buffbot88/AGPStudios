@@ -7,7 +7,7 @@ import { PosterImage } from './home/PosterImage';
 import { UnexpectedDataNotice, UnexpectedDataPanel } from './UnexpectedDataNotice';
 
 type User = { id: string; username: string; email: string; display_name: string; role: string };
-type AdminUser = { id: string; username: string; email: string; display_name: string; role: string; is_active: number; banned_at?: number | null; email_verified_at?: string | null };
+type AdminUser = { id: string; username: string; email: string; display_name: string; role: string; is_active: number; banned_at?: number | null; email_verified_at?: string | null; everenfell_s1?: number | boolean };
 type AdminSummary = {
   users: number; active_users: number; disabled_users: number;
   open_tickets: number; active_deploys: number; active_projects: number;
@@ -248,6 +248,21 @@ export function AdminSurface({ user }: { user: User | null }) {
     finally { setBusy(false); }
   }
 
+  async function setEverenfellS1(userId: string, enabled: boolean) {
+    setBusy(true); setError(null);
+    try {
+      await request(`${API}/admin/everenfell/s1`, { method: 'POST', body: JSON.stringify({ user_id: userId, enabled }) });
+      toast(enabled ? 'Everenfell S1 access granted.' : 'Everenfell S1 access revoked.', 'success');
+      await load();
+      if (selectedUser?.id === userId) {
+        const result = await request<{ users: AdminUser[] }>(`${API}/admin/users?q=${encodeURIComponent(userId)}`);
+        const fresh = safeList<AdminUser>(result.users).find((item) => item?.id === userId);
+        if (fresh) setSelectedUser(fresh);
+      }
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Everenfell access update failed'); }
+    finally { setBusy(false); }
+  }
+
   async function banUser(userId: string, banned: boolean) {
     const action = banned ? 'Ban' : 'Unban';
     if (!(await confirmToast({ message: `${action} this user?${banned ? ' They will be logged out immediately.' : ''}`, confirmLabel: action, danger: banned }))) return;
@@ -322,7 +337,7 @@ export function AdminSurface({ user }: { user: User | null }) {
       </nav>
 
       {tab === 'overview' && <OverviewTab summary={summary} onNavigate={setTab} />}
-      {tab === 'users' && <UsersTab users={users} query={query} onQueryChange={setQuery} onSearch={load} onSelectUser={selectUser} selectedUser={selectedUser} busy={busy} currentUser={user} onUpdateUser={updateUser} onBanUser={banUser} onDeleteUser={deleteUser} moderation={moderation} moderationError={moderationError} onRefreshModeration={() => selectedUser && void loadModeration(selectedUser.id)} />}
+      {tab === 'users' && <UsersTab users={users} query={query} onQueryChange={setQuery} onSearch={load} onSelectUser={selectUser} selectedUser={selectedUser} busy={busy} currentUser={user} onUpdateUser={updateUser} onSetEverenfellS1={setEverenfellS1} onBanUser={banUser} onDeleteUser={deleteUser} moderation={moderation} moderationError={moderationError} onRefreshModeration={() => selectedUser && void loadModeration(selectedUser.id)} />}
       {tab === 'games' && <GamesTab games={games} busy={busy} onUpdatePoster={updateGamePoster} />}
       {tab === 'payments' && <PaymentsTab />}
       {tab === 'system' && <SystemTab loaded={loaded} database={database} settings={settings} onPush={pushGithub} onUpdate={systemUpdate} status={repoStatus} busy={busy} onApplyMigrations={applyMigrations} clientErrors={clientErrors} clientErrorsError={clientErrorsError} clientErrorsBusy={clientErrorsBusy} clientErrorsFilter={clientErrorsFilter} onFilterClientErrors={setClientErrorsFilter} onRefreshClientErrors={loadClientErrors} onTriageClientError={triageClientError} onMuteClientErrorMessage={muteClientErrorMessage} />}
@@ -440,10 +455,11 @@ function OverviewTab({ summary, onNavigate }: { summary: AdminSummary | null; on
 
 // ── Users Tab ──
 
-function UsersTab({ users, query, onQueryChange, onSearch, onSelectUser, selectedUser, busy, currentUser, onUpdateUser, onBanUser, onDeleteUser, moderation, moderationError, onRefreshModeration }: {
+function UsersTab({ users, query, onQueryChange, onSearch, onSelectUser, selectedUser, busy, currentUser, onUpdateUser, onSetEverenfellS1, onBanUser, onDeleteUser, moderation, moderationError, onRefreshModeration }: {
   users: AdminUser[]; query: string; onQueryChange: (q: string) => void; onSearch: () => void;
   onSelectUser: (u: AdminUser | null) => void; selectedUser: AdminUser | null;
   busy: boolean; currentUser: User; onUpdateUser: (id: string, body: { role?: string; is_active?: boolean }) => void;
+  onSetEverenfellS1: (id: string, enabled: boolean) => void;
   onBanUser: (id: string, banned: boolean) => void; onDeleteUser: (id: string) => void;
   moderation: ModerationEvent[]; moderationError: string | null; onRefreshModeration: () => void;
 }) {
@@ -468,13 +484,14 @@ function UsersTab({ users, query, onQueryChange, onSearch, onSelectUser, selecte
           {users.length === 0 && <div className="adm-empty">No users found.</div>}
         </div>
       </div>
-      {selectedUser && <UserDetailPanel user={selectedUser} busy={busy} currentUser={currentUser} onUpdate={onUpdateUser} onBan={onBanUser} onDelete={onDeleteUser} onClose={() => onSelectUser(null)} moderation={moderation} moderationError={moderationError} onRefreshModeration={onRefreshModeration} />}
+      {selectedUser && <UserDetailPanel user={selectedUser} busy={busy} currentUser={currentUser} onUpdate={onUpdateUser} onSetEverenfellS1={onSetEverenfellS1} onBan={onBanUser} onDelete={onDeleteUser} onClose={() => onSelectUser(null)} moderation={moderation} moderationError={moderationError} onRefreshModeration={onRefreshModeration} />}
     </div>
   );
 }
 
-function UserDetailPanel({ user: u, busy, currentUser, onUpdate, onBan, onDelete, onClose, moderation, moderationError, onRefreshModeration }: {
+function UserDetailPanel({ user: u, busy, currentUser, onUpdate, onSetEverenfellS1, onBan, onDelete, onClose, moderation, moderationError, onRefreshModeration }: {
   user: AdminUser; busy: boolean; currentUser: User; onUpdate: (id: string, body: { role?: string; is_active?: boolean }) => void;
+  onSetEverenfellS1: (id: string, enabled: boolean) => void;
   onBan: (id: string, banned: boolean) => void; onDelete: (id: string) => void; onClose: () => void;
   moderation: ModerationEvent[]; moderationError: string | null; onRefreshModeration: () => void;
 }) {
@@ -496,8 +513,12 @@ function UserDetailPanel({ user: u, busy, currentUser, onUpdate, onBan, onDelete
         <div className="adm-field"><span className="adm-field-label">Username</span><span className="adm-field-value mono">@{safeText(u.username)}</span></div>
         <div className="adm-field"><span className="adm-field-label">User ID</span><span className="adm-field-value mono">{safeText(u.id)}</span></div>
         {u.email_verified_at && <div className="adm-field"><span className="adm-field-label">Email Verified</span><span className="adm-field-value">{safeTime(u.email_verified_at)}</span></div>}
+        <div className="adm-field"><span className="adm-field-label">Everenfell S1</span><span className="adm-badge">{u.everenfell_s1 ? 'Entitled' : 'Not entitled'}</span></div>
       </div>
       <div className="adm-detail-actions">
+        <button type="button" className={u.everenfell_s1 ? 'adm-btn-danger' : 'adm-btn-ok'} disabled={busy || !u.is_active || u.role.trim().toLowerCase() !== 'admin'} onClick={() => onSetEverenfellS1(u.id, !Boolean(u.everenfell_s1))}>
+          {u.everenfell_s1 ? 'Revoke Everenfell S1' : 'Grant Everenfell S1'}
+        </button>
         <button type="button" className={u.is_active ? 'adm-btn-danger' : 'adm-btn-ok'} disabled={busy || u.id === currentUser.id} onClick={() => void onUpdate(u.id, { is_active: !Boolean(u.is_active) })}>
           {u.is_active ? 'Disable User' : 'Enable User'}
         </button>

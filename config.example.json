@@ -8,5 +8,15 @@
   "paws_online_url": "http://127.0.0.1:3003/api/online-count",
   "world_of_ra_mint_url": "",
   "world_of_ra_mint_key": "",
+  "oidc_clients": {
+    "paws-and-parcels": {
+      "redirect_uris": ["https://pawsandparcels.agpstudios.org/oidc-callback.html"],
+      "allowed_origins": ["https://pawsandparcels.agpstudios.org"]
+    },
+    "everenfell": {
+      "redirect_uris": ["https://everenfell.agpstudios.org/auth/callback"],
+      "allowed_origins": ["https://everenfell.agpstudios.org"]
+    }
+  },
   "port": 3110
 }
