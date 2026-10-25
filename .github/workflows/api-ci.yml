@@ -22,6 +22,9 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Install API dependency
+        run: python3 -m pip install cryptography
+
       - name: Compile Python sources
         run: |
           python3 -m py_compile \
