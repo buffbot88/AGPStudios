@@ -37,8 +37,8 @@ test.describe('unexpected data', () => {
   test('healthy homepage data reports no drift', async ({ page }) => {
     const reports = driftReports(page);
     await page.goto('/');
-    await expect(page.locator('.games-grid .game-card').first()).toBeVisible();
-    await expect(page.locator('.news-list-panel')).toContainText('A New Chapter Ahead');
+    await expect(page.locator('.live-strip .live-card').first()).toBeVisible();
+    await expect(page.locator('.news-list-panel')).toContainText('Paws & Parcels and Everenfell are live');
     await page.waitForTimeout(500);
 
     // A correct payload must be silent: no drift and no rejection, because a

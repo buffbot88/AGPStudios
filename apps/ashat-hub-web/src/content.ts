@@ -21,9 +21,6 @@ export type NewsItem = {
 
 export const NAV_LINKS = [
   { label: 'Home', href: '#top' },
-  { label: 'Games', href: '#games' },
-  { label: 'News', href: '#news' },
-  { label: 'Community', href: '#community' },
   { label: 'Support', href: '#support' },
 ] as const;
 
@@ -67,7 +64,7 @@ export const GAMES: Game[] = [
 export const STUDIO_NEWS: NewsItem = {
   title: 'Paws & Parcels and Everenfell are live',
   summary: 'Both game servers are online. Sign in to manage your account and jump in.',
-  url: '#games',
+  url: '#news',
 };
 
 /* ------------------------------------------------------------------ */
@@ -107,7 +104,7 @@ function toGame(api: ApiGame): Game {
     status: api.status,
     statusLabel: STATUS_LABELS[api.status] ?? api.status,
     tags: api.tags ?? [],
-    url: api.url || '#games',
+    url: api.url || '#top',
     poster: api.poster ?? undefined,
     posterAlt: api.poster ? `${api.title} poster` : undefined,
   };
@@ -151,18 +148,20 @@ export async function fetchNews(): Promise<{ news: NewsItem[]; fromApi: boolean 
   }
 }
 
+export const FEATURED_VIDEO = {
+  title: 'Featured video',
+  embedUrl: 'https://www.youtube-nocookie.com/embed/ky8rKHSVgNw?rel=0',
+  watchUrl: 'https://www.youtube.com/watch?v=ky8rKHSVgNw',
+} as const;
+
 export const FOOTER = {
   tagline: 'Play Together. A Brighter Tomorrow.',
   links: [
-    { label: 'Games', href: '#games' },
-    { label: 'News', href: '#news' },
-    { label: 'Community', href: '#community' },
+    { label: 'Home', href: '#top' },
     { label: 'Support', href: '#support' },
   ],
   socials: [
-    { label: 'Discord', href: 'https://discord.gg/agpstudios', icon: 'discord' },
-    { label: 'X (Twitter)', href: 'https://x.com/agpstudios', icon: 'x' },
-    { label: 'YouTube', href: 'https://youtube.com/@agpstudios', icon: 'youtube' },
-    { label: 'Instagram', href: 'https://instagram.com/agpstudios', icon: 'instagram' },
+    { label: 'Discord', href: 'https://discord.gg/nKPtUF4KHt', icon: 'discord' },
+    { label: 'YouTube', href: 'https://youtube.com/stressthismess', icon: 'youtube' },
   ],
 } as const;

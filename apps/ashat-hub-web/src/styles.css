@@ -345,27 +345,6 @@ h3 {
   font-weight: 700;
 }
 
-.play-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 10px 20px;
-  border-radius: var(--radius-sm);
-  background: linear-gradient(var(--gold-bright), var(--gold-deep));
-  color: #1d1810;
-  font-weight: 800;
-  font-size: 12.5px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  box-shadow: var(--glow);
-  transition: filter 0.15s ease, transform 0.15s ease;
-}
-
-.play-button:hover {
-  filter: brightness(1.07);
-  transform: translateY(-1px);
-}
-
 .online-count {
   display: inline-flex;
   align-items: center;
@@ -712,20 +691,6 @@ h3 {
   height: 100%;
 }
 
-.games-grid-two {
-  grid-template-columns: repeat(2, 1fr);
-}
-
-.games-grid-two .game-card {
-  padding: 22px;
-  gap: 22px;
-}
-
-.games-grid-two .game-thumb {
-  width: 210px;
-  min-height: 150px;
-}
-
 @media (max-width: 1100px) {
   .live-strip {
     grid-template-columns: 1fr 1fr;
@@ -740,12 +705,6 @@ h3 {
   .live-strip {
     grid-template-columns: 1fr;
     padding-inline: 16px;
-  }
-  .games-grid-two {
-    grid-template-columns: 1fr;
-  }
-  .games-grid-two .game-thumb {
-    width: 150px;
   }
 }
 
@@ -853,55 +812,7 @@ h3 {
   font-size: 14px;
 }
 
-/* ---------- Games grid ---------- */
-.games-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 20px;
-}
-
-.game-card {
-  position: relative;
-  display: flex;
-  gap: 18px;
-  padding: 18px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: linear-gradient(160deg, rgba(13, 36, 49, 0.6), rgba(9, 26, 37, 0.85));
-  transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
-}
-
-.game-card:hover {
-  border-color: rgba(241, 194, 91, 0.4);
-  transform: translateY(-3px);
-  box-shadow: var(--shadow), 0 0 24px rgba(241, 194, 91, 0.08);
-}
-
-.game-thumb {
-  position: relative;
-  flex-shrink: 0;
-  width: 150px;
-  align-self: stretch;
-  min-height: 130px;
-  border-radius: 10px;
-  overflow: hidden;
-  border: 1px solid var(--border);
-}
-
-.game-thumb img {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  transition: transform 0.4s ease;
-}
-
-.game-card:hover .game-thumb img {
-  transform: scale(1.03);
-}
-
-/* Poster frames, shared by every host that renders PosterImage (grid thumbs,
+/* Poster frames, shared by every host that renders PosterImage (carousel art,
    admin thumbnails) and by the wrapper's "no art yet" state. A broken poster
    URL renders this same element via PosterImage's onerror path, so the failed
    load degrades to the identical branded gradient instead of a broken icon. */
@@ -982,6 +893,30 @@ h3 {
   color: var(--text-muted);
   font-size: 20px;
   opacity: 0.7;
+}
+
+/* ---------- Featured video ---------- */
+.video-frame {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  max-width: 880px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--bg-raised);
+  box-shadow: var(--shadow);
+}
+
+.video-frame iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+#featured-video .community-note {
+  margin-top: 14px;
 }
 
 /* ---------- News & community ---------- */
@@ -1480,10 +1415,6 @@ h3 {
     padding-inline: 24px;
   }
 
-  .games-grid {
-    grid-template-columns: 1fr 1fr;
-  }
-
   .section {
     padding: 48px 24px 8px;
   }
@@ -1565,8 +1496,7 @@ h3 {
     min-height: 200px;
   }
 
-  .quick-row,
-  .games-grid {
+  .quick-row {
     grid-template-columns: 1fr;
     padding-inline: 16px;
   }

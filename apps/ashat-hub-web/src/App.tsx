@@ -1,10 +1,9 @@
 import { useEffect, useState } from 'react';
 import './styles.css';
-import { fetchGames, fetchNews, FEATURED_GAME, type Game, type NewsItem } from './content';
+import { fetchGames, fetchNews, FEATURED_GAME, FEATURED_VIDEO, type Game, type NewsItem } from './content';
 import { SiteHeader } from './components/home/SiteHeader';
 import { HeroSection } from './components/home/HeroSection';
 import { QuickInfoCard } from './components/home/QuickInfoCard';
-import { GameCard } from './components/home/GameCard';
 import { SectionHeader } from './components/home/primitives';
 import { SiteFooter } from './components/home/SiteFooter';
 import { MemberSurfaces } from './components/MemberSurfaces';
@@ -130,7 +129,7 @@ function App() {
   const latestNews = news?.[0] ?? {
     title: 'Paws & Parcels and Everenfell are live',
     summary: 'Both game servers are online. Sign in to manage your account and jump in.',
-    url: '#games',
+    url: '#news',
   };
   const newsList = news ?? [latestNews];
 
@@ -164,7 +163,7 @@ function App() {
         )}
         {route === 'home' && (
           <>
-        <HeroSection games={featuredGames} user={user} />
+        <HeroSection games={featuredGames} />
 
         <section className="live-strip" aria-label="Live servers">
           {featuredGames.slice(0, 2).map((game) => (
@@ -205,13 +204,23 @@ function App() {
           </div>
         </section>
 
-        <section className="section" id="games" aria-labelledby="games-title">
-          <SectionHeader title="Live games" text="Two servers online. Pick a world and play." />
-          <div className="games-grid games-grid-two">
-            {featuredGames.slice(0, 2).map((game) => (
-              <GameCard key={safeText(game.slug)} game={game} />
-            ))}
+        <section className="section" id="featured-video" aria-labelledby="featured-video-title">
+          <SectionHeader title={FEATURED_VIDEO.title} text="Latest from the studio." />
+          <div className="video-frame">
+            <iframe
+              src={FEATURED_VIDEO.embedUrl}
+              title={FEATURED_VIDEO.title}
+              loading="lazy"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+              referrerPolicy="strict-origin-when-cross-origin"
+              allowFullScreen
+            />
           </div>
+          <p className="community-note">
+            <a className="link-action" href={FEATURED_VIDEO.watchUrl} target="_blank" rel="noreferrer">
+              Watch on YouTube <span aria-hidden>→</span>
+            </a>
+          </p>
         </section>
 
         <section className="section" id="news" aria-labelledby="news-title">

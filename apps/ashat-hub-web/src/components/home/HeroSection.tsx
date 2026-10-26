@@ -1,11 +1,8 @@
 import { HERO } from '../../content';
 import { FeaturedGameCard } from './FeaturedGameCard';
 import type { Game } from '../../content';
-import type { User } from './primitives';
 
-export function HeroSection({ games, user }: { games: Game[]; user: User | null }) {
-  const featured = games.find((game) => game.status === 'live') ?? games[0];
-  const playHref = featured && user ? `${featured.url}/?auth=1` : undefined;
+export function HeroSection({ games }: { games: Game[] }) {
   return (
     <section className="hero" aria-labelledby="hero-title">
       <div className="hero-copy">
@@ -30,7 +27,7 @@ export function HeroSection({ games, user }: { games: Game[]; user: User | null 
         </div>
       </div>
       <div className="hero-featured">
-        <FeaturedGameCard games={games} user={user} />
+        <FeaturedGameCard games={games} />
       </div>
     </section>
   );

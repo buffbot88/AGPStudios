@@ -82,18 +82,6 @@ export function SiteHeader({ user, onUserChange }: { user: User | null; onUserCh
             </svg>
           </button>
           <AuthPanel onChange={onUserChange} onNavigate={(hash) => { window.location.hash = hash; }} />
-          <a
-            className="play-button"
-            href={user ? 'https://pawsandparcels.agpstudios.org/?auth=1' : undefined}
-            onClick={(event) => {
-              if (!user) {
-                event.preventDefault();
-                window.dispatchEvent(new CustomEvent('agp:signin'));
-              }
-            }}
-          >
-            Play <span aria-hidden>→</span>
-          </a>
           <span className="online-count" role="status" aria-label={onlineUsers === null ? 'Online user count loading' : `${onlineUsers} people online`}>
             <span className="online-dot" aria-hidden="true" />
             <span>{onlineUsers ?? '—'}<span className="online-label"> online</span></span>

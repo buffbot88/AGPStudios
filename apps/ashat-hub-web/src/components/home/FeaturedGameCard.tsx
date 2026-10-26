@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { Game } from '../../content';
-import { statusPill, GameTags, type User } from './primitives';
+import { statusPill, GameTags } from './primitives';
 import { safeText } from '../api';
 import { PosterImage } from './PosterImage';
 
@@ -20,7 +20,7 @@ function Chevron({ direction }: { direction: 'left' | 'right' }) {
  * on hover or keyboard focus (and respects prefers-reduced-motion). Works
  * with or without game art.
  */
-export function FeaturedGameCard({ games, user }: { games: Game[]; user: User | null }) {
+export function FeaturedGameCard({ games }: { games: Game[] }) {
   const [active, setActive] = useState(0);
   const [paused, setPaused] = useState(false);
   const count = games.length;
@@ -40,9 +40,6 @@ export function FeaturedGameCard({ games, user }: { games: Game[]; user: User | 
   }, [paused, count, active]);
 
   if (!game) return null;
-
-  const playHref = user ? `${safeText(game.url, '#games')}/?auth=1` : undefined;
-  const target = (playHref ?? safeText(game.url)).startsWith('http') ? '_blank' : undefined;
 
   return (
     <article
@@ -83,20 +80,6 @@ export function FeaturedGameCard({ games, user }: { games: Game[]; user: User | 
               {statusPill(game)}
               <GameTags tags={game.tags} />
             </div>
-            <a
-              className="primary-button"
-              href={playHref ?? safeText(game.url, '#games')}
-              target={target}
-              rel={target ? 'noreferrer' : undefined}
-              onClick={(event) => {
-                if (!playHref) {
-                  event.preventDefault();
-                  window.dispatchEvent(new CustomEvent('agp:signin'));
-                }
-              }}
-            >
-              Play Now <span aria-hidden>→</span>
-            </a>
           </div>
         </div>
         {count > 1 && (

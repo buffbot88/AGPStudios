@@ -90,7 +90,7 @@ GAMES = {"games": [
 NEWS = {"news": [
     {"id": "n1", "title": "Paws & Parcels and Everenfell are live",
      "summary": "Both game servers are online. Sign in to manage your account and jump in.",
-     "url": "#games", "published_at": int(time.time())},
+     "url": "#news", "published_at": int(time.time())},
 ]}
 
 # Shape-only OIDC signing key for local contract tests. The mock never issues
