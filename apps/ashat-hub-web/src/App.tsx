@@ -100,6 +100,29 @@ function App() {
     void fetchNews().then(({ news: next }) => setNews(next));
   }, []);
 
+  // Restrained scroll reveals for homepage sections. Re-observes after
+  // every render so content that arrives late (games, news) is covered;
+  // already-revealed elements are skipped and unobserved once shown.
+  useEffect(() => {
+    if (typeof IntersectionObserver !== 'function') {
+      document.querySelectorAll('.reveal').forEach((element) => element.classList.add('is-visible'));
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('is-visible');
+            observer.unobserve(entry.target);
+          }
+        }
+      },
+      { threshold: 0.12 },
+    );
+    document.querySelectorAll('.reveal:not(.is-visible)').forEach((element) => observer.observe(element));
+    return () => observer.disconnect();
+  });
+
   // Route guards: #account requires a session, #admin requires the admin role.
   // Guard only after the session has resolved so a signed-in admin visiting
   // #admin directly isn't bounced by the initial null user.
@@ -165,7 +188,7 @@ function App() {
           <>
         <HeroSection games={featuredGames} />
 
-        <section className="live-strip" aria-label="Live servers">
+        <section className="live-strip reveal" aria-label="Live servers">
           {featuredGames.slice(0, 2).map((game) => (
             <a
               key={safeText(game.slug)}
@@ -204,7 +227,7 @@ function App() {
           </div>
         </section>
 
-        <section className="section" id="news" aria-labelledby="news-title">
+        <section className="section reveal" id="news" aria-labelledby="news-title">
           <SectionHeader title="Studio News" text="Updates from across the studio." action="View All News" href="#news" />
           <div className="news-list-panel">
             {newsList.map((item, index) => (
@@ -220,7 +243,7 @@ function App() {
           </div>
         </section>
 
-        <section className="section" id="featured-video" aria-labelledby="featured-video-title">
+        <section className="section reveal" id="featured-video" aria-labelledby="featured-video-title">
           <SectionHeader title={FEATURED_VIDEO.title} text="Latest from the studio." />
           <div className="video-frame">
             <iframe

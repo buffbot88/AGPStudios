@@ -1,27 +1,40 @@
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@600;700&display=swap');
 
 /* ---------- Design tokens ---------- */
+/* Page palette: cinematic neutrals with muted antique gold. The navbar and
+   footer keep their exact original colors via the explicit pins further
+   below — never derive header/footer chrome from these tokens. */
 :root {
-  --page: #000;
-  --bg: #06121b;
-  --bg-raised: #091a25;
-  --surface: #0b1e2a;
-  --surface-2: #0d2431;
-  --border: rgba(120, 165, 190, 0.18);
-  --border-strong: rgba(150, 195, 215, 0.32);
-  --text: #f2f6f7;
-  --text-muted: #9fb4bd;
-  --gold: #f1c25b;
-  --gold-bright: #f6d16b;
-  --gold-deep: #d99f35;
-  --live: #48e595;
-  --coming: #8fa8c9;
+  --page: #101417;
+  --bg: #191f23;
+  --bg-raised: #1f272d;
+  --surface: #242b30;
+  --surface-2: #2a333a;
+  --border: rgba(240, 238, 232, 0.12);
+  --border-strong: rgba(240, 238, 232, 0.26);
+  --text: #f0eee8;
+  --text-muted: #a8adb1;
+  --gold: #b79a65;
+  --gold-bright: #cdb287;
+  --gold-deep: #97794c;
+  --live: #5cc693;
+  --coming: #8fa3b8;
   --radius: 14px;
   --radius-sm: 9px;
-  --shadow: 0 14px 44px rgba(0, 0, 0, 0.35);
-  --glow: 0 0 24px rgba(241, 194, 91, 0.28);
+  --shadow: 0 14px 44px rgba(0, 0, 0, 0.45);
+  --glow: 0 0 24px rgba(183, 154, 101, 0.22);
   font-family: 'DM Sans', sans-serif;
   color: var(--text);
+}
+
+::selection {
+  background: rgba(183, 154, 101, 0.35);
+}
+
+:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 3px;
+  border-radius: 4px;
 }
 
 * {
@@ -54,7 +67,11 @@ img {
 
 .portal {
   min-height: 100vh;
-  background: var(--page);
+  background:
+    radial-gradient(1000px 520px at 82% -8%, rgba(70, 88, 100, 0.16), transparent 65%),
+    radial-gradient(760px 480px at -12% 32%, rgba(70, 88, 100, 0.12), transparent 60%),
+    radial-gradient(560px 320px at 50% 108%, rgba(183, 154, 101, 0.05), transparent 70%),
+    linear-gradient(var(--page), #0c0f12 60%, var(--page));
   overflow-x: hidden;
 }
 
@@ -65,9 +82,9 @@ img {
   inset: 0;
   pointer-events: none;
   background:
-    radial-gradient(circle at 88% 12%, transparent 118px, rgba(150, 195, 215, 0.07) 119px, transparent 121px),
-    radial-gradient(circle at 88% 12%, transparent 158px, rgba(150, 195, 215, 0.05) 159px, transparent 161px),
-    radial-gradient(circle at 4% 68%, transparent 90px, rgba(150, 195, 215, 0.06) 91px, transparent 93px);
+    radial-gradient(circle at 88% 12%, transparent 118px, rgba(240, 238, 232, 0.05) 119px, transparent 121px),
+    radial-gradient(circle at 88% 12%, transparent 158px, rgba(240, 238, 232, 0.035) 159px, transparent 161px),
+    radial-gradient(circle at 4% 68%, transparent 90px, rgba(240, 238, 232, 0.04) 91px, transparent 93px);
 }
 
 .container,
@@ -120,7 +137,7 @@ h3 {
 .primary-button:hover {
   filter: brightness(1.07);
   transform: translateY(-1px);
-  box-shadow: 0 0 30px rgba(241, 194, 91, 0.4);
+  box-shadow: 0 0 30px rgba(183, 154, 101, 0.35);
 }
 
 .primary-button.large {
@@ -140,7 +157,7 @@ h3 {
   padding: 13px 22px;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
-  background: rgba(9, 26, 37, 0.6);
+  background: rgba(16, 20, 23, 0.6);
   color: var(--text);
   font-weight: 600;
   font-size: 13px;
@@ -149,7 +166,7 @@ h3 {
 
 .secondary-button:hover {
   background: var(--surface-2);
-  border-color: rgba(180, 215, 230, 0.45);
+  border-color: rgba(183, 154, 101, 0.5);
 }
 
 .link-action {
@@ -424,14 +441,14 @@ h3 {
   padding: 7px 14px 7px 8px;
   border: 1px solid var(--border);
   border-radius: 999px;
-  background: rgba(13, 36, 49, 0.7);
+  background: rgba(42, 51, 58, 0.6);
   font-size: 12.5px;
   white-space: nowrap;
 }
 
 .account-pill.as-button {
   border: 1px solid var(--border);
-  background: rgba(13, 36, 49, 0.7);
+  background: rgba(42, 51, 58, 0.6);
   cursor: pointer;
   padding: 8px 16px;
 }
@@ -446,8 +463,8 @@ h3 {
   width: 24px;
   height: 24px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #2c6a5f, #1a4a44);
-  color: #d9efe4;
+  background: linear-gradient(135deg, #6b5a3e, #38311f);
+  color: #ede4cf;
   font-size: 11px;
   font-weight: 700;
 }
@@ -483,23 +500,70 @@ h3 {
   display: none;
 }
 
-/* ---------- Hero ---------- */
+/* ---------- Cinematic hero ---------- */
+/* Full-viewport environment banner. `.hero-art` is a restrained
+   gradient composition standing in for the Ultima3D hero vista —
+   clearly marked by `.hero-art-badge` until the real render lands. */
 .hero {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
-  align-items: center;
-  gap: 56px;
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  min-height: 82vh;
+  overflow: hidden;
+}
+
+.hero-art {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(560px 260px at 68% 88%, rgba(183, 154, 101, 0.12), transparent 70%),
+    radial-gradient(900px 480px at 78% 8%, rgba(88, 110, 124, 0.22), transparent 65%),
+    radial-gradient(700px 380px at 12% 20%, rgba(60, 76, 88, 0.18), transparent 60%),
+    radial-gradient(120% 70% at 50% 110%, rgba(0, 0, 0, 0.5), transparent 60%),
+    linear-gradient(#0b0e11, #101417 62%, #0d1013);
+}
+
+.hero-art::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(80% 26% at 50% 62%, rgba(240, 238, 232, 0.045), transparent 70%),
+    radial-gradient(70% 22% at 50% 78%, rgba(240, 238, 232, 0.035), transparent 70%);
+}
+
+.hero-art-badge {
+  position: absolute;
+  top: 92px;
+  right: 48px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(240, 238, 232, 0.42);
+  border: 1px dashed rgba(240, 238, 232, 0.22);
+  border-radius: 999px;
+  padding: 6px 12px;
+  pointer-events: none;
+}
+
+.hero-inner {
+  position: relative;
+  width: 100%;
   max-width: 1440px;
   margin: 0 auto;
-  padding: 72px 48px 56px;
+  padding: 120px 48px 150px;
 }
 
 .hero h1 {
-  margin: 16px 0 18px;
+  margin: 18px 0 20px;
   font-family: 'Playfair Display', serif;
-  font-size: clamp(44px, 5.2vw, 76px);
-  line-height: 1.02;
-  letter-spacing: -0.02em;
+  font-weight: 600;
+  font-size: clamp(48px, 6.4vw, 96px);
+  line-height: 1.0;
+  letter-spacing: -0.015em;
+  text-shadow: 0 2px 32px rgba(0, 0, 0, 0.6);
+  animation: hero-enter 0.9s ease both;
 }
 
 .hero h1 em {
@@ -507,12 +571,61 @@ h3 {
   font-style: normal;
 }
 
+.hero .eyebrow,
 .hero-description {
-  max-width: 480px;
-  margin: 0 0 30px;
+  animation: hero-enter 0.9s ease both;
+}
+
+.hero-description {
+  animation-delay: 0.12s;
+}
+
+@keyframes hero-enter {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero h1,
+  .hero .eyebrow,
+  .hero-description {
+    animation: none;
+  }
+}
+
+.hero-description {
+  max-width: 520px;
+  margin: 0;
   color: var(--text-muted);
-  font-size: 15.5px;
+  font-size: 16px;
   line-height: 1.65;
+  text-shadow: 0 1px 18px rgba(0, 0, 0, 0.6);
+}
+
+.hero-fade {
+  position: absolute;
+  inset: auto 0 0;
+  height: 190px;
+  background: linear-gradient(transparent, var(--page));
+  pointer-events: none;
+}
+
+/* ---------- Featured worlds ---------- */
+.worlds {
+  position: relative;
+  z-index: 2;
+}
+
+.worlds-inner {
+  max-width: 1440px;
+  margin: -84px auto 0;
+  padding: 0 48px;
 }
 
 /* ---------- Featured game card ---------- */
@@ -523,7 +636,7 @@ h3 {
   padding: 20px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: linear-gradient(150deg, rgba(13, 36, 49, 0.85), rgba(9, 26, 37, 0.9));
+  background: linear-gradient(150deg, rgba(42, 51, 58, 0.9), rgba(16, 20, 23, 0.94));
   box-shadow: var(--shadow);
 }
 
@@ -616,8 +729,8 @@ h3 {
 
 .featured-nav-button:hover {
   color: var(--gold);
-  border-color: rgba(241, 194, 91, 0.45);
-  background: rgba(241, 194, 91, 0.06);
+  border-color: rgba(183, 154, 101, 0.5);
+  background: rgba(183, 154, 101, 0.07);
 }
 
 .featured-slide .featured-poster {
@@ -651,7 +764,7 @@ h3 {
   inset: 0;
   display: grid;
   place-items: center;
-  background: linear-gradient(150deg, #17444a, #0d2b3a 60%, #0a2230);
+  background: linear-gradient(150deg, #2b2f26, #17191c 60%, #101214);
   color: var(--gold);
   font-family: 'Playfair Display', serif;
   font-size: 22px;
@@ -739,12 +852,12 @@ h3 {
   padding: 18px 20px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: linear-gradient(160deg, rgba(13, 36, 49, 0.7), rgba(9, 26, 37, 0.85));
+  background: linear-gradient(160deg, rgba(42, 51, 58, 0.72), rgba(16, 20, 23, 0.88));
   transition: border-color 0.2s ease, transform 0.2s ease;
 }
 
 .live-card:hover {
-  border-color: rgba(241, 194, 91, 0.4);
+  border-color: rgba(183, 154, 101, 0.45);
   transform: translateY(-2px);
 }
 
@@ -826,7 +939,7 @@ h3 {
   padding: 24px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: linear-gradient(160deg, rgba(13, 36, 49, 0.7), rgba(9, 26, 37, 0.85));
+  background: linear-gradient(160deg, rgba(42, 51, 58, 0.72), rgba(16, 20, 23, 0.88));
   transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
 }
 
@@ -842,10 +955,10 @@ h3 {
   flex-shrink: 0;
   width: 52px;
   height: 52px;
-  border: 1px solid rgba(72, 229, 149, 0.3);
+  border: 1px solid rgba(183, 154, 101, 0.4);
   border-radius: 50%;
-  color: #6fd9a6;
-  background: rgba(72, 229, 149, 0.07);
+  color: var(--gold-bright);
+  background: rgba(183, 154, 101, 0.08);
 }
 
 .quick-body {
@@ -927,23 +1040,23 @@ h3 {
 
 .thumb-fallback {
   font-size: 28px;
-  color: rgba(241, 194, 91, 0.75);
+  color: rgba(183, 154, 101, 0.8);
 }
 
 .fallback-in-development {
-  background: linear-gradient(150deg, #10303f, #0c2231 70%);
+  background: linear-gradient(150deg, #23282c, #14171a 70%);
 }
 
 .fallback-coming-soon {
   background:
-    radial-gradient(120px 70px at 70% 30%, rgba(241, 194, 91, 0.16), transparent 70%),
-    linear-gradient(150deg, #101f30, #0a1522 70%);
+    radial-gradient(120px 70px at 70% 30%, rgba(183, 154, 101, 0.16), transparent 70%),
+    linear-gradient(150deg, #22262a, #121518 70%);
 }
 
 .fallback-live {
   background:
-    radial-gradient(140px 90px at 30% 25%, rgba(120, 200, 190, 0.16), transparent 70%),
-    linear-gradient(150deg, #0f2b34, #0a1c26 70%);
+    radial-gradient(140px 90px at 30% 25%, rgba(183, 154, 101, 0.14), transparent 70%),
+    linear-gradient(150deg, #242a26, #121614 70%);
 }
 
 .adm-game-thumb {
@@ -1025,12 +1138,24 @@ h3 {
   padding: 28px 32px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: linear-gradient(160deg, rgba(13, 36, 49, 0.6), rgba(9, 26, 37, 0.85));
+  background: linear-gradient(160deg, rgba(42, 51, 58, 0.6), rgba(16, 20, 23, 0.88));
 }
 
+/* Editorial composition: the latest story spans the full width and sets a
+   larger title; older stories pair up beneath it. */
 .news-list-panel {
   display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 16px;
+}
+
+.news-panel:first-child {
+  grid-column: 1 / -1;
+  padding: 36px 40px;
+}
+
+.news-panel:first-child h3 {
+  font-size: 32px;
 }
 
 .news-panel h3 {
@@ -1052,9 +1177,32 @@ h3 {
   line-height: 1.6;
 }
 
+/* ---------- Scroll reveal ---------- */
+/* Restrained entrance for below-the-fold sections. The App shell adds
+   `.is-visible` via IntersectionObserver; without JS (or with reduced
+   motion) everything renders in its final state. */
+.reveal {
+  opacity: 0;
+  transform: translateY(16px);
+  transition: opacity 0.6s ease, transform 0.6s ease;
+}
+
+.reveal.is-visible {
+  opacity: 1;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}
+
 /* ---------- Footer ---------- */
 .site-footer {
-  margin-top: 90px;
+  margin-top: 120px;
   border-top: 1px solid var(--border);
   background: rgba(5, 16, 24, 0.6);
 }
@@ -1064,8 +1212,12 @@ h3 {
   align-items: center;
   justify-content: space-between;
   gap: 32px;
-  padding-block: 34px;
+  padding-block: 42px;
   flex-wrap: wrap;
+}
+
+.footer-brand .wordmark {
+  font-size: 17px;
 }
 
 .footer-nav {
@@ -1166,7 +1318,7 @@ h3 {
 
 .modal input:focus {
   outline: none;
-  border-color: rgba(241, 194, 91, 0.5);
+  border-color: rgba(183, 154, 101, 0.55);
 }
 
 .modal-close {
@@ -1506,9 +1658,19 @@ h3 {
   }
 
   .hero {
-    grid-template-columns: 1fr;
-    gap: 36px;
-    padding: 48px 24px 40px;
+    min-height: 74vh;
+  }
+
+  .hero-inner {
+    padding: 104px 24px 132px;
+  }
+
+  .hero-art-badge {
+    right: 24px;
+  }
+
+  .worlds-inner {
+    padding: 0 24px;
   }
 
   .quick-row {
@@ -1568,7 +1730,33 @@ h3 {
   }
 
   .hero {
-    padding: 36px 16px 32px;
+    min-height: 70vh;
+  }
+
+  .hero-inner {
+    padding: 88px 16px 122px;
+  }
+
+  .hero-art-badge {
+    top: 78px;
+    right: 16px;
+  }
+
+  .worlds-inner {
+    margin-top: -64px;
+    padding: 0 16px;
+  }
+
+  .news-list-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .news-panel:first-child {
+    padding: 28px 24px;
+  }
+
+  .news-panel:first-child h3 {
+    font-size: 26px;
   }
 
   .featured-card {
@@ -3097,8 +3285,8 @@ h3 {
   width: 24px;
   height: 24px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #2c6a5f, #1a4a44);
-  color: #d9efe4;
+  background: linear-gradient(135deg, #6b5a3e, #38311f);
+  color: #ede4cf;
   font-size: 11px;
   font-weight: 700;
 }
@@ -3234,5 +3422,59 @@ h3 {
     flex-direction: column;
     align-items: flex-start;
   }
+}
+
+/* ---------- Navbar / footer color pins (must stay last) ---------- */
+/* Exact original chrome, independent of the page palette. These rules sit
+   after every other header/footer rule so equal-specificity originals
+   cannot override them. Backgrounds are literal values on the rules
+   themselves; these pins freeze text, link, and hairline colors
+   (including hovers) at their original values. */
+.site-header {
+  border-bottom-color: rgba(120, 165, 190, 0.18);
+}
+.site-footer {
+  border-top-color: rgba(120, 165, 190, 0.18);
+}
+.wordmark b,
+.main-nav a.active,
+.mobile-nav a.active {
+  color: #f1c25b;
+}
+.main-nav a,
+.mobile-nav a,
+.icon-button,
+.online-count {
+  color: #9fb4bd;
+}
+.main-nav a:hover,
+.icon-button:hover,
+.footer-nav a:hover {
+  color: #f2f6f7;
+}
+.mobile-nav {
+  border-top-color: rgba(120, 165, 190, 0.18);
+}
+.mobile-nav a {
+  border-bottom-color: rgba(120, 165, 190, 0.08);
+}
+.footer-nav a,
+.footer-identity,
+.footer-socials a,
+.footer-legal {
+  color: #9fb4bd;
+}
+.footer-nav a:hover {
+  color: #f2f6f7;
+}
+.footer-socials a {
+  border-color: rgba(120, 165, 190, 0.18);
+}
+.footer-socials a:hover {
+  color: #f1c25b;
+  border-color: rgba(241, 194, 91, 0.4);
+}
+.footer-legal {
+  border-top-color: rgba(120, 165, 190, 0.18);
 }
 

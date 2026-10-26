@@ -25,11 +25,11 @@ export const NAV_LINKS = [
 ] as const;
 
 export const HERO = {
-  eyebrow: 'Paws & Parcels · Everenfell · Live now',
-  headlineTop: 'Two live worlds.',
-  headlineEmphasis: 'One studio home.',
+  eyebrow: 'AGP Studios',
+  headlineTop: 'Worlds Beyond',
+  headlineEmphasis: 'Imagination.',
   description:
-    'AGP Studios runs two live game servers: cozy delivery runs in Paws & Parcels, and Season 1 adventures in Everenfell. Sign in once to manage your account, support tickets, and access.',
+    'Creating games, adventures, and experiences worth exploring. Paws & Parcels and Everenfell are live now — one account for every world.',
 } as const;
 
 export const FEATURED_GAME: Game = {
