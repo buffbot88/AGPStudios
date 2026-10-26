@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import type { ReactNode } from 'react';
 import './styles.css';
 import { fetchGames, fetchNews, FEATURED_GAME, type Game, type NewsItem } from './content';
 import { SiteHeader } from './components/home/SiteHeader';
@@ -25,26 +24,6 @@ type User = {
   display_name: string;
   role: string;
 };
-
-function GameIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden>
-      <path d="M6 9h12a4 4 0 0 1 4 4v2a3 3 0 0 1-5.6 1.5L15.5 15h-7l-.9 1.5A3 3 0 0 1 2 15v-2a4 4 0 0 1 4-4Z" strokeLinejoin="round" />
-      <path d="M8 12.2v2.2M6.9 13.3h2.2" strokeLinecap="round" />
-      <circle cx="15.5" cy="12.4" r=".9" fill="currentColor" stroke="none" />
-      <circle cx="17.6" cy="14.2" r=".9" fill="currentColor" stroke="none" />
-    </svg>
-  );
-}
-
-function NewsIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden>
-      <rect x="4" y="4.5" width="16" height="15" rx="2.5" />
-      <path d="M8 9h8M8 12.5h8M8 16h5" strokeLinecap="round" />
-    </svg>
-  );
-}
 
 function AccountIcon() {
   return (
@@ -146,19 +125,14 @@ function App() {
       window.location.assign('/');
     });
 
-  const featuredGame = games?.find((game) => game.status === 'live') ?? games?.[0] ?? FEATURED_GAME;
+  const liveGames = (games ?? [FEATURED_GAME]).filter((game) => game.status === 'live');
+  const featuredGames = liveGames.length ? liveGames : (games ?? [FEATURED_GAME]);
   const latestNews = news?.[0] ?? {
-    title: 'A New Chapter Ahead',
-    summary: 'We\'re working on new worlds, new ideas, and more ways to play together.',
-    url: '#news',
+    title: 'Paws & Parcels and Everenfell are live',
+    summary: 'Both game servers are online. Sign in to manage your account and jump in.',
+    url: '#games',
   };
-  const newsList = news ?? [
-    {
-      title: 'A New Chapter Ahead',
-      summary: 'We\'re working on new worlds, new ideas, and more ways to play together.',
-      url: '#news',
-    },
-  ];
+  const newsList = news ?? [latestNews];
 
   return (
     <div className="portal" id="top">
@@ -190,49 +164,51 @@ function App() {
         )}
         {route === 'home' && (
           <>
-        <HeroSection games={games ?? [FEATURED_GAME]} user={user} />
+        <HeroSection games={featuredGames} user={user} />
 
-        <section className="quick-row" aria-label="Highlights">
-          <QuickInfoCard
-            icon={<GameIcon />}
-            eyebrow="Featured Game"
-            title={safeText(featuredGame.title)}
-            description={safeText(featuredGame.summary)}
-            link="Play Now"
-            href={user ? `${featuredGame.url}/?auth=1` : featuredGame.url}
-          />
-          <QuickInfoCard
-            icon={<NewsIcon />}
-            eyebrow="Studio News"
-            title={latestNews.title}
-            description={latestNews.summary}
-            link="Read the Latest"
-            href={latestNews.url}
-          />
-          <QuickInfoCard
-            icon={<AccountIcon />}
-            eyebrow="Your Account"
-            title={user ? `Welcome back, ${safeText(user.display_name) || safeText(user.username)}` : 'Your Account'}
-            description={
-              user
-                ? 'Manage your account, preferences, and more.'
-                : 'Sign in to access your account, updates, and community tools.'
-            }
-            link={user ? 'Go to Account' : 'Sign In'}
-            href={user ? '#account' : '#top'}
-            onAction={user ? undefined : () => window.dispatchEvent(new CustomEvent('agp:signin'))}
-          />
-          {user && (
-            <button type="button" className="link-action signout-link" onClick={logout}>
-              Sign out
-            </button>
-          )}
+        <section className="live-strip" aria-label="Live servers">
+          {featuredGames.slice(0, 2).map((game) => (
+            <a
+              key={safeText(game.slug)}
+              className="live-card"
+              href={user ? `${safeText(game.url)}/?auth=1` : safeText(game.url)}
+              target="_blank"
+              rel="noreferrer"
+            >
+              <span className="live-dot" aria-hidden />
+              <span className="live-text">
+                <strong>{safeText(game.title)}</strong>
+                <small>Live now · {safeText(game.summary)}</small>
+              </span>
+              <span className="live-go" aria-hidden>→</span>
+            </a>
+          ))}
+          <div className="live-account">
+            <QuickInfoCard
+              icon={<AccountIcon />}
+              eyebrow="Your Account"
+              title={user ? `Welcome back, ${safeText(user.display_name) || safeText(user.username)}` : 'Your Account'}
+              description={
+                user
+                  ? 'Manage your account, support tickets, and access.'
+                  : 'Sign in to access your account and community tools.'
+              }
+              link={user ? 'Go to Account' : 'Sign In'}
+              href={user ? '#account' : '#top'}
+              onAction={user ? undefined : () => window.dispatchEvent(new CustomEvent('agp:signin'))}
+            />
+            {user && (
+              <button type="button" className="link-action signout-link" onClick={logout}>
+                Sign out
+              </button>
+            )}
+          </div>
         </section>
 
         <section className="section" id="games" aria-labelledby="games-title">
-          <SectionHeader title="Our Games" text="Different worlds. A shared home." action="View All Games" href="#games" />
-          <div className="games-grid">
-            {(games ?? [FEATURED_GAME]).map((game) => (
+          <SectionHeader title="Live games" text="Two servers online. Pick a world and play." />
+          <div className="games-grid games-grid-two">
+            {featuredGames.slice(0, 2).map((game) => (
               <GameCard key={safeText(game.slug)} game={game} />
             ))}
           </div>
@@ -257,7 +233,7 @@ function App() {
         <section className="section" id="community" aria-labelledby="community-title">
           <SectionHeader title="Community" text="Play together. A brighter tomorrow." />
           <p className="community-note">
-            Community spaces are opening soon. Sign in and stay tuned — {user ? 'see you in the worlds.' : 'more is on the way.'}
+            Paws & Parcels and Everenfell share one AGP Studios account. {user ? 'See you in the worlds.' : 'Sign in to join both.'}
           </p>
         </section>
           </>

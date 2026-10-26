@@ -111,10 +111,9 @@ export function FeaturedGameCard({ games, user }: { games: Game[]; user: User | 
         )}
       </div>
       <aside className="featured-aside" aria-hidden>
-        <span>Kind</span>
-        <span>People</span>
-        <span>Brighter</span>
-        <span>Worlds</span>
+        <span>Live</span>
+        <span>Two worlds</span>
+        <span>One account</span>
       </aside>
     </article>
   );

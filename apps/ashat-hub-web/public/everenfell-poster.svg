@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" role="img" aria-label="Everenfell key art">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#123a3a"/>
+      <stop offset="0.6" stop-color="#0d2431"/>
+      <stop offset="1" stop-color="#0a1a26"/>
+    </linearGradient>
+  </defs>
+  <rect width="400" height="300" fill="url(#bg)"/>
+  <circle cx="310" cy="70" r="46" fill="#f1c25b" opacity="0.85"/>
+  <circle cx="310" cy="70" r="62" fill="none" stroke="#f1c25b" stroke-opacity="0.35" stroke-width="2"/>
+  <path d="M0 230 L90 150 L150 200 L220 120 L290 190 L340 140 L400 200 L400 300 L0 300 Z" fill="#0b2b26" opacity="0.9"/>
+  <path d="M0 250 L110 180 L200 230 L300 170 L400 235 L400 300 L0 300 Z" fill="#081a26" opacity="0.9"/>
+  <text x="30" y="56" font-family="Georgia, serif" font-size="15" letter-spacing="3" fill="#9fb4bd">EVERENFELL</text>
+  <text x="30" y="92" font-family="Georgia, serif" font-size="30" fill="#f6d16b">Season 1 Live</text>
+</svg>

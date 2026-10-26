@@ -7,8 +7,7 @@ endpoints from docs/python-api-contracts.md that the portal consumes:
   auth/session, register (email verification disabled by default), login, logout,
   verify-email (+resend), account summary / PUT / DELETE, support tickets +
   replies, games, news, and the admin surface (summary, users incl. role /
-  status / ban / delete, settings, database status, repo-status, telemetry,
-  omega).
+  status / ban / delete, settings, database status, and repo-status.
 
 Behavior notes:
 - In-memory state only; everything is lost on restart. Pre-seeded admin:
@@ -82,19 +81,16 @@ GAMES = {"games": [
      "status": "live", "tags": ["Cozy", "Exploration", "Social"],
      "url": "https://pawsandparcels.agpstudios.org",
      "poster": "/paws-parcels-poster.svg", "featured": True},
-    {"slug": "world-of-ra-horizon", "title": "The World of Ra - Horizon - Season 1",
-     "summary": "A new world is taking shape.",
-     "status": "in-development", "tags": ["Exploration"], "url": "",
-     "poster": "/world-of-ra-poster.svg", "featured": False},
-    {"slug": "more-titles", "title": "More in Development",
-     "summary": "New worlds, new experiences, and more to come.",
-     "status": "coming-soon", "tags": ["Variety"], "url": "#news",
-     "poster": "/more-in-development-poster.svg", "featured": False},
+    {"slug": "everenfell", "title": "Everenfell",
+     "summary": "Season 1 is live. Sign in with AGP Studios to enter.",
+     "status": "live", "tags": ["Adventure", "Season 1", "Multiplayer"],
+     "url": "https://everenfell.agpstudios.org",
+     "poster": "/everenfell-poster.svg", "featured": True},
 ]}
 NEWS = {"news": [
-    {"id": "n1", "title": "A New Chapter Ahead",
-     "summary": "We're working on new worlds, new ideas, and more ways to play together.",
-     "url": "#news", "published_at": int(time.time())},
+    {"id": "n1", "title": "Paws & Parcels and Everenfell are live",
+     "summary": "Both game servers are online. Sign in to manage your account and jump in.",
+     "url": "#games", "published_at": int(time.time())},
 ]}
 
 # Shape-only OIDC signing key for local contract tests. The mock never issues

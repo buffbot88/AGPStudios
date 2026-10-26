@@ -2,6 +2,11 @@
 
 This ledger intentionally stores no credential values.
 
+> Scope (2026-10-26): the only in-scope runtime is AshatHub
+> (`apps/ashat-hub-web` + `services/python-api`) and its two live games (Paws
+> & Parcels, Everenfell). Alpha / Omega / Beta / Delta / Galileo rows below are
+> external or historical systems, not code in this checkout.
+
 | Credential category | System/locations | Owner | Rotation | Old revoked | Application validated |
 |---|---|---|---|---|---|
 | OIDC signing identity | AshatHub runtime | AshatHub operator | BLOCKED — operator action required | BLOCKED | PASS — runtime path required |

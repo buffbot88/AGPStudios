@@ -7,9 +7,13 @@ Internal project only.
 The active product in this repo is the Vite portal (`apps/ashat-hub-web/`) and the Python
 API service (`services/python-api/`). Those are the only active runtime pieces.
 
-Anything under `archive/` is historical record only. It is not built, not authoritative,
-and not part of the current system. See `archive/README.md`, `docs/retired-components.md`,
-and `docs/system-architecture.md`.
+Live games are Paws & Parcels and Everenfell only. World of Ra, `more-titles`,
+Omega, and Galileo references are stubs or history — do not present them as
+live servers.
+
+Anything under `archive/` (if present) is historical record only. It is not
+built, not authoritative, and not part of the current system. See
+`docs/system-architecture.md` for the active boundary.
 
 There is no in-repo AI runtime, model host, or agent gateway in this repo.
 

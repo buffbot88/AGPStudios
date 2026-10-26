@@ -28,13 +28,13 @@ export const NAV_LINKS = [
 ] as const;
 
 export const HERO = {
-  eyebrow: 'Games · People · Worlds · Together',
-  headlineTop: 'A Home for',
-  headlineEmphasis: 'Playable Worlds',
+  eyebrow: 'Paws & Parcels · Everenfell · Live now',
+  headlineTop: 'Two live worlds.',
+  headlineEmphasis: 'One studio home.',
   description:
-    'AGP Studios creates and hosts games and player experiences built around curiosity, creativity, and community. Small ideas. Big worlds ahead.',
-  primaryCta: { label: 'Explore Games', href: '#games' },
-  secondaryCta: { label: 'Latest Updates', href: '#news' },
+    'AGP Studios runs two live game servers: cozy delivery runs in Paws & Parcels, and Season 1 adventures in Everenfell. Sign in once to manage your account, support tickets, and access.',
+  primaryCta: { label: 'Play Paws & Parcels', href: 'https://pawsandparcels.agpstudios.org' },
+  secondaryCta: { label: 'Explore Everenfell', href: 'https://everenfell.agpstudios.org' },
 } as const;
 
 export const FEATURED_GAME: Game = {
@@ -52,33 +52,22 @@ export const FEATURED_GAME: Game = {
 export const GAMES: Game[] = [
   FEATURED_GAME,
   {
-    slug: 'world-of-ra-horizon',
-    title: 'The World of Ra - Horizon - Season 1',
-    summary: 'A new world is taking shape.',
-    status: 'in-development',
-    statusLabel: 'In Development',
-    tags: ['Exploration'],
-    url: '#news',
-    poster: '/world-of-ra-poster.svg',
-    posterAlt: 'The World of Ra poster art',
-  },
-  {
-    slug: 'more-titles',
-    title: 'More in Development',
-    summary: 'New worlds, new experiences, and more to come.',
-    status: 'coming-soon',
-    statusLabel: 'Coming Soon',
-    tags: ['Variety'],
-    url: '#news',
-    poster: '/more-in-development-poster.svg',
-    posterAlt: 'More in Development poster art',
+    slug: 'everenfell',
+    title: 'Everenfell',
+    summary: 'Season 1 is live. Sign in with AGP Studios to enter.',
+    status: 'live',
+    statusLabel: 'Online',
+    tags: ['Adventure', 'Season 1', 'Multiplayer'],
+    url: 'https://everenfell.agpstudios.org',
+    poster: '/everenfell-poster.svg',
+    posterAlt: 'Everenfell key art',
   },
 ];
 
 export const STUDIO_NEWS: NewsItem = {
-  title: 'A New Chapter Ahead',
-  summary: "We're working on new worlds, new ideas, and more ways to play together.",
-  url: '#news',
+  title: 'Paws & Parcels and Everenfell are live',
+  summary: 'Both game servers are online. Sign in to manage your account and jump in.',
+  url: '#games',
 };
 
 /* ------------------------------------------------------------------ */

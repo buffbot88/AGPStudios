@@ -1,7 +1,15 @@
 # Ashat Hub Python API contracts
 
-These are the retained public contracts for the Vite portal and Paws & Parcels.
-The Python service owns the public `/api/*` contract.
+Live games: **Paws & Parcels** and **Everenfell** (see
+`docs/system-architecture.md`). The Python service owns the public `/api/*`
+contract the Vite portal consumes.
+
+> Stub warning: `password-reset/request`, `auth/github`, `account/github`,
+> `admin/github/push`, and `admin/system/update` are listed below as stubs.
+> They are not implemented in `services/python-api/proxy.py` and currently
+> return `404 not_implemented`. Do not link them as working flows. The World
+> of Ra ticket/grant flow is legacy and not one of the two live games;
+> Everenfell access uses OIDC + the S1 entitlement instead.
 
 ## Public endpoints
 
@@ -18,16 +26,16 @@ The Python service owns the public `/api/*` contract.
 | GET | `/api/auth/verify-email?token=...` | 200 | Verifies a single-use email token |
 | POST | `/api/auth/verify-email/resend` | 202 | JSON `{identifier}`; sends a fresh verification mail |
 | POST | `/api/telemetry/client-error` | 202 | Unauthenticated browser error report for after-the-fact review; shape and limits documented below |
-| POST | `/api/game/ticket` | 200/401/403/429/503 | CSRF-protected World of Ra one-time ticket; requires alpha entitlement |
+| POST | `/api/game/ticket` | 200/401/403/429/503 | Legacy World of Ra one-time ticket (stub/legacy — not a live game); requires alpha entitlement |
 | POST | `/api/acoins/order` | 201/400/401/403/503 | Creates a PayPal order for one fixed ACoins package; returns an approval URL |
 | POST | `/api/acoins/capture` | 200/401/403/404/409/503 | Captures the signed-in user's PayPal order and credits ACoins once after verified capture |
-| POST | `/api/auth/password-reset/request` | 200/400 | JSON `{identifier}`; requests a password-reset email without revealing account existence |
-| GET | `/api/auth/github` | 302 | Starts GitHub OAuth sign-in/link flow |
+| POST | `/api/auth/password-reset/request` | 404 (stub) | Not implemented; documented shape only. Returns `404 not_implemented`. |
+| GET | `/api/auth/github` | 404 (stub) | Not implemented; documented shape only. Returns `404 not_implemented`. |
 | GET | `/api/auth/me` | 200/401 | Alias of session for authenticated callers |
 | GET | `/api/account/summary` | 200/401 | Authenticated account and support summary; shape documented below |
 | PUT | `/api/account` | 200/401 | Authenticated account update; requirements documented below |
 | DELETE | `/api/account` | 200/401 | Authenticated account self-deletion. JSON body `{confirm: 'DELETE'}` required (400 otherwise). Deletes the user row, all associated data and sessions, and expires the `ashat_rust_sid` and `ashat_csrf` cookies in the response. |
-| POST | `/api/account/github` | 200/404 | GitHub unlink attempt; currently returns 404 because unlinking is not implemented |
+| POST | `/api/account/github` | 404 (stub) | Not implemented. Always 404. |
 | GET | `/api/support` | 200/401 | Authenticated ticket list |
 | POST | `/api/support` | 201/401 | Authenticated ticket creation |
 | GET | `/api/support/:id` | 200/401/404 | Authenticated ticket and replies |
@@ -56,8 +64,9 @@ The Python service owns the public `/api/*` contract.
 | GET | `/api/admin/repo-status` | 200 | Live/repository commit comparison |
 | GET | `/api/admin/games` | 200 | Admin game list incl. poster URLs |
 | PUT | `/api/admin/games/:slug` | 200 | Update game poster URL without a migration; see shape reference below |
-| POST | `/api/admin/github/push` | 200 | Pushes committed changes to GitHub main |
-| POST | `/api/admin/system/update` | 200 | Pulls, rebuilds, and restarts the live system |
+| POST | `/api/admin/github/push` | 404 (stub) | Not implemented. Returns `404 not_implemented`. |
+| POST | `/api/admin/system/update` | 404 (stub) | Not implemented. Returns `404 not_implemented`. |
+| POST | `/api/admin/everenfell/s1` | 200 | JSON `{user_id, enabled: bool}`; grants/revokes Everenfell S1 entitlement. Admin-only + CSRF. Only active `Admin` accounts may receive S1 (`400` otherwise). Idempotency-guarded per target + intent. |
 | DELETE | `/api/admin/users/:id` | 200 | Permanently deletes a member: ticket replies, tickets, sessions, email verifications, then the user row. Self-delete returns 409. Audit event `admin.user.deleted` is recorded. |
 
 ### Request-body reference
@@ -76,20 +85,29 @@ applied" and simply re-fetch the user list. Different endpoints and different
 The two client-error triage endpoints share that guard, keyed by `id` instead of
 `user_id` — so two different reports triaged in quick succession do not collide.
 
-### World of Ra ticket
+### Game access: Everenfell (live) vs World of Ra ticket (legacy)
 
-`POST /api/game/ticket` requires the signed-in session cookie and `X-CSRF-Token`.
-Email verification is disabled: signup still requires and stores an email address,
-but ticket eligibility does not require email confirmation. Eligibility errors are
-checked in order: `suspended`, then `alpha_not_granted`. Eligible accounts may
-request at most 10 tickets per five minutes. A successful ticket lasts 300 seconds. The API sends `{user_id, username}`
-to `world_of_ra_mint_url` from `config.json`, using the configured
-`world_of_ra_mint_key` as the Bearer token; the mint service
-must return `{ticket}` with a 43-character URL-safe token. Missing configuration,
+**Everenfell (live):** OIDC client `everenfell` with PKCE `S256`. A `nonce` is
+required for this client. When the user holds an S1 entitlement row, the
+ID token carries `"everenfell_s1": true`. Grant/revoke via
+`POST /api/admin/everenfell/s1` (`{user_id, enabled}`); only active `Admin`
+accounts may be granted S1. The admin user list/detail surfaces expose
+`everenfell_s1` so the grant is visible.
+
+**World of Ra ticket (legacy/stub):** `POST /api/game/ticket` requires the
+signed-in session cookie and `X-CSRF-Token`. Email verification is disabled:
+signup still requires and stores an email address, but ticket eligibility does
+not require email confirmation. Eligibility errors are checked in order:
+`suspended`, then `alpha_not_granted`. Eligible accounts may request at most 10
+tickets per five minutes. A successful ticket lasts 300 seconds. The API sends
+`{user_id, username}` to `world_of_ra_mint_url` from `config.json`, using the
+configured `world_of_ra_mint_key` as the Bearer token; the mint service must
+return `{ticket}` with a 43-character URL-safe token. Missing configuration,
 network errors, or invalid mint responses return `503 mint_unavailable`.
 
-`POST /api/admin/world-of-ra/grant` takes `{user_id}` and records the admin grant
-in `world_of_ra_entitlements`; it is session-, role-, and CSRF-protected.
+`POST /api/admin/world-of-ra/grant` takes `{user_id}` and records the admin
+grant in `world_of_ra_entitlements`; it is session-, role-, and CSRF-protected.
+This flow is retained for history but is **not** one of the two live games.
 
 #### POST `/api/admin/users/role`
 
@@ -464,6 +482,10 @@ error instead of a blank. Validated today: `/api/games`, `/api/news`,
 ## OIDC issuer
 
 Issuer: `https://www.agpstudios.org/api/oauth`
+
+Live OIDC clients: `paws-and-parcels` and `everenfell` (see
+`config.example.json`). `everenfell` requires a `nonce` and receives the
+`everenfell_s1` claim when entitled.
 
 - `GET /.well-known/openid-configuration`
 - `GET /.well-known/jwks.json`

@@ -641,6 +641,114 @@ h3 {
   margin-top: auto;
 }
 
+/* ---------- Live servers strip (two live games) ---------- */
+.live-strip {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.2fr;
+  gap: 20px;
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 0 48px 8px;
+  align-items: stretch;
+}
+
+.live-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: linear-gradient(160deg, rgba(13, 36, 49, 0.7), rgba(9, 26, 37, 0.85));
+  transition: border-color 0.2s ease, transform 0.2s ease;
+}
+
+.live-card:hover {
+  border-color: rgba(241, 194, 91, 0.4);
+  transform: translateY(-2px);
+}
+
+.live-dot {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--live);
+  box-shadow: 0 0 10px var(--live);
+}
+
+.live-text {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.live-text strong {
+  font-size: 15px;
+}
+
+.live-text small {
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.live-go {
+  margin-left: auto;
+  color: var(--gold);
+  font-size: 20px;
+}
+
+.live-account {
+  display: grid;
+  gap: 8px;
+}
+
+.live-account .quick-card {
+  height: 100%;
+}
+
+.games-grid-two {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.games-grid-two .game-card {
+  padding: 22px;
+  gap: 22px;
+}
+
+.games-grid-two .game-thumb {
+  width: 210px;
+  min-height: 150px;
+}
+
+@media (max-width: 1100px) {
+  .live-strip {
+    grid-template-columns: 1fr 1fr;
+    padding-inline: 24px;
+  }
+  .live-account {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 760px) {
+  .live-strip {
+    grid-template-columns: 1fr;
+    padding-inline: 16px;
+  }
+  .games-grid-two {
+    grid-template-columns: 1fr;
+  }
+  .games-grid-two .game-thumb {
+    width: 150px;
+  }
+}
+
 /* ---------- Quick info cards ---------- */
 .quick-row {
   display: grid;

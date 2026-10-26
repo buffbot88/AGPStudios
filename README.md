@@ -2,6 +2,10 @@
 
 AGP Studios is the web portal and Python API project for AGP Studios.
 
+Live games: **Paws & Parcels** and **Everenfell**. Anything referencing World of
+Ra, `more-titles`, Omega, or Galileo is a stub or historical reference — not a
+live server.
+
 ## What this repo is
 
 - `apps/ashat-hub-web/` — Vite + React portal. Public site, member area, and admin UI.
@@ -90,6 +94,14 @@ The suite registers its own throwaway member, exercises member + admin flows
 (reads, tickets, role/status/ban, PUT/DELETE account), and cleans up after
 itself. It must pass against both the mock and the live API — if a shape only
 passes on one, the mock has drifted and should be fixed to mirror reality.
+
+### Live games and stubs
+
+Live: Paws & Parcels (`paws-and-parcels`) and Everenfell (`everenfell`, Season 1
+via S1 entitlement). Stubbed / not implemented: password-reset request, GitHub
+OAuth (`auth/github`, `account/github`), `admin/github/push`,
+`admin/system/update`, and the legacy World of Ra ticket/grant flow. The mock
+API and seeds carry only the two live games.
 
 ### End-to-end tests
 
