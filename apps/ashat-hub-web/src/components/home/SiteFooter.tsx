@@ -23,32 +23,19 @@ export function SiteFooter() {
   return (
     <footer className="site-footer">
       <div className="footer-inner">
-        <div className="footer-brand">
-          <a className="wordmark" href="#top">
-            <b>AGP</b> STUDIOS
-          </a>
-        </div>
-        {FOOTER.links.length > 0 && (
-          <nav className="footer-nav" aria-label="Footer">
-            {FOOTER.links.map((link) => (
-              <a key={link.href} href={link.href}>
-                {link.label}
-              </a>
-            ))}
-          </nav>
-        )}
-        <div className="footer-identity">
-          <span>{FOOTER.tagline}</span>
-          <div className="footer-socials">
-            {FOOTER.socials.map((social) => (
-              <a key={social.icon} href={social.href} aria-label={social.label} target="_blank" rel="noreferrer">
-                <SocialIcon icon={social.icon} />
-              </a>
-            ))}
-          </div>
+        <a className="wordmark" href="#top">
+          <b>AGP</b> STUDIOS
+        </a>
+        <span className="footer-identity">{FOOTER.tagline}</span>
+        <span className="footer-legal-inline">© 2026 AGP Studios</span>
+        <div className="footer-socials">
+          {FOOTER.socials.map((social) => (
+            <a key={social.icon} href={social.href} aria-label={social.label} target="_blank" rel="noreferrer">
+              <SocialIcon icon={social.icon} />
+            </a>
+          ))}
         </div>
       </div>
-      <div className="footer-legal">© 2026 AGP Studios. All rights reserved.</div>
     </footer>
   );
 }

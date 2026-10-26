@@ -1205,7 +1205,7 @@ a.news-row-title:hover {
 
 /* ---------- Footer ---------- */
 .site-footer {
-  margin-top: 120px;
+  margin-top: 64px;
   border-top: 1px solid var(--border);
   background: rgba(5, 16, 24, 0.6);
 }
@@ -1213,14 +1213,33 @@ a.news-row-title:hover {
 .footer-inner {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 32px;
-  padding-block: 42px;
-  flex-wrap: wrap;
+  gap: 16px;
+  padding-block: 8px;
+  flex-wrap: nowrap;
+  min-height: 30px;
 }
 
-.footer-brand .wordmark {
-  font-size: 17px;
+.footer-inner .wordmark {
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.footer-identity {
+  display: block;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.footer-legal-inline {
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.footer-socials {
+  margin-left: auto;
 }
 
 .footer-nav {
@@ -1237,14 +1256,6 @@ a.news-row-title:hover {
   color: var(--text);
 }
 
-.footer-identity {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  color: var(--text-muted);
-  font-size: 13px;
-}
-
 .footer-socials {
   display: flex;
   gap: 10px;
@@ -1253,8 +1264,8 @@ a.news-row-title:hover {
 .footer-socials a {
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  width: 26px;
+  height: 26px;
   border: 1px solid var(--border);
   border-radius: 50%;
   color: var(--text-muted);
@@ -1266,14 +1277,7 @@ a.news-row-title:hover {
   border-color: rgba(241, 194, 91, 0.4);
 }
 
-.footer-legal {
-  max-width: 1440px;
-  margin: 0 auto;
-  padding: 18px 48px 26px;
-  border-top: 1px solid var(--border);
-  color: var(--text-muted);
-  font-size: 12px;
-}
+
 
 /* ---------- Modal ---------- */
 .modal-backdrop {
@@ -1789,13 +1793,17 @@ a.news-row-title:hover {
   }
 
   .footer-inner {
-    flex-direction: column;
-    align-items: flex-start;
+    flex-wrap: wrap;
+    row-gap: 4px;
     padding-inline: 16px;
   }
 
-  .footer-legal {
-    padding-inline: 16px;
+  .footer-identity {
+    white-space: normal;
+  }
+
+  .footer-socials {
+    margin-left: 0;
   }
 }
 
