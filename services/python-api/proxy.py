@@ -256,6 +256,8 @@ class Proxy(BaseHTTPRequestHandler):
             return self.verify_email(parse_qs(urlparse(self.path).query).get('token', [''])[0])
         if urlparse(self.path).path.startswith("/api/admin/"):
             return self.admin_get()
+        if urlparse(self.path).path == "/api/notifications":
+            return self.notifications_list()
         if urlparse(self.path).path in ("/api/support", "/api/account/summary") or urlparse(self.path).path.startswith("/api/support/"):
             return self.member_get()
         self.forward()
@@ -281,6 +283,8 @@ class Proxy(BaseHTTPRequestHandler):
             return self.online_presence()
         if urlparse(self.path).path == "/api/telemetry/client-error":
             return self.client_error_report()
+        if urlparse(self.path).path == "/api/notifications/read":
+            return self.notifications_read()
         if urlparse(self.path).path == "/api/admin/audit/prune":
             return self.admin_audit_prune()
         if urlparse(self.path).path == "/api/admin/database/migrations/apply":
@@ -609,6 +613,7 @@ class Proxy(BaseHTTPRequestHandler):
         audit_target_type='user'; audit_target_id=str(form.get('user_id',''))
         audit_detail=json.dumps({}) if path == '/api/admin/payments/settings' else json.dumps(form)
         log_moderation=True
+        result_extra={}
         try:
             with db() as conn:
                 with conn.cursor() as cur:
@@ -709,12 +714,31 @@ class Proxy(BaseHTTPRequestHandler):
                         else: cur.execute("DELETE FROM client_error_mutes WHERE message_hash=sha256(?)",(row['message'],))
                         action='client_error.message.muted' if muted else 'client_error.message.unmuted'
                         audit_target_type='client_error'; audit_target_id=str(error_id); log_moderation=False
+                    elif path.startswith('/api/admin/support/') and path.endswith('/reply'):
+                        # Staff reply on a member's ticket. Creates the is_staff=1
+                        # reply that member notifications are built from.
+                        ticket_id=path.removeprefix('/api/admin/support/').removesuffix('/reply').strip('/')
+                        message=form.get('message','').strip() if isinstance(form,dict) else ''
+                        if not ticket_id or not message:
+                            return error(self,'ticket and message required')
+                        cur.execute("SELECT user_id,subject FROM support_tickets WHERE id=?",(ticket_id,))
+                        ticket=cur.fetchone()
+                        if not ticket: return error(self,'ticket not found',404)
+                        reply_id=secrets.token_hex(16)
+                        cur.execute("INSERT INTO support_ticket_replies (id,ticket_id,user_id,message,is_staff)"
+                                    " VALUES (?,?,?,?,1)",(reply_id,ticket_id,user['id'],message[:2000]))
+                        cur.execute("UPDATE support_tickets SET updated_at=CURRENT_TIMESTAMP WHERE id=?",(ticket_id,))
+                        action='support.reply.staff'
+                        audit_target_type='ticket'; audit_target_id=ticket_id; log_moderation=False
+                        audit_detail=json.dumps({'ticket_user':ticket['user_id'],'subject':ticket['subject']})
+                        mod_detail=''
+                        result_extra={'id':reply_id}
                     else: return error(self,'admin endpoint not found',404)
                     cur.execute("INSERT INTO admin_audit_events (actor_id,actor_name,action,target_type,target_id,detail,created_at) VALUES (?,?,?,?,?,?,CAST(strftime('%s','now') AS INTEGER))",(user['id'],user['username'],action,audit_target_type,audit_target_id,audit_detail))
                     # Moderation timeline: append to the dedicated history table
                     # so the admin CP can show per-user history.
                     if log_moderation: cur.execute("INSERT INTO user_moderation_history (user_id,action,actor_id,actor_name,detail,created_at) VALUES (?,?,?,?,?,CAST(strftime('%s','now') AS INTEGER))",(str(form.get('user_id','')),action,user['id'],user['username'],mod_detail))
-            return oidc_json(self,{"ok":True})
+            return oidc_json(self,{"ok":True,**result_extra})
         except Exception as exc: return error(self,f"admin unavailable: {exc}",503)
 
     def admin_user_delete(self, uid):
@@ -729,7 +753,7 @@ class Proxy(BaseHTTPRequestHandler):
                 with conn.cursor() as cur:
                     cur.execute("SELECT username FROM users WHERE id=?",(uid,)); row=cur.fetchone()
                     if not row: return error(self,"user not found",404)
-                    for table in ('support_ticket_replies','support_tickets','rust_sessions','sessions','email_verifications'):
+                    for table in ('support_ticket_replies','support_tickets','notification_reads','rust_sessions','sessions','email_verifications'):
                         cur.execute(f"DELETE FROM {table} WHERE user_id=?",(uid,))
                     cur.execute("DELETE FROM users WHERE id=?",(uid,))
                     cur.execute("INSERT INTO admin_audit_events (actor_id,actor_name,action,target_type,target_id,detail,created_at) VALUES (?,?,?,'user',?,?,CAST(strftime('%s','now') AS INTEGER))",(user['id'],user['username'],'admin.user.deleted',uid,json.dumps({'deleted_username':row['username']})))
@@ -934,6 +958,81 @@ class Proxy(BaseHTTPRequestHandler):
                     reply_id=secrets.token_hex(16); cur.execute("INSERT INTO support_ticket_replies (id,ticket_id,user_id,message,is_staff) VALUES (?,?,?,?,0)",(reply_id,ticket_id,user["id"],form["message"].strip())); cur.execute("UPDATE support_tickets SET updated_at=CURRENT_TIMESTAMP WHERE id=?",(ticket_id,)); return oidc_json(self,{"ok":True,"id":reply_id})
         except Exception as exc: return error(self, f"support unavailable: {exc}",503)
 
+    def moderation_subject(self, action):
+        """Short human line for an account notification from a moderation action."""
+        return {
+            'user.role.updated': 'Your role was updated',
+            'user.status.updated': 'Your account status was updated',
+            'user.banned': 'Your account was banned',
+            'user.unbanned': 'Your account was unbanned',
+        }.get(str(action), str(action))
+
+    def notification_items(self, cur, user_id):
+        """Unread-candidate notifications: staff replies on the user's tickets plus
+        the user's own moderation-timeline entries, newest first (max 20)."""
+        cur.execute("SELECT r.id AS id, r.ticket_id AS ticket_id, t.subject AS subject, r.message AS message,"
+                    " r.created_at AS created_at FROM support_ticket_replies r"
+                    " JOIN support_tickets t ON t.id=r.ticket_id"
+                    " WHERE t.user_id=? AND r.is_staff=1 ORDER BY r.created_at DESC LIMIT 20",(user_id,))
+        replies=cur.fetchall()
+        cur.execute("SELECT id, action, detail, created_at FROM user_moderation_history"
+                    " WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT 20",(user_id,))
+        mods=cur.fetchall()
+        cur.execute("SELECT ref FROM notification_reads WHERE user_id=?",(user_id,))
+        read={row["ref"] for row in cur.fetchall()}
+        items=[]
+        for row in replies:
+            ref='reply:'+str(row['id'])
+            items.append({"id":ref,"kind":"ticket_reply","ticket_id":row['ticket_id'],
+                            "subject":row['subject'],"message":(row['message'] or '')[:200],
+                            "created_at":row['created_at'],"read":ref in read})
+        for row in mods:
+            ref='mod:'+str(row['id'])
+            items.append({"id":ref,"kind":"account",
+                            "subject":self.moderation_subject(row['action']),"message":row['detail'] or '',
+                            "created_at":row['created_at'],"read":ref in read})
+        def sort_key(item):
+            stamp=item['created_at']
+            try:
+                if isinstance(stamp,(int,float)): return float(stamp)
+                return time.mktime(time.strptime(str(stamp),"%Y-%m-%d %H:%M:%S"))
+            except Exception: return 0.0
+        items.sort(key=sort_key, reverse=True)
+        return items[:20]
+
+    def notifications_list(self):
+        user=self.current_user()
+        if not user: return error(self,"authentication required",401)
+        try:
+            with db() as conn:
+                with conn.cursor() as cur:
+                    items=self.notification_items(cur,str(user['id']))
+            return oidc_json(self,{"notifications":items,
+                                    "unread_count":sum(1 for item in items if not item['read'])})
+        except Exception as exc: return error(self,f"notifications unavailable: {exc}",503)
+
+    def notifications_read(self):
+        user=self.current_user()
+        if not user: return error(self,"authentication required",401)
+        if not self.csrf_ok(user): return error(self,"csrf_failed",403)
+        try:
+            length=int(self.headers.get("Content-Length","0")); form=json.loads(self.rfile.read(length) or b'{}')
+            if not isinstance(form,dict): return error(self,"invalid notification ids")
+            with db() as conn:
+                with conn.cursor() as cur:
+                    if form.get('all'):
+                        refs=[item['id'] for item in self.notification_items(cur,str(user['id'])) if not item['read']]
+                    elif isinstance(form.get('ids'),list) and form['ids'] and all(
+                            isinstance(ref,str) and re.fullmatch(r'(reply|mod):[A-Za-z0-9_-]+',ref) for ref in form['ids']):
+                        refs=form['ids']
+                    else:
+                        return error(self,"invalid notification ids")
+                    for ref in refs:
+                        cur.execute("INSERT OR IGNORE INTO notification_reads (user_id,ref,read_at)"
+                                    " VALUES (?,?,CAST(strftime('%s','now') AS INTEGER))",(str(user['id']),ref))
+            return oidc_json(self,{"ok":True,"read":len(refs)})
+        except Exception as exc: return error(self,f"notifications unavailable: {exc}",503)
+
     def account_update(self):
         user=self.current_user()
         if not user: return error(self,"authentication required",401)
@@ -958,7 +1057,7 @@ class Proxy(BaseHTTPRequestHandler):
         try:
             with db() as conn:
                 with conn.cursor() as cur:
-                    for table in ('support_ticket_replies','support_tickets','rust_sessions','sessions','email_verifications'):
+                    for table in ('support_ticket_replies','support_tickets','notification_reads','rust_sessions','sessions','email_verifications'):
                         cur.execute(f"DELETE FROM {table} WHERE user_id=?",(user['id'],))
                     cur.execute("DELETE FROM users WHERE id=?",(user['id'],))
             # Session cleanup: the DB rows are gone, but the browser still holds

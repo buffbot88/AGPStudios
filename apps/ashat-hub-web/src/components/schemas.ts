@@ -166,6 +166,19 @@ const byPath: Record<string, Schema<unknown>> = {
     stats: obj<{ support_tickets: number }>({ support_tickets: numish }),
   }),
   '/support': obj<{ tickets: unknown[] }>({ tickets: list(ticketSummary) }),
+  '/notifications': obj<{ notifications: unknown[]; unread_count: number }>({
+    notifications: list(obj<{ id: string; kind: string; subject: string; message: string; created_at: string | number; read: boolean; ticket_id?: string }>({
+      id: str,
+      kind: str,
+      subject: str,
+      message: str,
+      created_at: stamp,
+      read: bool,
+      ticket_id: optional(str, ''),
+    })),
+    unread_count: numish,
+  }),
+  '/notifications/read': obj<{ ok: boolean; read: number }>({ ok: bool, read: numish }),
   '/game/ticket': obj<{ ticket: string; expires_in: number; user: { id: string; username: string } }>({
     ticket: str,
     expires_in: num,

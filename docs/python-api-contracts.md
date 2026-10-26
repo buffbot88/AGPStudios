@@ -40,6 +40,8 @@ contract the Vite portal consumes.
 | POST | `/api/support` | 201/401 | Authenticated ticket creation |
 | GET | `/api/support/:id` | 200/401/404 | Authenticated ticket and replies |
 | POST | `/api/support/:id/reply` | 200/401/404 | Authenticated reply |
+| GET | `/api/notifications` | 200/401 | Authenticated notification list (staff ticket replies + account moderation); shape documented below |
+| POST | `/api/notifications/read` | 200/401 | Mark notifications read; `{all: true}` or `{ids: [...]}` |
 
 ### Admin endpoints (session + role: Admin + CSRF header required)
 
@@ -53,6 +55,7 @@ contract the Vite portal consumes.
 | POST | `/api/admin/world-of-ra/grant` | 200 | JSON `{user_id}`; grants World of Ra alpha entitlement |
 | POST | `/api/admin/users/ban` | 200 | JSON `{user_id, banned: bool}`; see request-body reference below |
 | POST | `/api/admin/users/status` | 200 | JSON `{user_id, status}`; see request-body reference below |
+| POST | `/api/admin/support/:id/reply` | 200 | Staff reply on a member's ticket; JSON `{message}`; creates the `is_staff=1` reply member notifications are built from |
 | GET | `/api/admin/summary` | 200 | Admin overview counts |
 | GET | `/api/admin/users` | 200 | Filtered admin user list; optional `q` query |
 | GET | `/api/admin/users/:id/moderation` | 200 | Per-user moderation timeline; see shape reference below |
@@ -158,6 +161,29 @@ object keyed by what the API actually tracks:
 `user.acoins_balance` is the AGP-wide ACoins account balance. `stats.support_tickets` counts the member's support tickets. Fields the frontend
 previously assumed here — `projects`, `deployments`, `conversation_messages` —
 are **not** part of this response; consuming them crashes on `undefined`.
+
+#### GET `/api/notifications` / POST `/api/notifications/read`
+
+Requires an authenticated session (401 otherwise). Notifications are staff
+replies on the member's own tickets plus the member's own moderation-timeline
+entries, newest first (max 20). `id` is an opaque ref (`reply:<reply_id>` or
+`mod:<event_id>`) the client passes back to mark it read.
+
+```json
+{
+  "notifications": [
+    { "id": "reply:abc123", "kind": "ticket_reply", "ticket_id": "t1",
+      "subject": "string", "message": "string", "created_at": 1700000000, "read": false },
+    { "id": "mod:12", "kind": "account",
+      "subject": "Your role was updated", "message": "role: Pro", "created_at": 1700000000, "read": false }
+  ],
+  "unread_count": 1
+}
+```
+
+`POST /api/notifications/read` requires the CSRF header. Body is either
+`{all: true}` (marks every currently unread item read) or `{ids: [...]}`
+(one or more `reply:`/`mod:` refs). Returns `{ok: true, read: n}`.
 
 #### ACoins PayPal purchases
 

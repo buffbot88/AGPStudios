@@ -30,8 +30,6 @@ export const HERO = {
   headlineEmphasis: 'One studio home.',
   description:
     'AGP Studios runs two live game servers: cozy delivery runs in Paws & Parcels, and Season 1 adventures in Everenfell. Sign in once to manage your account, support tickets, and access.',
-  primaryCta: { label: 'Play Paws & Parcels', href: 'https://pawsandparcels.agpstudios.org' },
-  secondaryCta: { label: 'Explore Everenfell', href: 'https://everenfell.agpstudios.org' },
 } as const;
 
 export const FEATURED_GAME: Game = {
@@ -162,6 +160,6 @@ export const FOOTER = {
   ],
   socials: [
     { label: 'Discord', href: 'https://discord.gg/nKPtUF4KHt', icon: 'discord' },
-    { label: 'YouTube', href: 'https://youtube.com/stressthismess', icon: 'youtube' },
+    { label: 'YouTube', href: 'https://www.youtube.com/@stressthismess', icon: 'youtube' },
   ],
 } as const;

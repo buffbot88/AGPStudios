@@ -106,6 +106,7 @@ MOCK_JWKS = {
 INITIAL_USERS = copy.deepcopy(USERS)
 INITIAL_TICKETS = copy.deepcopy(TICKETS)
 MODERATION = []  # user_moderation_history mirror
+NOTIFICATION_READS = {}  # user_id -> set of read notification refs
 CLIENT_ERRORS = []  # client_error_log mirror
 CLIENT_ERROR_TRIAGE = {}  # client_error_log.id -> {status, triaged_at, triaged_by} (0006)
 CLIENT_ERROR_MUTES = {}   # message hash -> {message, muted_at, muted_by} (0006)
@@ -166,6 +167,7 @@ def reset_state():
     TICKETS.extend(copy.deepcopy(INITIAL_TICKETS))
     RECENT_MUTATIONS.clear()
     MODERATION.clear()
+    NOTIFICATION_READS.clear()
     CLIENT_ERRORS.clear()
     CLIENT_ERROR_TRIAGE.clear()
     CLIENT_ERROR_MUTES.clear()
@@ -200,6 +202,44 @@ def cookies(handler):
 def public(user):
     return {**{k: user[k] for k in ("id", "username", "email", "display_name", "role")},
             "acoins_balance": user.get("acoins_balance", 0)}
+
+
+MOD_SUBJECTS = {
+    'user.role.updated': 'Your role was updated',
+    'user.status.updated': 'Your account status was updated',
+    'user.banned': 'Your account was banned',
+    'user.unbanned': 'Your account was unbanned',
+}
+
+
+def notification_items(user_id):
+    """Mirror proxy.py: staff replies on the user's tickets plus moderation entries."""
+    read = NOTIFICATION_READS.get(str(user_id), set())
+    items = []
+    for ticket in TICKETS:
+        if ticket.get("user_id") != str(user_id):
+            continue
+        for reply in ticket.get("replies", []):
+            if not reply.get("is_staff"):
+                continue
+            ref = 'reply:' + str(reply["id"])
+            items.append({"id": ref, "kind": "ticket_reply",
+                          "ticket_id": ticket["id"],
+                          "subject": ticket.get("subject", ""),
+                          "message": str(reply.get("message", ""))[:200],
+                          "created_at": reply.get("created_at", 0),
+                          "read": ref in read})
+    for index, event in enumerate(MODERATION):
+        if str(event.get("user_id")) != str(user_id):
+            continue
+        ref = 'mod:' + str(index)
+        items.append({"id": ref, "kind": "account",
+                      "subject": MOD_SUBJECTS.get(event.get("action"), str(event.get("action"))),
+                      "message": str(event.get("detail", "") or ""),
+                      "created_at": event.get("created_at", 0),
+                      "read": ref in read})
+    items.sort(key=lambda item: item["created_at"], reverse=True)
+    return items[:20]
 
 
 # ---------------------------------------------------------------------------
@@ -470,6 +510,13 @@ class Handler(BaseHTTPRequestHandler):
             del ticket["preview"]
             body = {k: v for k, v in ticket.items() if k != "replies"}
             return self.reply(200, {"ticket": body, "replies": ticket.get("replies", [])})
+        if path == "/api/notifications":
+            _, user, failure = self.require_auth()
+            if failure:
+                return self.reply(*failure)
+            items = notification_items(user["id"])
+            return self.reply(200, {"notifications": items,
+                                    "unread_count": sum(1 for item in items if not item["read"])})
         if path == "/api/games":
             return self.reply(200, GAMES)
         if path == "/api/admin/games":
@@ -751,6 +798,45 @@ class Handler(BaseHTTPRequestHandler):
                 "created_at": int(time.time()),
             })
             return self.reply(200, {"ok": True, "id": ticket["replies"][-1]["id"]})
+
+        if path == "/api/notifications/read":
+            _, user, failure = self.require_auth()
+            if failure:
+                return self.reply(*failure)
+            if not isinstance(form, dict):
+                return self.reply(*err("invalid notification ids", 400))
+            if form.get("all"):
+                refs = [item["id"] for item in notification_items(user["id"]) if not item["read"]]
+            elif isinstance(form.get("ids"), list) and form["ids"] and all(
+                    isinstance(ref, str) and ref.startswith(("reply:", "mod:")) for ref in form["ids"]):
+                refs = form["ids"]
+            else:
+                return self.reply(*err("invalid notification ids", 400))
+            seen = NOTIFICATION_READS.setdefault(str(user["id"]), set())
+            for ref in refs:
+                seen.add(ref)
+            return self.reply(200, {"ok": True, "read": len(refs)})
+
+        if path.startswith("/api/admin/support/") and path.endswith("/reply"):
+            user, failure = self.require_admin()
+            if failure:
+                return self.reply(*failure)
+            ticket_id = path.removeprefix("/api/admin/support/").removesuffix("/reply")
+            message = str(form.get("message", "")).strip() if isinstance(form, dict) else ""
+            if not ticket_id or not message:
+                return self.reply(*err("ticket and message required", 400))
+            ticket = next((t for t in TICKETS if t["id"] == ticket_id), None)
+            if not ticket:
+                return self.reply(*err("ticket not found", 404))
+            reply_id = secrets.token_hex(8)
+            ticket.setdefault("replies", []).append({
+                "id": reply_id, "ticket_id": ticket_id,
+                "message": message[:2000], "is_staff": 1,
+                "display_name": user["display_name"],
+                "created_at": int(time.time()),
+            })
+            ticket["updated_at"] = int(time.time())
+            return self.reply(200, {"ok": True, "id": reply_id})
 
         if path == "/api/admin/omega/launch":
             user, failure = self.require_admin()

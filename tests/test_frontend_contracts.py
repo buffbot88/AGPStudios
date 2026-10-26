@@ -220,6 +220,13 @@ def run():
     code, body = member.req(f"/api/support/{ticket_id}/reply", "POST", {"message": "shape-check reply"})
     check(code == 200 and is_str((body or {}).get("id")), "reply: 200 {id}", f"{code} {repr(body)[:120]}")
 
+    code, body = member.req("/api/notifications")
+    check(code == 200 and isinstance((body or {}).get("notifications"), list) and is_num((body or {}).get("unread_count")),
+          "/api/notifications: {notifications[], unread_count}", f"{code} {repr(body)[:120]}")
+    for n in (body or {}).get("notifications", []):
+        check(all(k in n for k in ("id", "kind", "subject", "message", "created_at", "read")),
+              "notification items carry id/kind/subject/message/created_at/read", repr(n)[:120])
+
     code, body = member.req(f"/api/support/{ticket_id}")
     replies = (body or {}).get("replies") or []
     check(bool(replies), "reply appears in ticket detail")
@@ -352,6 +359,35 @@ def run():
         row = next((u for u in (body or {}).get("users", []) if u.get("username") == username), {})
         check(row.get("is_active") in (1, True) and not row.get("banned_at"),
               "unban via banned:false clears is_active and banned_at (the always-bans regression)", repr(row)[:160])
+
+    # -- notifications: staff reply surfaces, mark-read clears it ---------------
+    code, body = admin.req(f"/api/admin/support/{ticket_id}/reply", "POST", {"message": "Staff follow-up"}, admin_csrf)
+    check(code == 200 and is_str((body or {}).get("id")), "staff reply: 200 {id}", f"{code} {repr(body)[:120]}")
+
+    code, body = member.req("/api/notifications")
+    items = (body or {}).get("notifications") or []
+    staff = [n for n in items if n.get("kind") == "ticket_reply" and n.get("ticket_id") == ticket_id]
+    check(bool(staff) and (body or {}).get("unread_count", 0) >= 1,
+          "staff reply surfaces as an unread ticket_reply notification", repr(body)[:160])
+    for n in staff:
+        check(n.get("id", "").startswith("reply:") and n.get("read") is False,
+              "ticket_reply notification has a reply: ref and starts unread", repr(n)[:120])
+
+    code, body = member.req("/api/notifications/read", "POST", {"ids": [staff[0]["id"]]} if staff else {"all": True})
+    check(code == 200 and (body or {}).get("ok") is True,
+          "POST /api/notifications/read marks ids read", f"{code} {repr(body)[:120]}")
+    _, body = member.req("/api/notifications")
+    remaining = [n for n in (body or {}).get("notifications", []) if not n.get("read")]
+    check(all(n.get("id") != (staff[0]["id"] if staff else None) for n in remaining),
+          "marked notification no longer unread")
+
+    code, body = member.req("/api/notifications/read", "POST", {"all": True})
+    check(code == 200 and (body or {}).get("ok") is True, "POST /api/notifications/read {all:true} works", str(code))
+    _, body = member.req("/api/notifications")
+    check((body or {}).get("unread_count") == 0, "mark-all-read clears unread_count", repr(body)[:120])
+
+    code, _ = member.req("/api/notifications/read", "POST", {"ids": ["bogus"]})
+    check(code == 400, "POST /api/notifications/read rejects bad ids (400)", str(code))
 
     # -- non-admin boundary (guards) -------------------------------------------
     code, body = member.req("/api/admin/users")
