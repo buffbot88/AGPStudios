@@ -91,6 +91,14 @@ NEWS = {"news": [
     {"id": "n1", "title": "Paws & Parcels and Everenfell are live",
      "summary": "Both game servers are online. Sign in to manage your account and jump in.",
      "url": "#news", "published_at": int(time.time())},
+    # Static sample of the GitHub-commit items the real API merges into
+    # /api/news (recent commits across buffbot88's public repos). The mock
+    # never calls out to api.github.com; this keeps the external shape
+    # (github: id, commit URL) covered by contract tests deterministically.
+    {"id": "github:mock0001", "title": "Trim homepage: no Play button, no games grid",
+     "summary": "AGPStudios · Trim homepage: no Play button, no games grid",
+     "url": "https://github.com/buffbot88/AGPStudios/commit/mock0001",
+     "published_at": int(time.time()) - 3600},
 ]}
 
 # Shape-only OIDC signing key for local contract tests. The mock never issues

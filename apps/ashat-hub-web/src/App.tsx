@@ -204,25 +204,6 @@ function App() {
           </div>
         </section>
 
-        <section className="section" id="featured-video" aria-labelledby="featured-video-title">
-          <SectionHeader title={FEATURED_VIDEO.title} text="Latest from the studio." />
-          <div className="video-frame">
-            <iframe
-              src={FEATURED_VIDEO.embedUrl}
-              title={FEATURED_VIDEO.title}
-              loading="lazy"
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-              referrerPolicy="strict-origin-when-cross-origin"
-              allowFullScreen
-            />
-          </div>
-          <p className="community-note">
-            <a className="link-action" href={FEATURED_VIDEO.watchUrl} target="_blank" rel="noreferrer">
-              Watch on YouTube <span aria-hidden>→</span>
-            </a>
-          </p>
-        </section>
-
         <section className="section" id="news" aria-labelledby="news-title">
           <SectionHeader title="Studio News" text="Updates from across the studio." action="View All News" href="#news" />
           <div className="news-list-panel">
@@ -239,10 +220,22 @@ function App() {
           </div>
         </section>
 
-        <section className="section" id="community" aria-labelledby="community-title">
-          <SectionHeader title="Community" text="Play together. A brighter tomorrow." />
+        <section className="section" id="featured-video" aria-labelledby="featured-video-title">
+          <SectionHeader title={FEATURED_VIDEO.title} text="Latest from the studio." />
+          <div className="video-frame">
+            <iframe
+              src={FEATURED_VIDEO.embedUrl}
+              title={FEATURED_VIDEO.title}
+              loading="lazy"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+              referrerPolicy="strict-origin-when-cross-origin"
+              allowFullScreen
+            />
+          </div>
           <p className="community-note">
-            Paws & Parcels and Everenfell share one AGP Studios account. {user ? 'See you in the worlds.' : 'Sign in to join both.'}
+            <a className="link-action" href={FEATURED_VIDEO.watchUrl} target="_blank" rel="noreferrer">
+              Watch on YouTube <span aria-hidden>→</span>
+            </a>
           </p>
         </section>
           </>

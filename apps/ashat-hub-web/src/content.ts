@@ -154,10 +154,7 @@ export const FEATURED_VIDEO = {
 
 export const FOOTER = {
   tagline: 'Play Together. A Brighter Tomorrow.',
-  links: [
-    { label: 'Home', href: '#top' },
-    { label: 'Support', href: '#support' },
-  ],
+  links: [] as { label: string; href: string }[],
   socials: [
     { label: 'Discord', href: 'https://discord.gg/nKPtUF4KHt', icon: 'discord' },
     { label: 'YouTube', href: 'https://www.youtube.com/@stressthismess', icon: 'youtube' },

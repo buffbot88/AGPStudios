@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Python API for the retained Ashat Hub surface."""
 from base64 import b64encode, urlsafe_b64encode, urlsafe_b64decode
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from hashlib import sha256
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -50,6 +52,86 @@ AUTH_CORS_ORIGINS = {"https://mko.agpstudios.org", "https://everenfell.agpstudio
 AUTH_CORS_PATHS = {"/api/auth/session", "/api/auth/login", "/api/auth/register", "/api/auth/logout"}
 AUTH_CORS_METHODS = {"GET", "POST"}
 AUTH_CORS_HEADERS = {"content-type", "x-csrf-token"}
+
+# Studio news from GitHub: recent commits across buffbot88's public repos,
+# merged with the curated studio_news rows. The unauthenticated GitHub API
+# budget is 60 requests/hour per IP; one refresh costs 1 (repo list) + up to
+# GITHUB_NEWS_MAX_REPOS (one commit list each), so a 30-minute cache keeps
+# usage around 22/hour. Any GitHub failure degrades to the curated rows
+# (or the last good cache) instead of failing the endpoint.
+GITHUB_USER = "buffbot88"
+GITHUB_NEWS_TTL = 1800
+GITHUB_NEWS_MAX_REPOS = 10
+GITHUB_NEWS_PER_REPO = 3
+GITHUB_NEWS_CACHE = {"items": [], "fetched_at": 0.0}
+GITHUB_NEWS_LOCK = threading.Lock()
+
+
+def github_get_json(url):
+    request = Request(url, headers={
+        "User-Agent": "AGPStudios-Hub/1.0",
+        "Accept": "application/vnd.github+json",
+    })
+    with urlopen(request, timeout=8) as response:
+        if response.status != 200:
+            raise RuntimeError(f"github {response.status}")
+        return json.loads(response.read())
+
+
+def github_repo_commits(repo):
+    """Latest commits on one repo as news items; [] when that repo fails."""
+    try:
+        commits = github_get_json(
+            f"https://api.github.com/repos/{GITHUB_USER}/{repo}/commits?per_page={GITHUB_NEWS_PER_REPO}")
+        items = []
+        for commit in commits if isinstance(commits, list) else []:
+            sha = commit.get("sha", "")
+            detail = commit.get("commit", {}) or {}
+            message = (detail.get("message") or "").strip()
+            if not sha or not message:
+                continue
+            subject = message.split("\n", 1)[0].strip()[:140]
+            try:
+                published = int(datetime.fromisoformat(
+                    ((detail.get("author", {}) or {}).get("date", "")).replace("Z", "+00:00")).timestamp())
+            except (ValueError, TypeError, OverflowError, OSError):
+                published = int(time.time())
+            items.append({
+                "id": f"github:{sha}",
+                "title": subject or repo,
+                "summary": f"{repo} · {subject}",
+                "url": commit.get("html_url") or f"https://github.com/{GITHUB_USER}/{repo}",
+                "published_at": published,
+            })
+        return items
+    except Exception:
+        return []
+
+
+def github_commit_news():
+    """Recent commits across the user's public repos; [] when GitHub is unreachable."""
+    now = time.time()
+    with GITHUB_NEWS_LOCK:
+        if GITHUB_NEWS_CACHE["items"] and now - GITHUB_NEWS_CACHE["fetched_at"] < GITHUB_NEWS_TTL:
+            return list(GITHUB_NEWS_CACHE["items"])
+    try:
+        repos = github_get_json(
+            f"https://api.github.com/users/{GITHUB_USER}/repos?per_page=100&type=public")
+        public = [r for r in repos if isinstance(r, dict) and r.get("name") and not r.get("private")]
+        public.sort(key=lambda r: r.get("pushed_at", ""), reverse=True)
+        names = [r["name"] for r in public[:GITHUB_NEWS_MAX_REPOS]]
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            per_repo = pool.map(github_repo_commits, names)
+        items = sorted(
+            (item for commits in per_repo for item in commits),
+            key=lambda item: item["published_at"], reverse=True)[:20]
+    except Exception:
+        with GITHUB_NEWS_LOCK:
+            return list(GITHUB_NEWS_CACHE["items"])
+    with GITHUB_NEWS_LOCK:
+        GITHUB_NEWS_CACHE["items"] = items
+        GITHUB_NEWS_CACHE["fetched_at"] = now
+    return list(items)
 
 
 def payment_cipher():
@@ -826,7 +908,12 @@ class Proxy(BaseHTTPRequestHandler):
             return error(self, f"games unavailable: {exc}", 503)
 
     def news_list(self):
-        """Public read-only list of studio news for the homepage."""
+        """Public read-only list of studio news for the homepage.
+
+        Curated `studio_news` rows merged with recent commits across
+        buffbot88's public GitHub repos (cached 30 min; DB rows alone when
+        GitHub is unreachable), newest first.
+        """
         try:
             with db() as conn:
                 with conn.cursor() as cur:
@@ -839,9 +926,14 @@ class Proxy(BaseHTTPRequestHandler):
                 "url": row["url"] or "#news",
                 "published_at": row["published_at"],
             } for row in rows]
-            return oidc_json(self, {"news": news})
         except Exception as exc:
             return error(self, f"news unavailable: {exc}", 503)
+        try:
+            news = sorted(news + github_commit_news(),
+                          key=lambda item: item["published_at"], reverse=True)[:20]
+        except Exception:
+            pass
+        return oidc_json(self, {"news": news})
 
     def game_status(self):
         try:

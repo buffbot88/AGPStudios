@@ -28,13 +28,15 @@ export function SiteFooter() {
             <b>AGP</b> STUDIOS
           </a>
         </div>
-        <nav className="footer-nav" aria-label="Footer">
-          {FOOTER.links.map((link) => (
-            <a key={link.href} href={link.href}>
-              {link.label}
-            </a>
-          ))}
-        </nav>
+        {FOOTER.links.length > 0 && (
+          <nav className="footer-nav" aria-label="Footer">
+            {FOOTER.links.map((link) => (
+              <a key={link.href} href={link.href}>
+                {link.label}
+              </a>
+            ))}
+          </nav>
+        )}
         <div className="footer-identity">
           <span>{FOOTER.tagline}</span>
           <div className="footer-socials">

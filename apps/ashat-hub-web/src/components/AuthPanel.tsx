@@ -160,7 +160,7 @@ export function AuthPanel({ onChange, onNavigate, embedded = false }: { onChange
 
   /** Navigate the studio SPA. Paths map to hash routes; account is the menu itself. */
   function navigateFromMenu(path: string) {
-    const target = path === '/community' ? '#community' : path === '/admin' ? '#admin' : '#account';
+    const target = path === '/admin' ? '#admin' : '#account';
     onNavigate?.(target);
     if (window.location.hash === target) {
       window.dispatchEvent(new HashChangeEvent('hashchange'));
@@ -187,9 +187,8 @@ export function AuthPanel({ onChange, onNavigate, embedded = false }: { onChange
         <summary className="auth-menu-trigger"><span>{safeText(user.display_name) || safeText(user.username)}</span>{safeText(user.role).toLowerCase() === 'admin' && <span className="auth-role-badge">Admin</span>}<span className="auth-menu-chevron">⌄</span></summary>
         <div className="auth-menu-panel">
           <span className="auth-menu-email">{safeText(user.email)}</span>
-          {onNavigate && <nav className="auth-menu-links" aria-label="Account navigation">
-            <button type="button" className="auth-menu-link" onClick={() => navigateFromMenu('/community')}>Community</button>
-            {user.role.toLowerCase() === 'admin' && <button type="button" className="auth-menu-link" onClick={() => navigateFromMenu('/admin')}>Admin</button>}
+          {onNavigate && user.role.toLowerCase() === 'admin' && <nav className="auth-menu-links" aria-label="Account navigation">
+            <button type="button" className="auth-menu-link" onClick={() => navigateFromMenu('/admin')}>Admin</button>
           </nav>}
           <button type="button" className="auth-logout" onClick={() => void logout()} disabled={busy}>Sign out</button>
         </div>
