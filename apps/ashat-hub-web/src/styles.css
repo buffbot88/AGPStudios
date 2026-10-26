@@ -1134,41 +1134,44 @@ h3 {
 }
 
 /* ---------- News & community ---------- */
-.news-panel {
-  padding: 28px 32px;
+/* Studio news: one compact card with up to ten recent-commit rows. */
+.news-list-panel {
+  padding: 6px 28px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: linear-gradient(160deg, rgba(42, 51, 58, 0.6), rgba(16, 20, 23, 0.88));
 }
 
-/* Editorial composition: the latest story spans the full width and sets a
-   larger title; older stories pair up beneath it. */
-.news-list-panel {
+.news-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.news-rows li {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
+  gap: 2px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
 }
 
-.news-panel:first-child {
-  grid-column: 1 / -1;
-  padding: 36px 40px;
+.news-rows li:last-child {
+  border-bottom: 0;
 }
 
-.news-panel:first-child h3 {
-  font-size: 32px;
+.news-row-title {
+  font-weight: 600;
+  font-size: 14.5px;
 }
 
-.news-panel h3 {
-  margin: 8px 0 6px;
-  font-family: 'Playfair Display', serif;
-  font-size: 24px;
+a.news-row-title:hover {
+  color: var(--gold);
 }
 
-.news-panel p {
-  margin: 0 0 14px;
+.news-row-summary {
   color: var(--text-muted);
-  max-width: 640px;
-  line-height: 1.6;
+  font-size: 12.5px;
+  line-height: 1.5;
 }
 
 .community-note {
@@ -1748,15 +1751,7 @@ h3 {
   }
 
   .news-list-panel {
-    grid-template-columns: 1fr;
-  }
-
-  .news-panel:first-child {
-    padding: 28px 24px;
-  }
-
-  .news-panel:first-child h3 {
-    font-size: 26px;
+    padding: 4px 20px;
   }
 
   .featured-card {

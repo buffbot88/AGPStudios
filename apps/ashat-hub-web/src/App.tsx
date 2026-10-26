@@ -228,18 +228,28 @@ function App() {
         </section>
 
         <section className="section reveal" id="news" aria-labelledby="news-title">
-          <SectionHeader title="Studio News" text="Updates from across the studio." action="View All News" href="#news" />
-          <div className="news-list-panel">
-            {newsList.map((item, index) => (
-              <article className="news-panel" key={`${safeText(item.title)}-${index}`}>
-                {index === 0 && <span className="eyebrow">Latest</span>}
-                <h3>{safeText(item.title)}</h3>
-                <p>{safeText(item.summary)}</p>
-                <a className="link-action" href={safeText(item.url, '#news')}>
-                  Read the Latest <span aria-hidden>→</span>
-                </a>
-              </article>
-            ))}
+          <SectionHeader title="Studio News" text="Recent commits from across the studio." />
+          <div className="news-card news-list-panel">
+            <ol className="news-rows">
+              {newsList.slice(0, 10).map((item, index) => {
+                const href = safeText(item.url, '#news');
+                const external = href.startsWith('http');
+                return (
+                  <li key={`${safeText(item.title)}-${index}`}>
+                    <a
+                      className="news-row-title"
+                      href={href}
+                      {...(external ? { target: '_blank', rel: 'noreferrer' } : {})}
+                    >
+                      {safeText(item.title)}
+                    </a>
+                    {safeText(item.summary) && (
+                      <span className="news-row-summary">{safeText(item.summary)}</span>
+                    )}
+                  </li>
+                );
+              })}
+            </ol>
           </div>
         </section>
 
