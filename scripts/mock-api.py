@@ -330,18 +330,20 @@ class Handler(BaseHTTPRequestHandler):
         if self.command in ("POST", "PUT", "DELETE"):
             supplied = self.headers.get("X-CSRF-Token", "")
             if not supplied or supplied != CSRF.get(token):
-                return None, None, err("csrf token required", 403)
+                return None, None, err("csrf_failed", 403)
         return token, user, None
 
     def require_admin(self):
-        """Mirror proxy.py: no session yields 403 admin_authentication_required, not 401."""
+        """Mirror proxy.py: no session yields 403 admin_session_required, non-admin yields admin_role_required (not 401)."""
         token, user = self.current_user()
-        if not user or user["role"].lower() != "admin":
-            return None, err("admin authentication required", 403)
+        if not user:
+            return None, err("admin session required", 403)
+        if user["role"].lower() != "admin":
+            return None, err("admin role required", 403)
         if self.command in ("POST", "PUT", "DELETE"):
             supplied = self.headers.get("X-CSRF-Token", "")
             if not supplied or supplied != CSRF.get(token):
-                return None, err("csrf token required", 403)
+                return None, err("csrf_failed", 403)
         return user, None
 
     def migrations_summary(self):
@@ -901,7 +903,7 @@ class Handler(BaseHTTPRequestHandler):
             if failure:
                 return self.reply(*failure)
             if user["role"].lower() != "admin":
-                return self.reply(*err("admin authentication required", 403))
+                return self.reply(*err("admin role required", 403))
             return self.reply(200, {"servers": [], "updated_at": int(time.time())})
 
         if path == "/api/admin/omega/servers":
@@ -909,7 +911,7 @@ class Handler(BaseHTTPRequestHandler):
             if failure:
                 return self.reply(*failure)
             if user["role"].lower() != "admin":
-                return self.reply(*err("admin authentication required", 403))
+                return self.reply(*err("admin role required", 403))
             return self.reply(200, {"servers": []})
 
         return self.reply(404, {"error": {"code": "not_found", "message": "unknown endpoint"}})

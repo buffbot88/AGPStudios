@@ -352,9 +352,10 @@ class Proxy(BaseHTTPRequestHandler):
 
     def admin_migrations_apply(self):
         """Apply pending migrations, or record them as applied when baselining."""
-        user=self.admin_user()
-        if not user: return error(self,"admin authentication required",403)
-        if not self.csrf_ok(user): return error(self,"csrf token required",403)
+        user=self.current_user()
+        if not user: return error(self,"admin session required",403)
+        if str(user.get('role','')).lower() != 'admin': return error(self,"admin role required",403)
+        if not self.csrf_ok(user): return error(self,"csrf_failed",403)
         try:
             length=int(self.headers.get("Content-Length","0")); form=json.loads(self.rfile.read(length) or b'{}')
             baseline=bool(form.get('baseline', False))
@@ -381,9 +382,10 @@ class Proxy(BaseHTTPRequestHandler):
         """PUT /api/admin/games/:slug — swap poster art without a migration.
         Other fields (title, summary, url, status, featured) are accepted for
         future use but currently ignored; only poster is updatable here."""
-        user=self.admin_user()
-        if not user: return error(self,"admin authentication required",403)
-        if not self.csrf_ok(user): return error(self,"csrf token required",403)
+        user=self.current_user()
+        if not user: return error(self,"admin session required",403)
+        if str(user.get('role','')).lower() != 'admin': return error(self,"admin role required",403)
+        if not self.csrf_ok(user): return error(self,"csrf_failed",403)
         if not slug: return error(self,"game slug required")
         try:
             length=int(self.headers.get("Content-Length","0")); form=json.loads(self.rfile.read(length) or b'{}')
@@ -431,8 +433,9 @@ class Proxy(BaseHTTPRequestHandler):
         return False
 
     def admin_get(self):
-        user=self.admin_user()
-        if not user: return error(self,"admin authentication required",403)
+        user=self.current_user()
+        if not user: return error(self,"admin session required",403)
+        if str(user.get('role','')).lower() != 'admin': return error(self,"admin role required",403)
         path=urlparse(self.path).path; query=parse_qs(urlparse(self.path).query)
         if path == '/api/admin/repo-status':
             root='/var/oled/data/AshatHub'
@@ -506,7 +509,7 @@ class Proxy(BaseHTTPRequestHandler):
     def acoins_order(self):
         user=self.current_user()
         if not user: return error(self,'authentication required',401)
-        if not self.csrf_ok(user): return error(self,'csrf token required',403)
+        if not self.csrf_ok(user): return error(self,'csrf_failed',403)
         try:
             length=int(self.headers.get('Content-Length','0'))
             if not 0 <= length <= 1024: return error(self,'invalid ACoins package')
@@ -548,7 +551,7 @@ class Proxy(BaseHTTPRequestHandler):
     def acoins_capture(self):
         user=self.current_user()
         if not user: return error(self,'authentication required',401)
-        if not self.csrf_ok(user): return error(self,'csrf token required',403)
+        if not self.csrf_ok(user): return error(self,'csrf_failed',403)
         try:
             length=int(self.headers.get('Content-Length','0'))
             if not 0 <= length <= 1024: return error(self,'invalid PayPal order')
@@ -593,9 +596,10 @@ class Proxy(BaseHTTPRequestHandler):
             return error(self,'Payment confirmation unavailable',503)
 
     def admin_post(self):
-        user=self.admin_user()
-        if not user: return error(self,"admin authentication required",403)
-        if not self.csrf_ok(user): return error(self,"csrf token required",403)
+        user=self.current_user()
+        if not user: return error(self,"admin session required",403)
+        if str(user.get('role','')).lower() != 'admin': return error(self,"admin role required",403)
+        if not self.csrf_ok(user): return error(self,"csrf_failed",403)
         path=urlparse(self.path).path; length=int(self.headers.get("Content-Length","0"))
         if path == '/api/admin/payments/settings' and not 0 <= length <= 4096: return error(self,'invalid payment settings')
         form=json.loads(self.rfile.read(length) or b'{}')
@@ -714,9 +718,10 @@ class Proxy(BaseHTTPRequestHandler):
         except Exception as exc: return error(self,f"admin unavailable: {exc}",503)
 
     def admin_user_delete(self, uid):
-        user=self.admin_user()
-        if not user: return error(self,"admin authentication required",403)
-        if not self.csrf_ok(user): return error(self,"csrf token required",403)
+        user=self.current_user()
+        if not user: return error(self,"admin session required",403)
+        if str(user.get('role','')).lower() != 'admin': return error(self,"admin role required",403)
+        if not self.csrf_ok(user): return error(self,"csrf_failed",403)
         if not uid: return error(self,"user id required")
         if uid == str(user.get('id','')): return error(self,"cannot delete your own account",409)
         try:
@@ -732,9 +737,10 @@ class Proxy(BaseHTTPRequestHandler):
         except Exception as exc: return error(self,f"admin unavailable: {exc}",503)
 
     def admin_audit_prune(self):
-        user=self.admin_user()
-        if not user: return error(self,"admin authentication required",403)
-        if not self.csrf_ok(user): return error(self,"csrf token required",403)
+        user=self.current_user()
+        if not user: return error(self,"admin session required",403)
+        if str(user.get('role','')).lower() != 'admin': return error(self,"admin role required",403)
+        if not self.csrf_ok(user): return error(self,"csrf_failed",403)
         try:
             length=int(self.headers.get("Content-Length","0")); form=json.loads(self.rfile.read(length) or b'{}'); before=form.get('before_id')
             if not isinstance(before,int) or before < 1: return error(self,"integer before_id required")
@@ -913,7 +919,7 @@ class Proxy(BaseHTTPRequestHandler):
     def member_post(self):
         user=self.current_user()
         if not user: return error(self,"authentication required",401)
-        if not self.csrf_ok(user): return error(self,"csrf token required",403)
+        if not self.csrf_ok(user): return error(self,"csrf_failed",403)
         path=urlparse(self.path).path; length=int(self.headers.get("Content-Length","0")); form=json.loads(self.rfile.read(length))
         try:
             with db() as conn:
@@ -931,7 +937,7 @@ class Proxy(BaseHTTPRequestHandler):
     def account_update(self):
         user=self.current_user()
         if not user: return error(self,"authentication required",401)
-        if not self.csrf_ok(user): return error(self,"csrf token required",403)
+        if not self.csrf_ok(user): return error(self,"csrf_failed",403)
         try:
             length=int(self.headers.get("Content-Length","0")); form=json.loads(self.rfile.read(length)); username=form.get("username", "").strip(); email=form.get("email", "").strip(); display=form.get("display_name", user["display_name"]).strip()
             if not username or not email or not display: return error(self,"username, email, and display_name are required")
@@ -946,7 +952,7 @@ class Proxy(BaseHTTPRequestHandler):
     def account_delete(self):
         user=self.current_user()
         if not user: return error(self,"authentication required",401)
-        if not self.csrf_ok(user): return error(self,"csrf token required",403)
+        if not self.csrf_ok(user): return error(self,"csrf_failed",403)
         form=json.loads(getattr(self,'_delete_body',b'{}') or b'{}')
         if form.get('confirm') != 'DELETE': return error(self,"confirm DELETE to remove the account",400)
         try:

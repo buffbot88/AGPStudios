@@ -198,7 +198,7 @@ export function encodeFilePath(path: string): string {
  * Core API request helper with automatic CSRF handling and 503 retry.
  *
  * - Adds Accept/Content-Type/X-CSRF-Token headers automatically.
- * - On 403 csrf_failed: refreshes the session cookie and retries once.
+ * - On 403 csrf_failed (legacy: csrf token required): refreshes the session cookie and retries once.
  * - On 503: waits 1.2s and retries once (throws TransientError on second failure).
  * - Parses JSON body and surfaces `error` field from the response.
  */
@@ -234,7 +234,7 @@ export async function request<T>(
   const message = errorMessage(error, '');
 
   // CSRF retry: refresh session cookie then retry once
-  if (response.status === 403 && message === 'csrf_failed' && !_retried) {
+  if (response.status === 403 && (message === 'csrf_failed' || message === 'csrf token required') && !_retried) {
     await fetch(`${API}/auth/session`, { credentials: 'same-origin' });
     return request<T>(url, init, true, _retried503);
   }
