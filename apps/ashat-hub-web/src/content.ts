@@ -153,7 +153,7 @@ export const FEATURED_VIDEO = {
 } as const;
 
 export const FOOTER = {
-  tagline: 'Play Together. A Brighter Tomorrow.',
+  tagline: 'A Home For Playable Worlds.',
   links: [] as { label: string; href: string }[],
   socials: [
     { label: 'Discord', href: 'https://discord.gg/nKPtUF4KHt', icon: 'discord' },

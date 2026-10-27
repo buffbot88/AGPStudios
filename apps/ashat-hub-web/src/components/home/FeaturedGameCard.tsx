@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import type { Game } from '../../content';
 import { statusPill, GameTags } from './primitives';
 import { safeText } from '../api';
@@ -19,8 +19,19 @@ function Chevron({ direction }: { direction: 'left' | 'right' }) {
  * markers (01 / 03), prev/next controls, and gentle auto-advance that pauses
  * on hover or keyboard focus (and respects prefers-reduced-motion). Works
  * with or without game art.
+ *
+ * Signed-in visitors get a Play button on each slide; an optional `account`
+ * panel renders in the card's side column, divided from the slide by a rule.
  */
-export function FeaturedGameCard({ games }: { games: Game[] }) {
+export function FeaturedGameCard({
+  games,
+  signedIn,
+  account,
+}: {
+  games: Game[];
+  signedIn: boolean;
+  account?: ReactNode;
+}) {
   const [active, setActive] = useState(0);
   const [paused, setPaused] = useState(false);
   const count = games.length;
@@ -64,23 +75,36 @@ export function FeaturedGameCard({ games }: { games: Game[] }) {
             </span>
           )}
         </div>
-        <div className="featured-slide" key={safeText(game.slug)}>
-          <div className={`featured-poster${game.poster ? '' : ' no-art'}`}>
-            <PosterImage
-              src={safeText(game.poster)}
-              alt={game.posterAlt ?? `${safeText(game.title)} poster`}
-              fallbackClass="poster-fallback no-art"
-              fallback={<span>{safeText(game.title)}</span>}
-            />
-          </div>
-          <div className="featured-body">
-            <h2>{safeText(game.title)}</h2>
-            <p className="featured-summary">{safeText(game.summary)}</p>
-            <div className="pill-row">
-              {statusPill(game)}
-              <GameTags tags={game.tags} />
+        <div className="featured-content">
+          <div className="featured-slide" key={safeText(game.slug)}>
+            <div className={`featured-poster${game.poster ? '' : ' no-art'}`}>
+              <PosterImage
+                src={safeText(game.poster)}
+                alt={game.posterAlt ?? `${safeText(game.title)} poster`}
+                fallbackClass="poster-fallback no-art"
+                fallback={<span>{safeText(game.title)}</span>}
+              />
+            </div>
+            <div className="featured-body">
+              <h2>{safeText(game.title)}</h2>
+              <p className="featured-summary">{safeText(game.summary)}</p>
+              <div className="pill-row">
+                {statusPill(game)}
+                <GameTags tags={game.tags} />
+              </div>
+              {signedIn && (
+                <a
+                  className="primary-button"
+                  href={`${safeText(game.url)}/?auth=1`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Play <span aria-hidden>→</span>
+                </a>
+              )}
             </div>
           </div>
+          {account && <aside className="featured-account">{account}</aside>}
         </div>
         {count > 1 && (
           <div className="featured-nav">
@@ -93,11 +117,6 @@ export function FeaturedGameCard({ games }: { games: Game[] }) {
           </div>
         )}
       </div>
-      <aside className="featured-aside" aria-hidden>
-        <span>Live</span>
-        <span>Two worlds</span>
-        <span>One account</span>
-      </aside>
     </article>
   );
 }

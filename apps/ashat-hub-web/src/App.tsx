@@ -186,46 +186,32 @@ function App() {
         )}
         {route === 'home' && (
           <>
-        <HeroSection games={featuredGames} />
-
-        <section className="live-strip reveal" aria-label="Live servers">
-          {featuredGames.slice(0, 2).map((game) => (
-            <a
-              key={safeText(game.slug)}
-              className="live-card"
-              href={user ? `${safeText(game.url)}/?auth=1` : safeText(game.url)}
-              target="_blank"
-              rel="noreferrer"
-            >
-              <span className="live-dot" aria-hidden />
-              <span className="live-text">
-                <strong>{safeText(game.title)}</strong>
-                <small>Live now · {safeText(game.summary)}</small>
-              </span>
-              <span className="live-go" aria-hidden>→</span>
-            </a>
-          ))}
-          <div className="live-account">
-            <QuickInfoCard
-              icon={<AccountIcon />}
-              eyebrow="Your Account"
-              title={user ? `Welcome back, ${safeText(user.display_name) || safeText(user.username)}` : 'Your Account'}
-              description={
-                user
-                  ? 'Manage your account, support tickets, and access.'
-                  : 'Sign in to access your account and community tools.'
-              }
-              link={user ? 'Go to Account' : 'Sign In'}
-              href={user ? '#account' : '#top'}
-              onAction={user ? undefined : () => window.dispatchEvent(new CustomEvent('agp:signin'))}
-            />
-            {user && (
-              <button type="button" className="link-action signout-link" onClick={logout}>
-                Sign out
-              </button>
-            )}
-          </div>
-        </section>
+        <HeroSection
+          games={featuredGames}
+          signedIn={!!user}
+          account={
+            <>
+              <QuickInfoCard
+                icon={<AccountIcon />}
+                eyebrow="Your Account"
+                title={user ? `Welcome back, ${safeText(user.display_name) || safeText(user.username)}` : 'Your Account'}
+                description={
+                  user
+                    ? 'Manage your account, support tickets, and access.'
+                    : 'Sign in to access your account and community tools.'
+                }
+                link={user ? 'Go to Account' : 'Sign In'}
+                href={user ? '#account' : '#top'}
+                onAction={user ? undefined : () => window.dispatchEvent(new CustomEvent('agp:signin'))}
+              />
+              {user && (
+                <button type="button" className="link-action signout-link" onClick={logout}>
+                  Sign out
+                </button>
+              )}
+            </>
+          }
+        />
 
         <section className="section reveal" id="news" aria-labelledby="news-title">
           <SectionHeader title="Studio News" text="Recent commits from across the studio." />

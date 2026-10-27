@@ -63,8 +63,8 @@ test.describe('hostile API shapes', () => {
     await page.goto('/');
 
     // Games and news both arrive unusable; the homepage falls back to the
-    // static content rather than showing an empty strip or a white screen.
-    await expect(page.locator('.live-strip .live-card').first()).toBeVisible();
+    // static content rather than showing an empty card or a white screen.
+    await expect(page.locator('.featured-card .featured-account')).toBeVisible();
     await expect(page.locator('.news-list-panel')).toBeVisible();
     await expect(page.locator('.featured-card')).toBeVisible();
     await expect(page.locator('.surface-error')).toHaveCount(0);
