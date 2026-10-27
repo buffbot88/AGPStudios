@@ -3,6 +3,7 @@ import type { FormEvent } from 'react';
 import { API, clearShapeDrifts, request, safeList, safeNumber, safeText, safeTime } from './api';
 import { confirmModal, confirmToast, toast } from './toast';
 import { maybeCrash } from './devCrash';
+import { burstConfetti } from './confetti';
 import { PosterImage } from './home/PosterImage';
 import { UnexpectedDataNotice, UnexpectedDataPanel } from './UnexpectedDataNotice';
 
@@ -10,7 +11,7 @@ type User = { id: string; username: string; email: string; display_name: string;
 type AdminUser = { id: string; username: string; email: string; display_name: string; role: string; is_active: number; banned_at?: number | null; email_verified_at?: string | null; everenfell_s1?: number | boolean };
 type AdminSummary = {
   users: number; active_users: number; disabled_users: number;
-  open_tickets: number; active_deploys: number; active_projects: number;
+  open_tickets: number;
   database_manager: string;
 };
 type MigrationEntry = { filename: string; applied_at?: number | null; statements?: number | null; applied_by?: string };
@@ -34,7 +35,7 @@ const CLIENT_ERROR_FILTERS: { id: ClientErrorStatus | 'all'; label: string }[] =
   { id: 'muted', label: 'Muted' },
   { id: 'all', label: 'All' },
 ];
-type AdminTab = 'overview' | 'users' | 'games' | 'payments' | 'system';
+type AdminTab = 'overview' | 'users' | 'games' | 'website' | 'payments' | 'system';
 type RepoPair = { live: string; repo: string; state: string };
 type RepoStatus = { ashathub: RepoPair };
 type ModerationEvent = { id: number; user_id: string; action: string; actor_id: string; actor_name: string; detail: string; created_at: number };
@@ -73,7 +74,7 @@ function deployDot(status: string): { dot: string; cls: string } {
 export function AdminSurface({ user }: { user: User | null }) {
   const [tab, setTab] = useState<AdminTab>(() => {
     const value = window.location.hash.slice(1) as AdminTab;
-    return ['overview', 'users', 'games', 'payments', 'system'].includes(value) ? value : 'overview';
+    return ['overview', 'users', 'games', 'website', 'payments', 'system'].includes(value) ? value : 'overview';
   });
   const [summary, setSummary] = useState<AdminSummary | null>(null);
   const [users, setUsers] = useState<AdminUser[]>([]);
@@ -282,13 +283,13 @@ export function AdminSurface({ user }: { user: User | null }) {
     finally { setBusy(false); }
   }
 
-  async function updateGamePoster(slug: string, poster: string) {
+  async function updateGame(slug: string, fields: Record<string, unknown>) {
     setBusy(true); setError(null);
     try {
-      await request(`${API}/admin/games/${encodeURIComponent(slug)}`, { method: 'PUT', body: JSON.stringify({ poster }) });
-      toast('Poster updated.', 'success');
+      await request(`${API}/admin/games/${encodeURIComponent(slug)}`, { method: 'PUT', body: JSON.stringify(fields) });
+      toast('Game updated.', 'success');
       await load();
-    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Poster update failed'); }
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Game update failed'); }
     finally { setBusy(false); }
   }
 
@@ -317,6 +318,7 @@ export function AdminSurface({ user }: { user: User | null }) {
     { id: 'overview', label: 'Overview' },
     { id: 'users', label: 'Users' },
     { id: 'games', label: 'Games' },
+    { id: 'website', label: 'Website' },
     { id: 'payments', label: 'Payments' },
     { id: 'system', label: 'System' },
   ];
@@ -336,9 +338,10 @@ export function AdminSurface({ user }: { user: User | null }) {
         ))}
       </nav>
 
-      {tab === 'overview' && <OverviewTab summary={summary} onNavigate={setTab} />}
+      {tab === 'overview' && <OverviewTab summary={summary} games={games} onNavigate={setTab} />}
       {tab === 'users' && <UsersTab users={users} query={query} onQueryChange={setQuery} onSearch={load} onSelectUser={selectUser} selectedUser={selectedUser} busy={busy} currentUser={user} onUpdateUser={updateUser} onSetEverenfellS1={setEverenfellS1} onBanUser={banUser} onDeleteUser={deleteUser} moderation={moderation} moderationError={moderationError} onRefreshModeration={() => selectedUser && void loadModeration(selectedUser.id)} />}
-      {tab === 'games' && <GamesTab games={games} busy={busy} onUpdatePoster={updateGamePoster} />}
+      {tab === 'games' && <GamesTab games={games} busy={busy} onUpdateGame={updateGame} />}
+      {tab === 'website' && <WebsiteTab />}
       {tab === 'payments' && <PaymentsTab />}
       {tab === 'system' && <SystemTab loaded={loaded} database={database} settings={settings} onPush={pushGithub} onUpdate={systemUpdate} status={repoStatus} busy={busy} onApplyMigrations={applyMigrations} clientErrors={clientErrors} clientErrorsError={clientErrorsError} clientErrorsBusy={clientErrorsBusy} clientErrorsFilter={clientErrorsFilter} onFilterClientErrors={setClientErrorsFilter} onRefreshClientErrors={loadClientErrors} onTriageClientError={triageClientError} onMuteClientErrorMessage={muteClientErrorMessage} />}
     </section>
@@ -383,44 +386,367 @@ function PaymentsTab() {
 
 // ── Games Tab ──
 
-function GamesTab({ games, busy, onUpdatePoster }: { games: AdminGame[]; busy: boolean; onUpdatePoster: (slug: string, poster: string) => void }) {
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const draft = (slug: string, current: string) => drafts[slug] ?? current;
+function GamesTab({ games, busy, onUpdateGame }: { games: AdminGame[]; busy: boolean; onUpdateGame: (slug: string, fields: Record<string, unknown>) => void }) {
+  type GameDraft = { title: string; summary: string; status: string; url: string; featured: boolean; sort_order: string; tags: string; poster: string };
+  const [drafts, setDrafts] = useState<Record<string, Partial<GameDraft>>>({});
+  const blank: GameDraft = { title: '', summary: '', status: '', url: '', featured: false, sort_order: '', tags: '', poster: '' };
+  const draft = (game: AdminGame): GameDraft => ({
+    title: safeText(game.title), summary: safeText(game.summary), status: safeText(game.status),
+    url: safeText(game.url), featured: Boolean(game.featured),
+    sort_order: String(game.sort_order ?? ''),
+    tags: safeList<string>(game.tags).join(', '), poster: safeText(game.poster),
+    ...drafts[safeText(game.slug)],
+  });
+  const set = (slug: string, patch: Partial<GameDraft>) =>
+    setDrafts((prev) => ({ ...prev, [slug]: { ...prev[slug], ...patch } }));
+  function save(game: AdminGame) {
+    const slug = safeText(game.slug);
+    const current = draft(game);
+    onUpdateGame(slug, {
+      title: current.title.trim(), summary: current.summary.trim(), status: current.status,
+      url: current.url.trim(), featured: current.featured,
+      sort_order: current.sort_order.trim() === '' ? 0 : Number(current.sort_order),
+      tags: current.tags.split(',').map((tag) => tag.trim()).filter(Boolean),
+      poster: current.poster.trim(),
+    });
+  }
   return (
     <div className="adm-panel-layout">
       <div className="adm-games-list">
-        <div className="adm-toolbar"><span className="eyebrow">Game art</span><span className="refresh-state">Poster URLs update live — no redeploy needed</span></div>
-        {safeList<AdminGame>(games).filter(Boolean).map((game) => (
-          <form className="adm-game-row" key={safeText(game.slug)} onSubmit={(e) => { e.preventDefault(); onUpdatePoster(safeText(game.slug), draft(safeText(game.slug), safeText(game.poster)).trim()); }}>
-            <div className="adm-game-thumb">
-              <PosterImage
-                src={draft(safeText(game.slug), safeText(game.poster))}
-                alt=""
-                fallbackClass="thumb-fallback fallback-in-development"
-                fallback={<span aria-hidden>◎</span>}
-              />
-            </div>
-            <div className="adm-game-info">
-              <strong>{safeText(game.title)}</strong>
-              <small>{safeText(game.slug)} · {safeText(game.status)}{game.featured ? ' · featured' : ''}</small>
-              <input className="adm-game-poster-input" value={draft(safeText(game.slug), safeText(game.poster))}
-                onChange={(e) => setDrafts({ ...drafts, [safeText(game.slug)]: e.target.value })}
-                placeholder="/poster.svg or https://…" spellCheck={false} />
-            </div>
-            <button type="submit" className="secondary-button" disabled={busy}>Save poster</button>
-          </form>
-        ))}
+        <div className="adm-toolbar"><span className="eyebrow">Games</span><span className="refresh-state">Edits apply live — no redeploy needed</span></div>
+        {safeList<AdminGame>(games).filter(Boolean).map((game) => {
+          const slug = safeText(game.slug);
+          const current = draft(game);
+          return (
+            <form className="adm-game-row adm-game-edit" key={slug} onSubmit={(e) => { e.preventDefault(); save(game); }}>
+              <div className="adm-game-thumb">
+                <PosterImage
+                  src={current.poster}
+                  alt=""
+                  fallbackClass="thumb-fallback fallback-in-development"
+                  fallback={<span aria-hidden>◎</span>}
+                />
+              </div>
+              <div className="adm-game-fields">
+                <div className="adm-game-grid">
+                  <label>Title<input value={current.title} onChange={(e) => set(slug, { title: e.target.value })} required maxLength={120} /></label>
+                  <label>Slug<span className="adm-field-value mono">{slug}</span></label>
+                  <label className="adm-span">Summary<textarea value={current.summary} onChange={(e) => set(slug, { summary: e.target.value })} required maxLength={500} rows={2} /></label>
+                  <label>Status<select value={current.status} onChange={(e) => set(slug, { status: e.target.value })}><option value="live">live</option><option value="in-development">in-development</option><option value="coming-soon">coming-soon</option></select></label>
+                  <label>Sort<input type="number" min={0} max={1000} value={current.sort_order} onChange={(e) => set(slug, { sort_order: e.target.value })} /></label>
+                  <label className="adm-span">URL<input value={current.url} onChange={(e) => set(slug, { url: e.target.value })} placeholder="https://…" spellCheck={false} maxLength={500} /></label>
+                  <label className="adm-span">Tags (comma separated)<input value={current.tags} onChange={(e) => set(slug, { tags: e.target.value })} placeholder="Cozy, Exploration" maxLength={200} /></label>
+                  <label className="adm-span">Poster URL<input className="adm-game-poster-input" value={current.poster} onChange={(e) => set(slug, { poster: e.target.value })} placeholder="/poster.svg or https://…" spellCheck={false} /></label>
+                  <label className="adm-check"><input type="checkbox" checked={current.featured} onChange={(e) => set(slug, { featured: e.target.checked })} /> Featured on homepage</label>
+                </div>
+                <div className="adm-game-actions"><button type="submit" className="secondary-button" disabled={busy}>Save game</button></div>
+              </div>
+            </form>
+          );
+        })}
         {games.length === 0 && <div className="adm-empty">No games configured.</div>}
       </div>
     </div>
   );
 }
 
+// ── Website Tab: homepage content, registration controls, news curation ──
+
+type CuratedNews = { id: string; title: string; summary: string; url: string; published_at: number; created_at?: number };
+
+const HOMEPAGE_FIELDS: { key: string; label: string; max: number }[] = [
+  { key: 'featured_video.embed_url', label: 'Featured video embed URL', max: 500 },
+  { key: 'featured_video.watch_url', label: 'Featured video watch URL', max: 500 },
+  { key: 'footer.tagline', label: 'Footer tagline', max: 160 },
+  { key: 'footer.discord_url', label: 'Discord invite URL', max: 500 },
+  { key: 'footer.youtube_url', label: 'YouTube channel URL', max: 500 },
+];
+
+const REGISTER_FIELDS: { key: string; label: string; hint: string; min: number; max: number }[] = [
+  { key: 'register.challenge_difficulty', label: 'Challenge difficulty (leading zero hex chars)', hint: 'Higher = slower for humans and bots alike. 4 is ~seconds in a browser.', min: 1, max: 8 },
+  { key: 'register.budget', label: 'Registrations allowed per window, per IP', hint: 'Bot brake. 5 is strict; raise only if real users hit it.', min: 1, max: 100 },
+  { key: 'register.window_seconds', label: 'Rate-limit window (seconds)', hint: 'How long the per-IP budget lasts.', min: 60, max: 3600 },
+  { key: 'register.max_accounts_per_ip', label: 'Lifetime accounts allowed per IP', hint: 'Anti-farming: 2 means one person gets two accounts, ever, from one address.', min: 1, max: 100 },
+  { key: 'referral.bonus_acoins', label: 'Referral bonus (ACoins each side)', hint: 'Paid to the referrer and the new account on signup. 0 disables payouts.', min: 0, max: 10000 },
+  { key: 'referral.uses_per_day', label: 'Paid referral uses per link per day', hint: 'Each link pays this many bonuses per rolling 24h; extra signups still register.', min: 1, max: 1000 },
+];
+
+function WebsiteTab() {
+  const [settings, setSettings] = useState<Record<string, string> | null>(null);
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [news, setNews] = useState<CuratedNews[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [newItem, setNewItem] = useState({ title: '', summary: '', url: '' });
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editItem, setEditItem] = useState({ title: '', summary: '', url: '' });
+
+  const loadAll = useCallback(async () => {
+    try {
+      const [siteResult, newsResult] = await Promise.all([
+        request<{ settings: Record<string, string | number> }>(`${API}/admin/site-settings`),
+        request<{ news: CuratedNews[] }>(`${API}/admin/news`),
+      ]);
+      clearShapeDrifts();
+      const normalized: Record<string, string> = {};
+      for (const [key, value] of Object.entries(siteResult.settings ?? {})) normalized[key] = String(value);
+      setSettings(normalized);
+      setNews(safeList<CuratedNews>(newsResult.news));
+      setError('');
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Website settings unavailable'); }
+  }, []);
+
+  useEffect(() => { void loadAll(); }, [loadAll]);
+
+  const value = (key: string) => drafts[key] ?? settings?.[key] ?? '';
+
+  async function saveKeys(keys: string[], label: string) {
+    const patch: Record<string, string> = {};
+    for (const key of keys) patch[key] = (drafts[key] ?? settings?.[key] ?? '').trim();
+    setBusy(true); setError(''); setMessage('');
+    try {
+      await request(`${API}/admin/site-settings`, { method: 'PUT', body: JSON.stringify({ settings: patch }) });
+      setSettings((prev) => ({ ...prev, ...patch }));
+      setDrafts((prev) => { const next = { ...prev }; for (const key of keys) delete next[key]; return next; });
+      setMessage(`${label} saved — live on the homepage now.`);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Save failed'); }
+    finally { setBusy(false); }
+  }
+
+  async function addNews(event: FormEvent) {
+    event.preventDefault();
+    if (!newItem.title.trim() || !newItem.summary.trim()) return;
+    setBusy(true); setError(''); setMessage('');
+    try {
+      const result = await request<{ id: string }>(`${API}/admin/news`, {
+        method: 'POST',
+        body: JSON.stringify({ title: newItem.title.trim(), summary: newItem.summary.trim(), url: newItem.url.trim() || '#news' }),
+      });
+      setNewItem({ title: '', summary: '', url: '' });
+      setAdding(false);
+      setMessage('News item pinned.');
+      void loadAll();
+      void result;
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Add failed'); }
+    finally { setBusy(false); }
+  }
+
+  function startEdit(item: CuratedNews) {
+    setEditingId(safeText(item.id));
+    setEditItem({ title: safeText(item.title), summary: safeText(item.summary), url: safeText(item.url) });
+  }
+
+  async function saveEdit(id: string) {
+    setBusy(true); setError(''); setMessage('');
+    try {
+      await request(`${API}/admin/news/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        body: JSON.stringify({ title: editItem.title.trim(), summary: editItem.summary.trim(), url: editItem.url.trim() || '#news' }),
+      });
+      setEditingId(null);
+      setMessage('News item updated.');
+      void loadAll();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Update failed'); }
+    finally { setBusy(false); }
+  }
+
+  async function deleteNews(id: string, title: string) {
+    if (!(await confirmModal({ title: 'Remove this news item?', message: `"${title}" will no longer appear in Studio News.`, confirmLabel: 'Remove', requireText: 'DELETE' }))) return;
+    setBusy(true); setError(''); setMessage('');
+    try {
+      await request(`${API}/admin/news/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      setMessage('News item removed.');
+      void loadAll();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Delete failed'); }
+    finally { setBusy(false); }
+  }
+
+  if (!settings) return <section className="adm-panel"><p>{error || 'Loading website settings…'}</p></section>;
+
+  return (
+    <div className="adm-website">
+      {message && <p role="status" className="auth-success">{message}</p>}
+      {error && <p className="workspace-error" role="alert">{error}</p>}
+      <section className="adm-panel">
+        <span className="eyebrow">Homepage</span>
+        <h3>Featured video & footer</h3>
+        <p className="muted">Edits apply live on the next homepage load — no redeploy needed.</p>
+        <div className="adm-form-grid">
+          {HOMEPAGE_FIELDS.map((field) => (
+            <label key={field.key}>{field.label}
+              <input value={value(field.key)} maxLength={field.max} spellCheck={false}
+                onChange={(e) => setDrafts((prev) => ({ ...prev, [field.key]: e.target.value }))} />
+            </label>
+          ))}
+        </div>
+        <button type="button" className="secondary-button" disabled={busy} onClick={() => void saveKeys(HOMEPAGE_FIELDS.map((f) => f.key), 'Homepage content')}>Save homepage</button>
+      </section>
+      <section className="adm-panel">
+        <span className="eyebrow">Registration</span>
+        <h3>Bot defenses</h3>
+        <p className="muted">Proof-of-work difficulty and the per-IP registration budget take effect immediately for new signups.</p>
+        <div className="adm-form-grid">
+          {REGISTER_FIELDS.map((field) => (
+            <label key={field.key}>{field.label}<small>{field.hint}</small>
+              <input type="number" min={field.min} max={field.max} value={value(field.key)}
+                onChange={(e) => setDrafts((prev) => ({ ...prev, [field.key]: e.target.value }))} />
+            </label>
+          ))}
+        </div>
+        <button type="button" className="secondary-button" disabled={busy} onClick={() => void saveKeys(REGISTER_FIELDS.map((f) => f.key), 'Registration controls')}>Save registration controls</button>
+      </section>
+      <section className="adm-panel">
+        <div className="adm-toolbar"><div><span className="eyebrow">Studio news</span><h3>Pinned items</h3></div><button type="button" className="secondary-button" onClick={() => setAdding((open) => !open)}>{adding ? 'Close' : 'Pin news item'}</button></div>
+        <p className="muted">Pinned rows merge with recent GitHub commits on the homepage, newest first.</p>
+        {adding && (
+          <form className="adm-form-grid" onSubmit={(e) => void addNews(e)}>
+            <label>Title<input value={newItem.title} maxLength={140} required onChange={(e) => setNewItem({ ...newItem, title: e.target.value })} /></label>
+            <label>Link URL<input value={newItem.url} maxLength={500} spellCheck={false} placeholder="#news" onChange={(e) => setNewItem({ ...newItem, url: e.target.value })} /></label>
+            <label className="adm-span">Summary<textarea value={newItem.summary} maxLength={500} required rows={2} onChange={(e) => setNewItem({ ...newItem, summary: e.target.value })} /></label>
+            <div><button type="submit" className="secondary-button" disabled={busy}>Pin item</button></div>
+          </form>
+        )}
+        <ol className="adm-news-list">
+          {news.map((item) => (
+            <li key={safeText(item.id)}>
+              {editingId === safeText(item.id) ? (
+                <div className="adm-form-grid">
+                  <label>Title<input value={editItem.title} maxLength={140} required onChange={(e) => setEditItem({ ...editItem, title: e.target.value })} /></label>
+                  <label>Link URL<input value={editItem.url} maxLength={500} spellCheck={false} onChange={(e) => setEditItem({ ...editItem, url: e.target.value })} /></label>
+                  <label className="adm-span">Summary<textarea value={editItem.summary} maxLength={500} required rows={2} onChange={(e) => setEditItem({ ...editItem, summary: e.target.value })} /></label>
+                  <div className="adm-row-actions">
+                    <button type="button" className="secondary-button" disabled={busy} onClick={() => void saveEdit(safeText(item.id))}>Save</button>
+                    <button type="button" className="secondary-button" disabled={busy} onClick={() => setEditingId(null)}>Cancel</button>
+                  </div>
+                </div>
+              ) : (
+                <><div className="adm-news-text"><strong>{safeText(item.title)}</strong><small>{safeText(item.summary)}</small></div>
+                <div className="adm-row-actions">
+                  <button type="button" className="secondary-button" disabled={busy} onClick={() => startEdit(item)}>Edit</button>
+                  <button type="button" className="secondary-button" disabled={busy} onClick={() => void deleteNews(safeText(item.id), safeText(item.title))}>Remove</button>
+                </div></>
+              )}
+            </li>
+          ))}
+        </ol>
+        {news.length === 0 && <div className="adm-empty">No pinned items — the homepage shows GitHub commits only.</div>}
+      </section>
+    </div>
+  );
+}
+
+// ── Live Wall Stats ──
+
+type WallStats = {
+  signups: { today: number; week: number; month: number; total: number };
+  profits_cents: { day: number; week: number; month: number; year: number };
+  online: { website: number; paws: number | null };
+  games: { slug: string; title: string; status: string; online: number | null; entitlements: number | null; acoins_spent: number; transactions: number }[];
+};
+
+const money = (cents: number): string =>
+  `$${(safeNumber(cents) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+/** One wall card: fires a confetti burst inside itself whenever its headline number grows. */
+function WallStatCard({ label, value, display, sub }: { label: string; value: number; display: string; sub: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const prev = useRef<number | null>(null);
+  useEffect(() => {
+    if (prev.current !== null && value > prev.current && ref.current) burstConfetti(ref.current);
+    prev.current = value;
+  }, [value]);
+  return (
+    <div ref={ref} className="adm-metric-card wall-card">
+      <span className="adm-metric-label">{label}</span>
+      <strong className="adm-metric-value">{display}</strong>
+      <small className="adm-metric-sub">{sub}</small>
+    </div>
+  );
+}
+
+/** Live wall: signups, profits, presence, and per-game activity, repolled on a
+ *  cadence so a long-open dashboard stays live. Quiet days honestly read zero. */
+function WallStats() {
+  const [stats, setStats] = useState<WallStats | null>(null);
+  const [error, setError] = useState('');
+
+  const load = useCallback(async () => {
+    try {
+      const data = await request<WallStats>(`${API}/admin/stats`);
+      clearShapeDrifts();
+      setStats(data);
+      setError('');
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Wall stats unavailable'); }
+  }, []);
+
+  useEffect(() => {
+    void load();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      void load();
+    }, 30_000);
+    return () => window.clearInterval(timer);
+  }, [load]);
+
+  if (!stats) {
+    return <p className="muted">{error || 'Loading live stats…'}</p>;
+  }
+  const signups = stats.signups;
+  const profits = stats.profits_cents;
+  return (
+    <div className="wall-stats" aria-label="Live studio stats">
+      <WallStatCard
+        label="Member signups · today"
+        value={safeNumber(signups.today)}
+        display={safeNumber(signups.today).toLocaleString()}
+        sub={`${safeNumber(signups.week)} this week · ${safeNumber(signups.month)} this month · ${safeNumber(signups.total)} total`}
+      />
+      <WallStatCard
+        label="Profits · today"
+        value={safeNumber(profits.day)}
+        display={money(profits.day)}
+        sub={`${money(profits.week)} week · ${money(profits.month)} month · ${money(profits.year)} year`}
+      />
+      <WallStatCard
+        label="Online now"
+        value={safeNumber(stats.online.website)}
+        display={safeNumber(stats.online.website).toLocaleString()}
+        sub={stats.online.paws === null || stats.online.paws === undefined
+          ? 'site presence · Paws status unknown'
+          : `site presence · ${safeNumber(stats.online.paws)} in Paws & Parcels`}
+      />
+      {stats.games.map((game) => {
+        return (
+          <WallStatCard
+            key={safeText(game.slug)}
+            label={`${safeText(game.title)} · ${safeText(game.status)}`}
+            value={safeNumber(game.acoins_spent)}
+            display={`${safeNumber(game.acoins_spent).toLocaleString()} ACoins`}
+            sub={
+              (game.online === null || game.online === undefined
+                ? (game.entitlements === null || game.entitlements === undefined ? 'no live probe' : `${safeNumber(game.entitlements)} Season 1 players`)
+                : `${safeNumber(game.online)} online now`) +
+              ` · ${safeNumber(game.transactions)} ledger rows`
+            }
+          />
+        );
+      })}
+    </div>
+  );
+}
+
 // ── Overview Tab ──
 
-function OverviewTab({ summary, onNavigate }: { summary: AdminSummary | null; onNavigate: (tab: AdminTab) => void }) {
+function OverviewTab({ summary, games, onNavigate }: { summary: AdminSummary | null; games: AdminGame[]; onNavigate: (tab: AdminTab) => void }) {
+  const liveGames = games.filter((game) => game.status === 'live');
   return (
     <div className="adm-overview">
+      <div className="section-heading wall-heading">
+        <div><span className="eyebrow">Live</span><h3>Studio Wall</h3></div>
+      </div>
+      <WallStats />
       <div className="adm-metric-cards">
         <div className="adm-metric-card">
           <span className="adm-metric-label">Total Users</span>
@@ -432,9 +758,11 @@ function OverviewTab({ summary, onNavigate }: { summary: AdminSummary | null; on
           </small>
         </div>
         <div className="adm-metric-card">
-          <span className="adm-metric-label">Live Deployments</span>
-          <strong className="adm-metric-value">{summary ? safeNumber(summary.active_deploys).toLocaleString() : '—'}</strong>
-          <small className="adm-metric-sub">{summary ? `${safeNumber(summary.active_projects)} projects` : '—'}</small>
+          <span className="adm-metric-label">Live Games</span>
+          <strong className="adm-metric-value">{liveGames.length.toLocaleString()}</strong>
+          <small className="adm-metric-sub">
+            {games.length ? liveGames.map((game) => safeText(game.title)).filter(Boolean).join(' · ') || 'No live titles' : '—'}
+          </small>
         </div>
         <div className="adm-metric-card">
           <span className="adm-metric-label">Open Tickets</span>
@@ -446,6 +774,9 @@ function OverviewTab({ summary, onNavigate }: { summary: AdminSummary | null; on
       </div>
       <div className="adm-overview-actions">
         <button type="button" className="adm-action-card" onClick={() => onNavigate('users')}><span className="adm-action-icon">♙</span><span><strong>Manage Users</strong><small>Accounts, roles, and access</small></span><b>→</b></button>
+        <button type="button" className="adm-action-card" onClick={() => onNavigate('games')}><span className="adm-action-icon">♞</span><span><strong>Manage Games</strong><small>Titles, posters, and featured order</small></span><b>→</b></button>
+        <button type="button" className="adm-action-card" onClick={() => onNavigate('website')}><span className="adm-action-icon">✎</span><span><strong>Website Settings</strong><small>Homepage copy, news, and referrals</small></span><b>→</b></button>
+        <button type="button" className="adm-action-card" onClick={() => onNavigate('payments')}><span className="adm-action-icon">◈</span><span><strong>Payments</strong><small>ACoins checkout and PayPal</small></span><b>→</b></button>
         <button type="button" className="adm-action-card" onClick={() => onNavigate('system')}><span className="adm-action-icon">⚙</span><span><strong>System Health</strong><small>Database and configuration</small></span><b>→</b></button>
       </div>
 

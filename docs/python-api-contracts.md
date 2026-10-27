@@ -21,7 +21,7 @@ contract the Vite portal consumes.
 | GET | `/api/news` | 200/503 | Public homepage studio news: `{news: [{id, title, summary, url, published_at}]}` newest first — curated `studio_news` rows merged with recent commits across buffbot88's public GitHub repos (refreshed every 30 min by a background refresher plus lazily on request; curated rows alone when GitHub is unreachable). Commit items use `id: github:<sha>` and the commit URL; titles/summaries are friendlified (`feat:` → "New:", `fix:` → "Fixed:", …) and merge commits are skipped |
 | GET | `/api/auth/session` | 200 | `{authenticated: boolean, user?: User}` |
 | POST | `/api/auth/login` | 200 | JSON `{identifier, password}`; returns `{user}` and secure session cookie |
-| POST | `/api/auth/register` | 201/400/409/429 | JSON `{username, email, password, display_name, proof}`; validation, human-verification, and rate limits documented below |
+| POST | `/api/auth/register` | 201/400/409/429 | JSON `{username, email, password, display_name, proof, referral_code?}`; validation, human-verification, referrals, and rate limits documented below |
 | POST | `/api/auth/logout` | 200 | Revokes the current session and expires the cookie |
 | GET | `/api/auth/verify-email?token=...` | 200 | Verifies a single-use email token |
 | POST | `/api/auth/verify-email/resend` | 202 | JSON `{identifier}`; sends a fresh verification mail |
@@ -33,7 +33,8 @@ contract the Vite portal consumes.
 | GET | `/api/auth/github` | 404 (stub) | Not implemented; documented shape only. Returns `404 not_implemented`. |
 | GET | `/api/auth/me` | 200/401 | Alias of session for authenticated callers |
 | GET | `/api/account/summary` | 200/401 | Authenticated account and support summary; shape documented below |
-| GET | `/api/account/transactions` | 200/401 | Authenticated purchase history (ACoins buys, ACoins spending, game purchases), newest first; shape documented below |
+| GET | `/api/account/referral` | 200/401 | Authenticated referral link, 24h usage, and earned bonuses; shape documented below |
+| GET | `/api/account/transactions` | 200/401 | Authenticated purchase history (ACoins buys, ACoins spending, game purchases, referral bonuses), newest first; shape documented below |
 | PUT | `/api/account` | 200/401 | Authenticated account update; requirements documented below |
 | DELETE | `/api/account` | 200/401 | Authenticated account self-deletion. JSON body `{confirm: 'DELETE'}` required (400 otherwise). Deletes the user row, all associated data and sessions, and expires the `ashat_rust_sid` and `ashat_csrf` cookies in the response. |
 | POST | `/api/account/github` | 404 (stub) | Not implemented. Always 404. GitHub linking was removed from the account page. |
@@ -59,6 +60,7 @@ contract the Vite portal consumes.
 | POST | `/api/admin/users/status` | 200 | JSON `{user_id, status}`; see request-body reference below |
 | POST | `/api/admin/support/:id/reply` | 200 | Staff reply on a member's ticket; JSON `{message}`; creates the `is_staff=1` reply member notifications are built from |
 | GET | `/api/admin/summary` | 200 | Admin overview counts |
+| GET | `/api/admin/stats` | 200 | Live wall stats: member signups, PayPal profits, per-game activity; shape documented below |
 | GET | `/api/admin/users` | 200 | Filtered admin user list; optional `q` query |
 | GET | `/api/admin/users/:id/moderation` | 200 | Per-user moderation timeline; see shape reference below |
 | GET | `/api/admin/database/status` | 200 | Database/Paws health plus the schema-migration summary |
@@ -68,7 +70,14 @@ contract the Vite portal consumes.
 | POST | `/api/admin/payments/settings` | 200 | Save PayPal email, Client ID, encrypted Client Secret, and sandbox/live mode |
 | GET | `/api/admin/repo-status` | 200 | Live/repository commit comparison |
 | GET | `/api/admin/games` | 200 | Admin game list incl. poster URLs |
-| PUT | `/api/admin/games/:slug` | 200 | Update game poster URL without a migration; see shape reference below |
+| PUT | `/api/admin/games/:slug` | 200 | Update game fields (poster, title, summary, status, url, featured, sort_order, tags) without a migration; see shape reference below |
+| GET | `/api/site/content` | 200 | Public homepage content (featured video, footer) from Website settings; stock defaults when unset |
+| GET | `/api/admin/site-settings` | 200 | All Website settings with effective values |
+| PUT | `/api/admin/site-settings` | 200 | JSON `{settings: {key: value}}`; allowlisted keys only, validated |
+| GET | `/api/admin/news` | 200 | Curated studio_news rows for the Website tab |
+| POST | `/api/admin/news` | 200 | JSON `{title, summary, url?}`; pins a curated news row |
+| PUT | `/api/admin/news/:id` | 200 | Edit a curated news row |
+| DELETE | `/api/admin/news/:id` | 200 | Remove a curated news row |
 | POST | `/api/admin/github/push` | 404 (stub) | Not implemented. Returns `404 not_implemented`. |
 | POST | `/api/admin/system/update` | 404 (stub) | Not implemented. Returns `404 not_implemented`. |
 | POST | `/api/admin/everenfell/s1` | 200 | JSON `{user_id, enabled: bool}`; grants/revokes Everenfell S1 entitlement. Admin-only + CSRF. Only active `Admin` accounts may receive S1 (`400` otherwise). Idempotency-guarded per target + intent. |
@@ -169,8 +178,8 @@ are **not** part of this response; consuming them crashes on `undefined`.
 Requires an authenticated session (401 otherwise). Returns the member's own
 purchase history, newest first (max 100), drawn from the `account_transactions`
 ledger (migration 0005 backfills completed ACoins orders; captures append rows).
-`kind` is one of `acoins_purchase`, `acoins_spend`, or `game_purchase`
-(some games do not use ACoins). `amount_cents` is the real-money part or
+`kind` is one of `acoins_purchase`, `acoins_spend`, `game_purchase`, or
+`referral_bonus` (some games do not use ACoins). `amount_cents` is the real-money part or
 null; `acoins_delta` is signed (+credited / −spent). `receipt` carries the
 provider references shown in the receipt view. No refunds are issued for the
 purchase of digital content or currency.
@@ -231,7 +240,24 @@ and junk identities up front:
   single-use, expire after 10 minutes, and a missing/bad proof returns 400
   `human verification failed`. No third-party captcha keys are involved.
 - **Rate limit:** 5 registrations per IP per 10 minutes (429
-  `too many registration attempts`).
+  `too many registration attempts`). The IP is the leftmost
+  `X-Forwarded-For` entry when present (the alpha reverse proxy sets it),
+  else the direct peer.
+- **Account cap:** at most `register.max_accounts_per_ip` accounts (default 2)
+  may ever register from one IP — counted on successful registrations, so a
+  shared-network user who hits it sees 409
+  `too many accounts from this address`. This is the anti-farming control:
+  mass account creation needs mass IPs.
+- **Referrals:** an optional `referral_code` (from another member's
+  `/?ref=CODE` link) credits both sides `referral.bonus_acoins` ACoins
+  (default 100) plus ledger rows, and is echoed back as
+  `{referral_code: <own new code>, referral: {credited, bonus_acoins?,
+  reason?}}`. Each code pays at most `referral.uses_per_day` bonuses
+  (default 10) per rolling 24h; unknown, inactive-referrer, disabled
+  (`bonus_acoins: 0`), over-limit, or self codes register the account
+  normally with `credited: false` and a `reason` (`unknown_referral_code`,
+  `referral_code_inactive`, `referrals_disabled`, `referral_limit_reached`).
+  Each new account redeems at most one code.
 - `username`/`email` collisions return 409 `username_or_email_taken`.
 
 #### ACoins PayPal purchases
@@ -404,23 +430,112 @@ timeline, newest first, from the `user_moderation_history` table.
 
 #### PUT `/api/admin/games/:slug`
 
-Requires an admin session and the CSRF header. Updates a game's `poster` URL in
+Requires an admin session and the CSRF header. Updates game fields in
 place — no migration or redeploy needed; the public `GET /api/games` reflects
-the change immediately. The homepage carousel and game cards pick up new art on
-their next load.
+the change immediately. Accepts any of `poster`, `title`, `summary`,
+`status`, `url`, `featured`, `sort_order`, `tags` (array or comma-separated
+string); at least one known field is required (400 `nothing to update`),
+unknown fields are rejected.
 
 ```json
-{ "poster": "/new-poster.svg" }
+{ "title": "Paws & Parcels", "featured": true, "sort_order": 1 }
 ```
 
-- `poster` must be a string, trimmed; max length 400 (400 `poster url required`
-  when missing/not a string, 400 `poster url too long (max 400)` when over).
+- `poster`/`url` max 400/500 chars; `title` 1–120; `summary` 1–500;
+  `status` must be `live`, `in-development`, or `coming-soon`;
+  `featured` must be boolean; `sort_order` 0–1000; `tags` 1–10 short labels.
 - Unknown slug returns 404 `game not found`.
-- Success returns `{ "ok": true, "slug": "...", "poster": "..." }`.
-- Other game fields (title, summary, status, tags, featured) are **not**
-  editable here yet — they still require the seed migrations.
+- Success returns `{ "ok": true, "slug": "...", "game": { ...updated row... } }`
+  (plus the legacy `poster` echo when the poster was part of the update).
 - The endpoint does not validate that the URL resolves or is an image; the
   frontend renders a poster fallback when the art fails to load.
+
+#### Website settings (`site_settings`, migration 0006)
+
+The Website admin tab edits these without a redeploy. Values are stored as
+text in `site_settings`; code-side defaults apply when a key was never saved.
+`GET /api/site/content` is public and serves the homepage subset
+(featured video + footer); registration controls are admin-only.
+
+| Key | Type | Default | Notes |
+| --- | ---- | ------- | ----- |
+| `featured_video.embed_url` | string ≤500 | YouTube-nocookie embed | Must be an http(s) URL when non-empty |
+| `featured_video.watch_url` | string ≤500 | YouTube watch link | Must be an http(s) URL when non-empty |
+| `footer.tagline` | string 1–160 | A Home For Playable Worlds. | Required, never blank |
+| `footer.discord_url` | string ≤500 | Discord invite | http(s) URL |
+| `footer.youtube_url` | string ≤500 | YouTube channel | http(s) URL |
+| `register.challenge_difficulty` | int 1–8 | 4 | Proof-of-work zeros; higher is slower for everyone |
+| `register.budget` | int 1–100 | 5 | Registrations per IP per window |
+| `register.window_seconds` | int 60–3600 | 600 | Rate-limit window |
+| `register.max_accounts_per_ip` | int 1–100 | 2 | Lifetime accounts allowed per registering IP |
+| `referral.bonus_acoins` | int 0–10000 | 100 | ACoins paid to each side of a referral (0 disables payouts) |
+| `referral.uses_per_day` | int 1–1000 | 10 | Paid redemptions per link per rolling 24h |
+
+- `GET /api/admin/site-settings` returns `{settings: {key: value}}` with
+  effective values (numbers for int keys).
+- `PUT /api/admin/site-settings` takes `{settings: {key: value}}`; unknown
+  keys (400 `unknown setting: ...`), out-of-range ints, over-long text, and
+  non-URL `_url` values are rejected. Success echoes `{ok: true, settings}`
+  and writes audit event `site.settings.updated`.
+
+#### Referrals (member)
+
+`GET /api/account/referral` requires an authenticated session (401
+otherwise) and lazily mints the caller's permanent code on first read:
+
+```json
+{
+  "code": "abc123...", "uses_24h": 3, "uses_total": 11,
+  "remaining_24h": 7, "rewards_earned_acoins": 1100,
+  "bonus_acoins": 100, "uses_per_day": 10
+}
+```
+
+The shareable link is `{origin}/?ref={code}` (built client-side). Bonus and
+cap values are the live admin settings, so the dropdown can say exactly what
+a signup through the link pays and how many redemptions are left today.
+
+#### Live wall stats (dashboard)
+
+`GET /api/admin/stats` requires an admin session (403 otherwise) and powers
+the dashboard wall: every number derives from local tables or a best-effort
+probe, so quiet days honestly read zero and unreachable game servers read
+`online: null` instead of a guess.
+
+```json
+{
+  "signups": { "today": 2, "week": 5, "month": 9, "total": 42 },
+  "profits_cents": { "day": 0, "week": 100, "month": 100, "year": 2500 },
+  "online": { "website": 3, "paws": 12 },
+  "games": [
+    { "slug": "paws-and-parcels", "title": "Paws & Parcels", "status": "live",
+      "online": 12, "entitlements": null, "acoins_spent": 500, "transactions": 4 },
+    { "slug": "everenfell", "title": "Everenfell", "status": "live",
+      "online": null, "entitlements": 7, "acoins_spent": 0, "transactions": 0 }
+  ]
+}
+```
+
+- `signups` counts `users` rows by `created_at` (today / trailing 7d / trailing
+  30d / all time).
+- `profits_cents` sums completed `acoin_orders` by completion time (trailing
+  24h / 7d / 30d / 365d) — real PayPal money, in cents.
+- `online.website` is the site's 90-second presence window; `online.paws` is
+  the Paws game server's online count (`null` when it doesn't answer).
+- Per-game rows come from the `games` catalog: `entitlements` is the Season 1
+  count for Everenfell (`null` for other titles), `acoins_spent` totals
+  `acoins_spend` ledger rows for that `game_slug`, and `transactions` counts
+  all ledger rows for it.
+
+#### Curated studio news (Website tab)
+
+Pinned `studio_news` rows merge with GitHub commits on the homepage.
+Requires an admin session and (for writes) the CSRF header:
+
+- `GET /api/admin/news` → `{news: [{id, title, summary, url, published_at, created_at}]}` newest first (max 50).
+- `POST /api/admin/news` takes `{title (1–140), summary (1–500), url? (≤500, default #news)}` → `{ok: true, id}`; audit `site.news.created`.
+- `PUT /api/admin/news/:id` takes any of `{title, summary, url}` → `{ok: true, id, updated}`; unknown id 404.
+- `DELETE /api/admin/news/:id` → `{ok: true, deleted}`; audit `site.news.deleted`.
 
 #### GET `/api/admin/games`
 

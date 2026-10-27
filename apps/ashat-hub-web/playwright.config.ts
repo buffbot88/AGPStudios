@@ -52,7 +52,11 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: `npm run dev:mock -- --port ${PORT} --mock-port ${MOCK_PORT}${HOSTILE}`,
+    // --account-cap=0: the E2E suite registers dozens of accounts from one
+    // loopback address through the real UI (browsers cannot set
+    // X-Forwarded-For), so the per-IP cap is relaxed here. The cap itself is
+    // covered by the Python suites, which simulate distinct IPs.
+    command: `npm run dev:mock -- --port ${PORT} --mock-port ${MOCK_PORT}${HOSTILE} --account-cap=0`,
     url: `http://localhost:${PORT}`,
     reuseExistingServer: false,
     timeout: 120_000,

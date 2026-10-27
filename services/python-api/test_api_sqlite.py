@@ -33,10 +33,12 @@ def main():
         cookies = ""
         csrf = ""
 
-        def request(path, method="GET", body=None, authenticated=False, origin=None):
+        def request(path, method="GET", body=None, authenticated=False, origin=None, ip=None):
             headers = {"Content-Type": "application/json"}
             if origin:
                 headers["Origin"] = origin
+            if ip:
+                headers["X-Forwarded-For"] = ip
             if authenticated:
                 headers.update({"Cookie": cookies, "X-CSRF-Token": csrf})
             data = json.dumps(body).encode() if body is not None else None
@@ -96,12 +98,101 @@ def main():
             assert status == 200 and body["user"]["acoins_balance"] == 0
             status, history, _ = request("/api/account/transactions", authenticated=True)
             assert status == 200 and history["transactions"] == []
+            status, content, _ = request("/api/site/content")
+            assert status == 200 and content["footer"]["tagline"] and content["featured_video"]["embed_url"]
+            status, challenge, _ = request("/api/auth/register-challenge")
+            assert status == 200 and challenge["difficulty"] == 4
             status, body, _ = request("/api/support", "POST", {
                 "subject": "SQLite check", "message": "support row"}, authenticated=True)
             assert status == 201
 
             with proxy.db() as conn:
                 conn.execute("UPDATE users SET role='Admin' WHERE username=?", ("sqlitemember",))
+            status, site_settings, _ = request("/api/admin/site-settings", authenticated=True)
+            assert status == 200 and site_settings["settings"]["register.budget"] == 5
+            assert site_settings["settings"]["referral.bonus_acoins"] == 100
+            assert site_settings["settings"]["register.max_accounts_per_ip"] == 2
+            # -- referrals: permanent code, credit on signup, cap, daily limit --
+            status, referral, _ = request("/api/account/referral", authenticated=True)
+            assert status == 200 and referral["code"] and referral["uses_total"] == 0
+            assert referral["remaining_24h"] == referral["uses_per_day"] == 10
+            referrer_code = referral["code"]
+            def register_as(prefix, ip, ref=None):
+                status, chal, _ = request("/api/auth/register-challenge")
+                assert status == 200
+                nonce = next(n for n in range(10_000_000)
+                             if proxy.sha256(f"{chal['challenge']}{n}".encode()).hexdigest().startswith("0" * chal["difficulty"]))
+                body = {"username": f"{prefix}{ip.replace('.', '')}", "email": f"{prefix}{ip.replace('.', '')}@example.test",
+                          "password": "sqlite-pass-123", "display_name": prefix,
+                          "proof": {"challenge": chal["challenge"], "nonce": str(nonce)}}
+                if ref:
+                    body["referral_code"] = ref
+                try:
+                    status, payload, _ = request("/api/auth/register", "POST", body, ip=ip)
+                except urllib.error.HTTPError as exc:
+                    status, payload = exc.code, json.loads(exc.read())
+                return status, payload
+            status, referred = register_as("refd", "10.9.8.7", referrer_code)
+            assert status == 201 and referred["referral"]["credited"] is True, (status, referred)
+            assert referred["referral"]["bonus_acoins"] == 100 and referred["referral_code"]
+            assert referred["referral_code"] != referrer_code
+            status, summary, _ = request("/api/account/summary", authenticated=True)
+            assert summary["user"]["acoins_balance"] == 100, summary
+            status, history, _ = request("/api/account/transactions", authenticated=True)
+            assert any(t["kind"] == "referral_bonus" and t["acoins_delta"] == 100 for t in history["transactions"]), history
+            # second account from the same IP is allowed; the third trips the cap
+            status, _ = register_as("second", "10.9.8.7")
+            assert status == 201, status
+            status, payload = register_as("third", "10.9.8.7")
+            assert status == 409 and payload["error"]["code"] == "too_many_accounts_from_this_address", (status, payload)
+            # ...but a different IP is unaffected
+            status, _ = register_as("other", "10.9.8.8")
+            assert status == 201, status
+            # unknown codes still register, they just pay nothing
+            status, unknown = register_as("nope", "10.9.8.9", "not-a-real-code")
+            assert status == 201 and unknown["referral"] == {"credited": False, "reason": "unknown_referral_code"}, unknown
+            # lower the daily limit to prove the 24h window without 11 signups
+            status, _, _ = request("/api/admin/site-settings", "PUT", {
+                "settings": {"referral.uses_per_day": 1}}, authenticated=True)
+            assert status == 200
+            status, limited = register_as("late", "10.9.8.10", referrer_code)
+            assert status == 201 and limited["referral"] == {"credited": False, "reason": "referral_limit_reached"}, limited
+            status, _, _ = request("/api/admin/site-settings", "PUT", {
+                "settings": {"referral.uses_per_day": 10}}, authenticated=True)
+            assert status == 200
+            status, referral, _ = request("/api/account/referral", authenticated=True)
+            assert referral["uses_total"] == 1 and referral["rewards_earned_acoins"] == 100, referral
+            # -- wall stats: signups, profits, per-game activity --
+            status, stats, _ = request("/api/admin/stats", authenticated=True)
+            assert status == 200, status
+            assert stats["signups"]["total"] >= 6, stats["signups"]
+            assert stats["signups"]["today"] >= 6, stats["signups"]
+            assert stats["profits_cents"] == {"day": 0, "week": 0, "month": 0, "year": 0}, stats["profits_cents"]
+            slugs = {game["slug"] for game in stats["games"]}
+            assert {"paws-and-parcels", "everenfell"} <= slugs, slugs
+            for game in stats["games"]:
+                assert game["acoins_spent"] >= 0 and game["transactions"] >= 0, game
+            everenfell = next(game for game in stats["games"] if game["slug"] == "everenfell")
+            assert everenfell["entitlements"] == 0, everenfell
+            assert stats["online"]["website"] >= 0, stats["online"]
+            status, _, _ = request("/api/admin/site-settings", "PUT", {
+                "settings": {"footer.tagline": "SQLite Tagline", "register.budget": 7}}, authenticated=True)
+            assert status == 200
+            status, site_settings, _ = request("/api/admin/site-settings", authenticated=True)
+            assert site_settings["settings"]["footer.tagline"] == "SQLite Tagline"
+            status, pinned, _ = request("/api/admin/news", "POST", {
+                "title": "SQLite pinned", "summary": "Pinned by the SQLite suite."}, authenticated=True)
+            assert status == 200 and pinned["id"]
+            status, _, _ = request(f"/api/admin/news/{pinned['id']}", "PUT", {
+                "title": "SQLite pinned (edited)"}, authenticated=True)
+            assert status == 200
+            status, curated, _ = request("/api/admin/news", authenticated=True)
+            assert any(item["id"] == pinned["id"] and item["title"].endswith("(edited)") for item in curated["news"])
+            status, _, _ = request(f"/api/admin/news/{pinned['id']}", "DELETE", authenticated=True)
+            assert status == 200
+            status, game, _ = request("/api/admin/games/paws-and-parcels", "PUT", {
+                "featured": True, "sort_order": 1}, authenticated=True)
+            assert status == 200 and game["game"]["slug"] == "paws-and-parcels"
             status, _, _ = request("/api/admin/database/status", authenticated=True)
             assert status == 200
             status, settings, _ = request("/api/admin/payments/settings", authenticated=True)

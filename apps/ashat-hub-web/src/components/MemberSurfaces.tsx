@@ -6,7 +6,7 @@ import { maybeCrash } from './devCrash';
 import { UnexpectedDataNotice, UnexpectedDataPanel } from './UnexpectedDataNotice';
 
 type User = { id: string; username: string; email: string; display_name: string; tag_name?: string | null; discord_tag?: string | null; location?: string | null; interests?: string | null; role: string; acoins_balance?: number };
-export type MemberTab = 'support' | 'account';
+export type MemberTab = 'support' | 'account' | 'purchases';
 
 type Project = { id: string; name: string };
 type CommunityProject = {
@@ -124,13 +124,14 @@ export function MemberSurfaces({ user, initialTab = 'support' }: { user: User | 
   const tabs: { id: MemberTab; label: string }[] = [
     { id: 'support', label: 'Support' },
     { id: 'account', label: 'Account' },
+    { id: 'purchases', label: 'Purchase History' },
   ];
 
   maybeCrash('member');
 
   return (
     <section className="member-section" aria-label="Ashat member surfaces">
-      <div className="section-heading"><div><h2>Explore the platform</h2></div></div>
+      <div className="section-heading"><div><h2>Member Services</h2></div></div>
       <nav className="member-tabs" aria-label="Member navigation">
         {tabs.map((item) => <button type="button" key={item.id} className={tab === item.id ? 'member-tab selected' : 'member-tab'} onClick={() => { setTab(item.id); setSelectedTicket(null); }}>{item.label}</button>)}
       </nav>
@@ -141,7 +142,9 @@ export function MemberSurfaces({ user, initialTab = 'support' }: { user: User | 
 
       {tab === 'support' && <div className="member-panel support-layout">{!user ? <div className="tool-empty"><p>Sign in to create and view support tickets.</p></div> : <><div className="support-sidebar"><div className="member-toolbar"><span className="eyebrow">Your tickets</span><button type="button" className="secondary-button" onClick={() => setSelectedTicket(null)}>New</button></div>{tickets.map((ticket) => <button type="button" className={selectedTicket?.ticket.id === ticket.id ? 'ticket-row selected' : 'ticket-row'} key={safeText(ticket.id)} onClick={() => void showTicket(safeText(ticket.id))}><strong>{safeText(ticket.subject)}</strong><small>{safeText(ticket.status)} · {safeText(ticket.priority)}</small></button>)}{!tickets.length && <p className="muted">No tickets yet.</p>}</div><div className="support-detail">{selectedTicket ? <><button type="button" className="back-button" onClick={() => setSelectedTicket(null)}>← New ticket</button><span className="eyebrow">{safeText(selectedTicket.ticket.status)} · {safeText(selectedTicket.ticket.priority)}</span><h3>{safeText(selectedTicket.ticket.subject)}</h3><p className="ticket-message">{safeText(selectedTicket.ticket.message)}</p><div className="ticket-replies">{safeList<TicketReply>(selectedTicket.replies).map((item) => <article className={item.is_staff ? 'ticket-reply staff' : 'ticket-reply'} key={safeText(item.id)}><small>{safeText(item.display_name) || safeText(item.username) || 'Member'} · {safeTime(item.created_at)}</small><p>{safeText(item.message)}</p></article>)}</div><form className="member-form" onSubmit={(event) => void sendReply(event)}><textarea value={reply} onChange={(event) => setReply(event.target.value)} placeholder="Reply to this ticket" rows={3} required /><button type="submit" disabled={busy}>Reply</button></form></> : <form className="member-form" onSubmit={(event) => void createTicket(event)}><span className="eyebrow">New support ticket</span><input value={supportSubject} onChange={(event) => setSupportSubject(event.target.value)} placeholder="Subject" required /><div className="form-row"><select value={supportCategory} onChange={(event) => setSupportCategory(event.target.value)}><option value="bug">Bug</option><option value="feature">Feature</option><option value="account">Account</option><option value="billing">Billing</option><option value="other">Other</option></select><select value={supportPriority} onChange={(event) => setSupportPriority(event.target.value)}><option value="low">Low</option><option value="normal">Normal</option><option value="high">High</option><option value="urgent">Urgent</option></select></div><textarea value={supportMessage} onChange={(event) => setSupportMessage(event.target.value)} placeholder="Describe the issue or request" rows={7} required /><button type="submit" disabled={busy}>Create ticket</button></form>}</div></>}</div>}
 
-      {tab === 'account' && <div className="member-panel account-grid">{!user ? <div className="tool-empty"><p>Sign in to view your account.</p></div> : !accountLoaded ? <div className="tool-empty"><p>Loading account...</p></div> : !account?.user ? <UnexpectedDataPanel what="Your account details" reason={error ?? undefined} onRetry={() => { setAccountLoaded(false); void loadAccount(); }} /> : <><AccountForm user={account.user} onSaved={(next) => setAccount({ ...account, user: next })} onDeleted={() => window.location.reload()} /><div className="account-stats"><Metric label="Support tickets" value={safeNumber(account.stats?.support_tickets)} /><PurchaseHistoryPanel /></div></>}</div>}
+      {tab === 'account' && <div className="member-panel account-grid">{!user ? <div className="tool-empty"><p>Sign in to view your account.</p></div> : !accountLoaded ? <div className="tool-empty"><p>Loading account...</p></div> : !account?.user ? <UnexpectedDataPanel what="Your account details" reason={error ?? undefined} onRetry={() => { setAccountLoaded(false); void loadAccount(); }} /> : <><AccountForm user={account.user} onSaved={(next) => setAccount({ ...account, user: next })} onDeleted={() => window.location.reload()} /><div className="account-stats"><Metric label="Support tickets" value={safeNumber(account.stats?.support_tickets)} /><ReferralPanel /></div></>}</div>}
+
+      {tab === 'purchases' && <div className="member-panel">{!user ? <div className="tool-empty"><p>Sign in to view your purchase history.</p></div> : <PurchaseHistoryPanel />}</div>}
 
 
     </section>
@@ -187,9 +190,77 @@ function AccountForm({ user, onSaved, onDeleted }: { user: User; onSaved: (user:
   return <form className="member-form account-form" onSubmit={(event) => void save(event)}><span className="eyebrow">Account details</span><div className="form-row"><input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} placeholder="Username" required /><input value={form.tag_name} onChange={(e) => setForm({ ...form, tag_name: e.target.value })} placeholder="Display name" required /></div><input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="Email" type="email" required /><button type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save account'}</button><button type="button" className="delete-account-button" onClick={() => void deleteAccount()} disabled={busy}>Delete account and all data</button>{message && <small className="auth-success">{message}</small>}{error && <small className="auth-error">{error}</small>}</form>;
 }
 
+type ReferralInfo = {
+  code: string; uses_24h: number; uses_total: number; remaining_24h: number;
+  rewards_earned_acoins: number; bonus_acoins: number; uses_per_day: number;
+};
+
+/** Permanent referral link: both sides earn bonus ACoins per signup, each
+ *  link paying out a capped number of bonuses per rolling 24h. */
+function ReferralPanel() {
+  const [referral, setReferral] = useState<ReferralInfo | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [message, setMessage] = useState('');
+
+  const load = useCallback(async () => {
+    try {
+      const data = await request<ReferralInfo>(`${API}/account/referral`);
+      setReferral(data);
+    } catch (reason) { setMessage(reason instanceof Error ? reason.message : 'Referral link unavailable'); }
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  async function copy() {
+    if (!referral) return;
+    const link = `${window.location.origin}/?ref=${referral.code}`;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(link);
+      } else {
+        const area = document.createElement('textarea');
+        area.value = link;
+        document.body.appendChild(area);
+        area.select();
+        document.execCommand('copy');
+        area.remove();
+      }
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch { setMessage('Copy failed — select the link manually.'); }
+  }
+
+  const link = referral ? `${window.location.origin}/?ref=${referral.code}` : '';
+  return (
+    <section className="referral-panel" aria-labelledby="referral-title">
+      <div>
+        <span className="eyebrow">Referrals</span>
+        <h3 id="referral-title">Invite friends, both earn {referral ? safeNumber(referral.bonus_acoins) : '…'} ACoins</h3>
+      </div>
+      {message && <p role="status">{message}</p>}
+      {referral === null && !message ? (
+        <p className="muted">Loading your link...</p>
+      ) : referral && (
+        <>
+          <p className="muted">Your permanent link pays out {safeNumber(referral.uses_per_day)} times per day at most — extra signups still join, they just earn nothing.</p>
+          <div className="referral-link-row">
+            <code className="referral-link" title={link}>{link}</code>
+            <button type="button" onClick={() => void copy()}>{copied ? 'Copied!' : 'Copy link'}</button>
+          </div>
+          <dl className="referral-stats">
+            <div><dt>Uses left today</dt><dd>{safeNumber(referral.remaining_24h)} of {safeNumber(referral.uses_per_day)}</dd></div>
+            <div><dt>Total signups</dt><dd>{safeNumber(referral.uses_total)}</dd></div>
+            <div><dt>Earned</dt><dd>{safeNumber(referral.rewards_earned_acoins).toLocaleString()} ACoins</dd></div>
+          </dl>
+        </>
+      )}
+    </section>
+  );
+}
+
 type PurchaseTransaction = {
   id: string;
-  kind: 'acoins_purchase' | 'acoins_spend' | 'game_purchase';
+  kind: 'acoins_purchase' | 'acoins_spend' | 'game_purchase' | 'referral_bonus';
   title: string;
   detail: string;
   amount_cents: number | null;
@@ -295,7 +366,7 @@ function PurchaseHistoryPanel() {
                   <div className="purchase-receipt">
                     <dl>
                       <div><dt>Transaction</dt><dd>{safeText(item.id)}</dd></div>
-                      <div><dt>Type</dt><dd>{safeText(item.kind)}</dd></div>
+                      <div><dt>Type</dt><dd>{safeText(item.kind) === 'referral_bonus' ? 'Referral bonus' : safeText(item.kind)}</dd></div>
                       <div><dt>Date</dt><dd>{safeTime(item.created_at)}</dd></div>
                       <div><dt>Amount</dt><dd>{money(item.amount_cents)}</dd></div>
                       <div><dt>ACoins</dt><dd>{coins(safeNumber(item.acoins_delta))}</dd></div>

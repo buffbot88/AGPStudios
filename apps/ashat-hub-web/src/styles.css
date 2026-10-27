@@ -234,13 +234,23 @@ h3 {
 }
 
 /* ---------- Header ---------- */
+/* Pinned chrome: the navbar stays fixed to the top of the viewport while
+   the page scrolls beneath it. The portal reserves its height so content
+   never slides underneath. */
 .site-header {
-  position: sticky;
+  position: fixed;
   top: 0;
-  z-index: 10;
+  left: 0;
+  right: 0;
+  z-index: 60;
   background: rgba(5, 16, 24, 0.5);
   backdrop-filter: blur(18px);
   border-bottom: 1px solid var(--border);
+}
+
+.portal {
+  padding-top: 57px;
+  padding-bottom: 47px;
 }
 
 .site-header-inner {
@@ -1039,10 +1049,18 @@ a.news-row-title:hover {
 }
 
 /* ---------- Footer ---------- */
+/* Pinned chrome: the footer stays fixed to the bottom of the viewport while
+   the page scrolls between the navbar and footer. */
 .site-footer {
-  margin-top: 24px;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 60;
+  margin-top: 0;
   border-top: 1px solid var(--border);
   background: rgba(5, 16, 24, 0.6);
+  backdrop-filter: blur(18px);
 }
 
 .footer-inner {
@@ -2193,6 +2211,32 @@ a.news-row-title:hover {
   font-size: 11.5px;
 }
 
+/* Live studio wall: signups, profits, presence, per-game activity. */
+.wall-heading {
+  margin: 4px 0 10px;
+}
+
+.wall-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.wall-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.confetti-burst {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 5;
+}
+
 .adm-overview-actions {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -2390,6 +2434,93 @@ a.news-row-title:hover {
 .adm-game-info small {
   color: var(--text-muted);
 }
+
+/* ---------- Denser admin console ---------- */
+.adm-surface .section-heading { margin-bottom: 12px; }
+.adm-surface .section-heading h2 { font-size: 22px; }
+.adm-tabs {
+  position: sticky;
+  top: 64px;
+  z-index: 5;
+  margin-bottom: 12px;
+  padding: 3px;
+}
+.adm-tab { padding: 7px 10px; font-size: 11px; }
+.adm-metric-cards { gap: 10px; margin-bottom: 14px; }
+.adm-metric-card { padding: 12px 14px; }
+.adm-metric-value { margin-top: 6px; font-size: 24px; }
+.adm-overview-actions { gap: 8px; }
+.adm-action-card { min-height: 60px; padding: 10px 12px; }
+.adm-panel { padding: 14px; }
+.adm-panel h3 { margin: 4px 0 8px; font-size: 15px; }
+.adm-panel .muted { font-size: 12px; }
+.adm-toolbar { margin-bottom: 10px; }
+.adm-user-row, .adm-game-row { padding: 10px 12px; }
+
+/* Website tab + full game editor */
+.adm-website { display: grid; gap: 12px; }
+.adm-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin: 10px 0 12px;
+}
+.adm-form-grid label { display: grid; gap: 5px; color: var(--text-muted); font-size: 12px; }
+.adm-form-grid label small { font-size: 11px; }
+.adm-form-grid input,
+.adm-form-grid textarea,
+.adm-form-grid select {
+  width: 100%;
+  padding: 8px 10px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 13px;
+}
+.adm-form-grid textarea { resize: vertical; }
+.adm-span { grid-column: 1 / -1; }
+.adm-game-edit { align-items: flex-start; }
+.adm-game-fields { display: grid; gap: 8px; flex: 1; min-width: 0; }
+.adm-game-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.adm-game-grid label { display: grid; gap: 4px; color: var(--text-muted); font-size: 11.5px; }
+.adm-game-grid input,
+.adm-game-grid textarea,
+.adm-game-grid select {
+  width: 100%;
+  padding: 7px 9px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  font: inherit;
+  font-size: 12.5px;
+}
+.adm-game-grid textarea { resize: vertical; }
+.adm-check { display: flex !important; flex-direction: row !important; align-items: center; gap: 8px; color: var(--text) !important; font-size: 12.5px !important; }
+.adm-check input { width: auto !important; }
+.adm-game-actions { display: flex; justify-content: flex-end; }
+.adm-news-list { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 8px; }
+.adm-news-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.adm-news-list .adm-form-grid { flex: 1; margin: 0; }
+.adm-news-text { display: grid; gap: 2px; min-width: 0; }
+.adm-news-text strong { font-size: 13px; }
+.adm-news-text small { color: var(--text-muted); font-size: 12px; }
+.adm-row-actions { display: flex; gap: 6px; flex-shrink: 0; }
 
 /* ---------- Unexpected data notice ---------- */
 .data-notice {
@@ -3264,6 +3395,119 @@ a.news-row-title:hover {
 
 .auth-menu-link:hover {
   background: var(--surface-2);
+}
+
+/* Referral block inside the signed-in account menu */
+.auth-referral {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-size: 11.5px;
+}
+
+.auth-referral-title {
+  color: var(--gold);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.auth-referral-link {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+.auth-referral-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.auth-referral-row small {
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.auth-referral-copy {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.auth-referral-copy:hover {
+  border-color: var(--gold);
+}
+
+.auth-referral-hint {
+  margin: 0;
+  color: var(--gold);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* Referral card on #account */
+.referral-panel {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.referral-panel h3 {
+  margin: 2px 0 0;
+}
+
+.referral-link-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.referral-link {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-size: 12px;
+}
+
+.referral-stats {
+  display: flex;
+  gap: 18px;
+  margin: 0;
+}
+
+.referral-stats div {
+  display: grid;
+  gap: 2px;
+}
+
+.referral-stats dt {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.referral-stats dd {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
 }
 
 .auth-logout {

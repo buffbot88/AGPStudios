@@ -20,9 +20,20 @@ export type NewsItem = {
 };
 
 export const NAV_LINKS = [
-  { label: 'Home', href: '#top' },
+  { label: 'Home', href: '/' },
   { label: 'Support', href: '#support' },
 ] as const;
+
+/** SPA-navigate to the homepage: a clean `/` with no `#top` hash. The app's
+ *  hashchange listener picks up the dispatched event and renders home. */
+export function goHome() {
+  if (!window.location.hash && window.location.pathname === '/' && !window.location.search) {
+    window.scrollTo(0, 0);
+    return;
+  }
+  window.history.pushState({}, '', '/');
+  window.dispatchEvent(new HashChangeEvent('hashchange'));
+}
 
 export const HERO = {
   eyebrow: 'AGP Studios',
@@ -151,6 +162,63 @@ export const FEATURED_VIDEO = {
   embedUrl: 'https://www.youtube-nocookie.com/embed/ky8rKHSVgNw?rel=0',
   watchUrl: 'https://www.youtube.com/watch?v=ky8rKHSVgNw',
 } as const;
+
+export type SiteContent = {
+  featured_video: { title: string; embedUrl: string; watchUrl: string };
+  footer: { tagline: string; discordUrl: string; youtubeUrl: string };
+};
+
+type ApiSiteContent = {
+  featured_video?: { title?: string; embed_url?: string; watch_url?: string };
+  footer?: { tagline?: string; discord_url?: string; youtube_url?: string };
+};
+
+function cleanUrl(value: unknown, fallback: string): string {
+  return typeof value === 'string' && /^https?:\/\/[^\s]+$/.test(value.trim())
+    ? value.trim()
+    : fallback;
+}
+
+function cleanText(value: unknown, fallback: string): string {
+  return typeof value === 'string' && value.trim() ? value.trim() : fallback;
+}
+
+/**
+ * Fetch customizable site content from the Website admin tab. Anything the
+ * API omits or mangles falls back to the static constants, so the homepage
+ * renders with stock copy when no overrides were ever saved.
+ */
+export async function fetchSiteContent(): Promise<SiteContent> {
+  const fallback: SiteContent = {
+    featured_video: { ...FEATURED_VIDEO },
+    footer: {
+      tagline: FOOTER.tagline,
+      discordUrl: FOOTER.socials[0]?.href ?? '',
+      youtubeUrl: FOOTER.socials[1]?.href ?? '',
+    },
+  };
+  try {
+    const response = await fetch('/api/site/content');
+    if (!response.ok) throw new Error(`site content ${response.status}`);
+    const data = (await response.json()) as ApiSiteContent;
+    const video = data.featured_video ?? {};
+    const footer = data.footer ?? {};
+    return {
+      featured_video: {
+        title: cleanText(video.title, fallback.featured_video.title),
+        embedUrl: cleanUrl(video.embed_url, fallback.featured_video.embedUrl),
+        watchUrl: cleanUrl(video.watch_url, fallback.featured_video.watchUrl),
+      },
+      footer: {
+        tagline: cleanText(footer.tagline, fallback.footer.tagline),
+        discordUrl: cleanUrl(footer.discord_url, fallback.footer.discordUrl),
+        youtubeUrl: cleanUrl(footer.youtube_url, fallback.footer.youtubeUrl),
+      },
+    };
+  } catch {
+    return fallback;
+  }
+}
 
 export const FOOTER = {
   tagline: 'A Home For Playable Worlds.',

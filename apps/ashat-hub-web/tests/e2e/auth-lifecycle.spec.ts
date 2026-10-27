@@ -159,6 +159,11 @@ test.describe('auth lifecycle', () => {
     await page.evaluate(() => { window.location.hash = '#account'; });
     await expect(page.locator('.account-grid')).toBeVisible();
     await expect(page.locator('.adm-surface')).toHaveCount(0);
+
+    // The member menu links to #account but never to #admin.
+    await page.locator('.auth-menu summary').click();
+    await expect(page.locator('.auth-menu-link')).toHaveCount(1);
+    await expect(page.locator('.auth-menu-link').first()).toHaveText('Account');
   });
 
   test('an admin reaches #admin and the menu advertises the role', async ({ page }) => {
@@ -170,7 +175,14 @@ test.describe('auth lifecycle', () => {
     await page.goto('/#admin');
     await expect(page.locator('.adm-surface')).toBeVisible();
     await expect(page.locator('.adm-tabs')).toBeVisible();
+    await expect(page.locator('.wall-stats')).toBeVisible();
     await expect(toast(page)).toHaveCount(0);
+
+    // The admin menu links to both #account and #admin.
+    await page.locator('.auth-menu summary').click();
+    await expect(page.locator('.auth-menu-link')).toHaveCount(2);
+    await expect(page.locator('.auth-menu-link').nth(0)).toHaveText('Account');
+    await expect(page.locator('.auth-menu-link').nth(1)).toHaveText('Admin');
   });
 
   test('sign out revokes the session server-side and the guards re-engage', async ({ page }) => {

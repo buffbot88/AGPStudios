@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { API, csrfToken, errorMessage, safeText, type ApiError } from './api';
+import { API, csrfToken, errorMessage, request, safeNumber, safeText, type ApiError } from './api';
 import { getSession, onSessionChange, setSessionUser, type SessionUser } from './session';
 
 type User = SessionUser;
@@ -30,8 +30,31 @@ async function solveRegisterChallenge(challenge: string, difficulty: number): Pr
   }
 }
 
+/** Referral code from a `?ref=` link (query or hash), if the visitor arrived on one. */
+function readReferralCode(): string {
+  try {
+    const fromQuery = new URLSearchParams(window.location.search).get('ref')?.trim();
+    if (fromQuery) return fromQuery;
+    const hash = window.location.hash;
+    const marker = hash.indexOf('?');
+    if (marker >= 0) {
+      const fromHash = new URLSearchParams(hash.slice(marker)).get('ref')?.trim();
+      if (fromHash) return fromHash;
+    }
+  } catch { /* private mode: no referral, no crash */ }
+  return '';
+}
+
+type ReferralInfo = {
+  code: string; uses_24h: number; uses_total: number; remaining_24h: number;
+  rewards_earned_acoins: number; bonus_acoins: number; uses_per_day: number;
+};
+
 export function AuthPanel({ onChange, onNavigate, embedded = false }: { onChange: (user: User | null) => void; onNavigate?: (path: string) => void; embedded?: boolean }) {
   const [user, setUser] = useState<User | null>(null);
+  const [referralEntry] = useState(readReferralCode);
+  const [referral, setReferral] = useState<ReferralInfo | null>(null);
+  const [copied, setCopied] = useState(false);
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [mode, setMode] = useState<AuthMode>('login');
@@ -84,6 +107,32 @@ export function AuthPanel({ onChange, onNavigate, embedded = false }: { onChange
     setPassword('');
   }
 
+  async function loadReferral() {
+    try {
+      const data = await request<ReferralInfo>(`${API}/account/referral`);
+      setReferral(data);
+    } catch { /* the menu still works; the block just stays quiet */ }
+  }
+
+  async function copyReferralLink() {
+    if (!referral) return;
+    const link = `${window.location.origin}/?ref=${referral.code}`;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(link);
+      } else {
+        const area = document.createElement('textarea');
+        area.value = link;
+        document.body.appendChild(area);
+        area.select();
+        document.execCommand('copy');
+        area.remove();
+      }
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch { /* clipboard blocked: the link text is still visible to copy */ }
+  }
+
   async function submit(event: FormEvent) {
     event.preventDefault();
     setError('');
@@ -121,13 +170,16 @@ export function AuthPanel({ onChange, onNavigate, embedded = false }: { onChange
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(mode === 'login'
           ? { identifier, password }
-          : { username: identifier, email, password, display_name: identifier, proof }),
+          : { username: identifier, email, password, display_name: identifier, proof,
+              ...(referralEntry ? { referral_code: referralEntry } : {}) }),
       });
       const data = await response.json() as {
         user?: User;
         registered?: boolean;
         verification_required?: boolean;
         email?: string;
+        referral_code?: string;
+        referral?: { credited?: boolean; bonus_acoins?: number; reason?: string };
         error?: ApiError;
       };
       if (!response.ok) {
@@ -142,6 +194,13 @@ export function AuthPanel({ onChange, onNavigate, embedded = false }: { onChange
         return;
       }
       if (mode === 'register') {
+        const bonus = typeof data.referral?.bonus_acoins === 'number' ? data.referral.bonus_acoins : 0;
+        if (data.referral?.credited) {
+          setMode('login');
+          setPassword('');
+          setMessage(`Account created. A ${bonus} ACoins referral bonus is on its way to you and your referrer — sign in to continue.`);
+          return;
+        }
         if (data.verification_required) {
           const nextEmail = data.email || email;
           setVerificationEmail(nextEmail);
@@ -215,13 +274,30 @@ export function AuthPanel({ onChange, onNavigate, embedded = false }: { onChange
   }
 
   if (user) {
+    const isAdmin = safeText(user.role).toLowerCase() === 'admin';
+    const referralLink = referral ? `${window.location.origin}/?ref=${referral.code}` : '';
     return (
-      <details ref={menuRef} className="auth-menu">
-        <summary className="auth-menu-trigger"><span>{safeText(user.display_name) || safeText(user.username)}</span>{safeText(user.role).toLowerCase() === 'admin' && <span className="auth-role-badge">Admin</span>}<span className="auth-menu-chevron">⌄</span></summary>
+      <details ref={menuRef} className="auth-menu" onToggle={(event) => { if ((event.target as HTMLDetailsElement).open) void loadReferral(); }}>
+        <summary className="auth-menu-trigger"><span>{safeText(user.display_name) || safeText(user.username)}</span>{isAdmin && <span className="auth-role-badge">Admin</span>}<span className="auth-menu-chevron">⌄</span></summary>
         <div className="auth-menu-panel">
           <span className="auth-menu-email">{safeText(user.email)}</span>
-          {onNavigate && user.role.toLowerCase() === 'admin' && <nav className="auth-menu-links" aria-label="Account navigation">
-            <button type="button" className="auth-menu-link" onClick={() => navigateFromMenu('/admin')}>Admin</button>
+          <div className="auth-referral">
+            <span className="auth-referral-title">Referral link{referral ? ` · ${safeNumber(referral.bonus_acoins)} ACoins each` : ''}</span>
+            {referral ? (
+              <>
+                <span className="auth-referral-link" title={referralLink}>{referralLink}</span>
+                <div className="auth-referral-row">
+                  <button type="button" className="auth-referral-copy" onClick={() => void copyReferralLink()}>{copied ? 'Copied!' : 'Copy'}</button>
+                  <small>{safeNumber(referral.remaining_24h)} of {safeNumber(referral.uses_per_day)} uses left today · {safeNumber(referral.rewards_earned_acoins).toLocaleString()} earned</small>
+                </div>
+              </>
+            ) : (
+              <small className="muted">Opening your link…</small>
+            )}
+          </div>
+          {onNavigate && <nav className="auth-menu-links" aria-label="Account navigation">
+            <button type="button" className="auth-menu-link" onClick={() => navigateFromMenu('/account')}>Account</button>
+            {isAdmin && <button type="button" className="auth-menu-link" onClick={() => navigateFromMenu('/admin')}>Admin</button>}
           </nav>}
           <button type="button" className="auth-logout" onClick={() => void logout()} disabled={busy}>Sign out</button>
         </div>
@@ -255,6 +331,7 @@ export function AuthPanel({ onChange, onNavigate, embedded = false }: { onChange
           <span className="field-icon" aria-hidden>⚿</span>
           <input value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password" type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} required {...(mode === 'register' ? { minLength: 8, maxLength: 128 } : {})} />
         </div>}
+        {mode === 'register' && referralEntry && <p className="auth-referral-hint">You arrived on a referral link — both sides earn bonus ACoins when you join.</p>}
         <button type="submit" className="auth-submit" disabled={busy}>{mode === 'login' ? 'Sign in' : mode === 'register' ? 'Create account' : 'Send reset link'}</button>
         <div className="auth-links">
           {mode === 'login' && <button type="button" className="auth-switch" onClick={() => openMode('reset-request')}>Forgot password?</button>}

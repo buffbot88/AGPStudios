@@ -257,7 +257,7 @@ def run():
             "game_slug", "status", "created_at", "receipt")),
               "/api/account/transactions: rows carry id/kind/title/detail/amount/coins/game/status/date/receipt",
               repr(txn)[:160])
-        check(txn.get("kind") in ("acoins_purchase", "acoins_spend", "game_purchase"),
+        check(txn.get("kind") in ("acoins_purchase", "acoins_spend", "game_purchase", "referral_bonus"),
               "/api/account/transactions: kind is a known purchase type", repr(txn.get("kind")))
 
     code, body = member.req("/api/support")
@@ -298,6 +298,47 @@ def run():
     check(all(k in r for k in ("id", "ticket_id", "message", "is_staff", "created_at")),
           "ticket replies carry id/ticket_id/message/is_staff/created_at", repr(r)[:120])
 
+    # Referral link (dropdown menu + #account card request call site)
+    code, body = member.req("/api/account/referral")
+    check(code == 200 and is_str((body or {}).get("code")),
+          "/api/account/referral: {code, usage, rewards}", repr(body)[:160])
+    for field in ("uses_24h", "uses_total", "remaining_24h", "rewards_earned_acoins", "bonus_acoins", "uses_per_day"):
+        check(is_num((body or {}).get(field)),
+              f"/api/account/referral: {field} is numeric", repr(body)[:160])
+    member_code = (body or {}).get("code")
+
+    # Referred signup through the link credits both sides 100 ACoins.
+    # NOTE: this is the suite's second successful registration from one
+    # address (default per-IP cap is 2); the strict cap is covered by
+    # test_api_sqlite.py with simulated distinct IPs.
+    friend = Client()
+    code, challenge_body = friend.req("/api/auth/register-challenge")
+    check(code == 200, "referred signup: challenge issued", str(code))
+    proof = solve_challenge((challenge_body or {}).get("challenge", ""),
+                             (challenge_body or {}).get("difficulty", 0))
+    friend_name = f"ref-{username}"[:30]
+    # A simulated distinct network: the suite already spends the loopback
+    # per-IP registration budget on the member plus the four bot-deterrent
+    # negatives, and the per-IP account cap counts this address separately.
+    code, body = friend.req("/api/auth/register", "POST", {
+        "username": friend_name, "email": f"{friend_name}@example.test",
+        "password": "contract-pass-1", "display_name": "Referred Friend",
+        "proof": proof, "referral_code": member_code,
+    }, headers={"X-Forwarded-For": "10.9.8.9"})
+    check(code == 201 and (body or {}).get("referral", {}).get("credited") is True
+          and (body or {}).get("referral", {}).get("bonus_acoins") == 100,
+          "referred signup: both sides credited 100 ACoins", f"{code} {repr(body)[:160]}")
+    check(is_str((body or {}).get("referral_code")),
+          "register: every account gets its own permanent referral code", repr(body)[:120])
+    code, body = friend.req("/api/auth/login", "POST", {"identifier": friend_name, "password": "contract-pass-1"})
+    check(code == 200, "referred signup: friend can sign in", str(code))
+    code, body = friend.req("/api/account/summary")
+    check(code == 200 and (body or {}).get("user", {}).get("acoins_balance") == 100,
+          "referred signup: friend balance is +100", repr(body)[:160])
+    code, body = member.req("/api/account/summary")
+    check(code == 200 and (body or {}).get("user", {}).get("acoins_balance") == 100,
+          "referred signup: referrer balance is +100", repr(body)[:160])
+
     # PUT /api/account — full required body (MemberSurfaces AccountForm)
     code, body = member.req("/api/account", "PUT", {
         "username": username, "email": f"{username}@example.test",
@@ -328,6 +369,21 @@ def run():
     s = body or {}
     check(all(k in s for k in ("users", "active_users", "disabled_users", "open_tickets", "active_deploys", "active_projects")),
           "/api/admin/summary: has all AdminSummary fields", repr(s)[:160])
+
+    code, body = admin.req("/api/admin/stats")
+    check(code == 200, "/api/admin/stats returns 200", str(code))
+    stats = body or {}
+    for section in ("signups", "profits_cents", "online", "games"):
+        check(section in stats, f"/api/admin/stats: carries {section}", repr(stats)[:160])
+    check(all(k in (stats.get("signups") or {}) for k in ("today", "week", "month", "total")),
+          "/api/admin/stats: signups has today/week/month/total", repr(stats.get("signups"))[:120])
+    check(all(k in (stats.get("profits_cents") or {}) for k in ("day", "week", "month", "year")),
+          "/api/admin/stats: profits_cents has day/week/month/year", repr(stats.get("profits_cents"))[:120])
+    for game in (stats.get("games") or []):
+        check(all(k in game for k in ("slug", "title", "status", "online", "entitlements", "acoins_spent", "transactions")),
+              "/api/admin/stats: game rows carry slug/title/status/online/entitlements/spend/transactions", repr(game)[:160])
+    check(is_num((stats.get("signups") or {}).get("total")) and (stats.get("signups") or {}).get("total") >= 1,
+          "/api/admin/stats: total signups counts the suite's own accounts", repr(stats.get("signups"))[:120])
 
     code, body = admin.req("/api/admin/users?q=contract-shape")
     check(code == 200 and isinstance((body or {}).get("users"), list),
@@ -370,6 +426,79 @@ def run():
 
     code, body = admin.req("/api/admin/settings")
     check(code == 200 and isinstance(body, dict), "/api/admin/settings: 200 object", str(code))
+
+    # -- website surfaces (WebsiteTab + fetchSiteContent call sites) ---------
+    code, body = member.req("/api/site/content")
+    check(code == 200 and isinstance((body or {}).get("featured_video"), dict)
+          and isinstance((body or {}).get("footer"), dict),
+          "/api/site/content: {featured_video, footer}", str(code))
+    video, footer = (body or {}).get("featured_video") or {}, (body or {}).get("footer") or {}
+    check(all(is_str(video.get(k)) for k in ("title", "embed_url", "watch_url")),
+          "/api/site/content: featured_video has title/embed_url/watch_url", repr(video)[:120])
+    check(all(is_str(footer.get(k)) for k in ("tagline", "discord_url", "youtube_url")),
+          "/api/site/content: footer has tagline/discord_url/youtube_url", repr(footer)[:120])
+
+    code, body = admin.req("/api/admin/site-settings")
+    check(code == 200 and isinstance((body or {}).get("settings"), dict),
+          "/api/admin/site-settings: {settings}", str(code))
+    settings = (body or {}).get("settings") or {}
+    check(is_str(settings.get("footer.tagline")) and is_num(settings.get("register.challenge_difficulty")),
+          "/api/admin/site-settings: carries homepage copy and registration controls", repr(settings)[:160])
+    code, body = admin.req("/api/admin/site-settings", "PUT", {
+        "settings": {"footer.tagline": "Contract Tagline", "register.challenge_difficulty": 5,
+                      "referral.bonus_acoins": 150},
+    }, admin_csrf)
+    check(code == 200 and (body or {}).get("ok") is True,
+          "PUT /api/admin/site-settings: {ok}", f"{code} {repr(body)[:120]}")
+    code, body = admin.req("/api/admin/site-settings")
+    check((body or {}).get("settings", {}).get("footer.tagline") == "Contract Tagline",
+          "site settings persist", repr(body)[:160])
+    code, body = member.req("/api/auth/register-challenge")
+    check((body or {}).get("difficulty") == 5,
+          "challenge difficulty follows the saved setting", repr(body)[:120])
+    code, body = admin.req("/api/admin/site-settings")
+    check((body or {}).get("settings", {}).get("referral.bonus_acoins") == 150,
+          "new int settings round-trip like the old ones", repr(body)[:160])
+    code, body = admin.req("/api/admin/site-settings", "PUT", {
+        "settings": {"footer.tagline": "A Home For Playable Worlds.", "register.challenge_difficulty": 4,
+                      "referral.bonus_acoins": 100},
+    }, admin_csrf)
+    check(code == 200, "site settings restore to defaults", str(code))
+    code, body = admin.req("/api/admin/site-settings", "PUT", {"settings": {"nope.unknown": "x"}}, admin_csrf)
+    check(code == 400, "unknown setting keys are rejected", str(code))
+
+    code, body = admin.req("/api/admin/news", "POST", {
+        "title": "Contract pinned", "summary": "Pinned by the contract suite.", "url": "#news",
+    }, admin_csrf)
+    check(code == 200 and is_str((body or {}).get("id")),
+          "POST /api/admin/news: 201 {id}", f"{code} {repr(body)[:120]}")
+    news_id = (body or {}).get("id")
+    code, body = admin.req("/api/admin/news")
+    check(code == 200 and any(n.get("id") == news_id for n in (body or {}).get("news", [])),
+          "pinned news appears in the curated list", str(code))
+    code, body = admin.req(f"/api/admin/news/{news_id}", "PUT", {"title": "Contract pinned (edited)"}, admin_csrf)
+    check(code == 200 and (body or {}).get("ok") is True,
+          "PUT /api/admin/news/:id: {ok}", f"{code} {repr(body)[:120]}")
+    code, body = admin.req(f"/api/admin/news/{news_id}", "DELETE", None, admin_csrf)
+    check(code == 200 and (body or {}).get("deleted") == news_id,
+          "DELETE /api/admin/news/:id removes the row", f"{code} {repr(body)[:120]}")
+
+    code, body = admin.req("/api/admin/games/everenfell", "PUT", {
+        "title": "Everenfell", "featured": True, "sort_order": 2, "tags": ["Adventure", "Contract"],
+    }, admin_csrf)
+    check(code == 200 and (body or {}).get("ok") is True and isinstance((body or {}).get("game"), dict),
+          "PUT /api/admin/games/:slug edits fields and echoes the row", f"{code} {repr(body)[:160]}")
+    check((body or {}).get("game", {}).get("sort_order") == 2,
+          "game update persists sort_order", repr(body)[:120])
+    code, body = admin.req("/api/admin/games/everenfell", "PUT", {
+        "title": "Everenfell", "summary": "Season 1 is live. Sign in with AGP Studios to enter.",
+        "status": "live", "url": "https://everenfell.agpstudios.org", "featured": True,
+        "sort_order": 1, "tags": ["Adventure", "Season 1", "Multiplayer"],
+        "poster": "/everenfell-poster.svg",
+    }, admin_csrf)
+    check(code == 200, "game row restored", str(code))
+    code, body = admin.req("/api/admin/games/everenfell", "PUT", {"status": "live-ish"}, admin_csrf)
+    check(code == 400, "bogus game status is rejected", str(code))
 
     code, body = admin.req("/api/admin/payments/settings")
     check(code == 200 and (body or {}).get("client_secret_configured") is False,

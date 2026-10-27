@@ -19,18 +19,25 @@ function SocialIcon({ icon }: { icon: string }) {
   }
 }
 
-export function SiteFooter() {
+export function SiteFooter({ content }: {
+  content?: { tagline: string; discordUrl: string; youtubeUrl: string };
+}) {
+  const tagline = content?.tagline?.trim() || FOOTER.tagline;
+  const socials = [
+    { label: 'Discord', href: content?.discordUrl?.trim() || FOOTER.socials[0]?.href || '', icon: 'discord' },
+    { label: 'YouTube', href: content?.youtubeUrl?.trim() || FOOTER.socials[1]?.href || '', icon: 'youtube' },
+  ];
   return (
     <footer className="site-footer">
       <div className="footer-inner">
         <a className="wordmark" href="#top">
           <b>AGP</b> STUDIOS
         </a>
-        <span className="footer-identity">{FOOTER.tagline}</span>
+        <span className="footer-identity">{tagline}</span>
         <div className="footer-group">
           <span className="footer-legal-inline">© 2026 AGP Studios</span>
           <div className="footer-socials">
-            {FOOTER.socials.map((social) => (
+            {socials.map((social) => (
               <a key={social.icon} href={social.href} aria-label={social.label} target="_blank" rel="noreferrer">
                 <SocialIcon icon={social.icon} />
               </a>

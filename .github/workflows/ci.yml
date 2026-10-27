@@ -45,7 +45,7 @@ jobs:
 
       - name: Start mock API
         run: |
-          PORT=3110 python3 scripts/mock-api.py --no-verification > "$RUNNER_TEMP/mock-api.log" 2>&1 &
+          PORT=3110 python3 scripts/mock-api.py --no-verification --account-cap=0 > "$RUNNER_TEMP/mock-api.log" 2>&1 &
           echo $! > "$RUNNER_TEMP/mock-api.pid"
           ready=false
           for attempt in $(seq 1 30); do

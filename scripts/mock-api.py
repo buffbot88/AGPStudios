@@ -28,7 +28,10 @@ Behavior notes:
   how a test completes the emailed link. `POST /__reset` restores seed data,
   clears sessions, and returns controls to how the process was started, so
   `--verification-required` and `--hostile` survive it; `{"verification_required":
-  false}` may be included in the reset body.
+  false}` may be included in the reset body. `--account-cap=N` relaxes the
+  per-IP account cap for harnesses that register many accounts from one
+  loopback address (0 disables it); the register.max_accounts_per_ip setting
+  (default 2) applies otherwise.
 
 Run via `npm run mock-api` (alone) or `npm run dev:mock` (alongside vite) from
 apps/ashat-hub-web. See the README's "Frontend with the mock API" section.
@@ -68,13 +71,74 @@ USERS = {
     # pre-seeded admin (password: admin-pass-1)
     "1": {"id": "1", "username": "boss", "email": "boss@agpstudios.org",
           "display_name": "Boss", "role": "Admin", "password": "admin-pass-1",
-          "verified": True},
+          "verified": True, "created_ip": "", "referral_code": secrets.token_hex(6),
+          "acoins_balance": 0, "created_at": int(time.time())},
 }
 SESSIONS = {}          # session token -> user id
 CSRF = {}              # session token -> csrf token
 VERIFICATIONS = {}     # username -> verification code
 ONLINE_VISITORS = {}   # visitor id -> last heartbeat
 PAYMENT_SETTINGS = {"paypal_email": "", "paypal_client_id": "", "client_secret_configured": False, "environment": "sandbox", "encryption_key_configured": True}
+# Mirrors proxy.py's site_settings table (migration 0006): DB overrides for
+# the Website admin tab, with the same code-side defaults.
+SITE_STRING_DEFAULTS = {
+    "featured_video.embed_url": "https://www.youtube-nocookie.com/embed/ky8rKHSVgNw?rel=0",
+    "featured_video.watch_url": "https://www.youtube.com/watch?v=ky8rKHSVgNw",
+    "footer.tagline": "A Home For Playable Worlds.",
+    "footer.discord_url": "https://discord.gg/nKPtUF4KHt",
+    "footer.youtube_url": "https://www.youtube.com/@stressthismess",
+}
+SITE_INT_DEFAULTS = {
+    "register.challenge_difficulty": (4, 1, 8),
+    "register.budget": (5, 1, 100),
+    "register.window_seconds": (600, 60, 3600),
+    "referral.bonus_acoins": (100, 0, 10000),
+    "referral.uses_per_day": (10, 1, 1000),
+    "register.max_accounts_per_ip": (2, 1, 100),
+}
+SITE_STRING_LIMITS = {
+    "featured_video.embed_url": 500,
+    "featured_video.watch_url": 500,
+    "footer.tagline": 160,
+    "footer.discord_url": 500,
+    "footer.youtube_url": 500,
+}
+SITE_SETTINGS = {}  # key -> override string
+STUDIO_NEWS_SEED = [
+    {"id": "n1", "title": "Paws & Parcels and Everenfell are live",
+     "summary": "Both game servers are online. Sign in to manage your account and jump in.",
+     "url": "#news", "published_at": int(time.time()), "created_at": int(time.time())},
+]
+STUDIO_NEWS = copy.deepcopy(STUDIO_NEWS_SEED)
+
+
+def site_value(key):
+    if key in SITE_SETTINGS:
+        return SITE_SETTINGS[key]
+    return SITE_STRING_DEFAULTS.get(key, "")
+
+
+def site_int(key):
+    default, lo, hi = SITE_INT_DEFAULTS[key]
+    try:
+        return max(lo, min(hi, int(str(SITE_SETTINGS.get(key, default)).strip() or default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def site_content_payload():
+    return {
+        "featured_video": {
+            "title": "Featured video",
+            "embed_url": site_value("featured_video.embed_url"),
+            "watch_url": site_value("featured_video.watch_url"),
+        },
+        "footer": {
+            "tagline": site_value("footer.tagline"),
+            "discord_url": site_value("footer.discord_url"),
+            "youtube_url": site_value("footer.youtube_url"),
+        },
+    }
 TICKETS = []           # list of ticket dicts
 GAMES = {"games": [
     {"slug": "paws-and-parcels", "title": "Paws & Parcels",
@@ -119,6 +183,72 @@ NOTIFICATION_READS = {}  # user_id -> set of read notification refs
 CLIENT_ERRORS = []  # client_error_log mirror
 CLIENT_ERROR_TRIAGE = {}  # client_error_log.id -> {status, triaged_at, triaged_by} (0006)
 CLIENT_ERROR_MUTES = {}   # message hash -> {message, muted_at, muted_by} (0006)
+REFERRAL_USES = []  # referral_uses mirror: {id, code, referrer/referred ids, bonus, created_at}
+ACCOUNT_LEDGER = []  # per-user account_transactions rows (referral bonuses)
+
+
+def real_ip(handler):
+    """Mirror proxy.py: leftmost X-Forwarded-For entry, else the direct peer."""
+    forwarded = handler.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        first = forwarded.split(",", 1)[0].strip()
+        if first:
+            return first
+    return handler.client_address[0]
+
+
+def account_cap():
+    """Effective per-IP account cap: --account-cap startup flag wins (test
+    harnesses relax it), otherwise the register.max_accounts_per_ip setting."""
+    flag = CONFIG.get("account_cap")
+    if flag is not None:
+        return flag
+    return site_int("register.max_accounts_per_ip")
+
+
+def mint_referral_code(user_id):
+    for _ in range(5):
+        code = secrets.token_hex(6)
+        if all(u.get("referral_code") != code for u in USERS.values()):
+            USERS[user_id]["referral_code"] = code
+            return code
+    raise ValueError("could not mint a referral code")
+
+
+def redeem_referral(code, user_id):
+    """Mirror proxy.py: credit both sides of a referral signup, or explain why not."""
+    code = str(code or "").strip()
+    if not code:
+        return {"credited": False}
+    owner = next((u for u in USERS.values() if u.get("referral_code") == code), None)
+    if owner is None or owner["id"] == user_id:
+        return {"credited": False, "reason": "unknown_referral_code"}
+    if owner.get("role", "").lower() not in ("member", "admin"):
+        return {"credited": False, "reason": "referral_code_inactive"}
+    bonus = site_int("referral.bonus_acoins")
+    per_day = site_int("referral.uses_per_day")
+    if bonus <= 0:
+        return {"credited": False, "reason": "referrals_disabled"}
+    cutoff = time.time() - 86400
+    if sum(1 for use in REFERRAL_USES if use["code"] == code and use["created_at"] > cutoff) >= per_day:
+        return {"credited": False, "reason": "referral_limit_reached"}
+    owner["acoins_balance"] = owner.get("acoins_balance", 0) + bonus
+    USERS[user_id]["acoins_balance"] = USERS[user_id].get("acoins_balance", 0) + bonus
+    use_id = secrets.token_hex(8)
+    REFERRAL_USES.append({"id": use_id, "code": code, "referrer_user_id": owner["id"],
+                           "referred_user_id": user_id, "bonus_acoins": bonus, "created_at": time.time()})
+    detail = f"Referral bonus ({code})"
+    ACCOUNT_LEDGER.append({"id": f"txn-ref-{use_id}-referrer", "user_id": owner["id"],
+                            "kind": "referral_bonus", "title": f"{bonus} ACoins referral bonus",
+                            "detail": detail, "amount_cents": None, "acoins_delta": bonus,
+                            "game_slug": None, "status": "completed", "created_at": int(time.time()),
+                            "receipt": {"referral_code": code}})
+    ACCOUNT_LEDGER.append({"id": f"txn-ref-{use_id}-referred", "user_id": user_id,
+                            "kind": "referral_bonus", "title": f"{bonus} ACoins referral bonus",
+                            "detail": detail, "amount_cents": None, "acoins_delta": bonus,
+                            "game_slug": None, "status": "completed", "created_at": int(time.time()),
+                            "receipt": {"referral_code": code}})
+    return {"credited": True, "bonus_acoins": bonus}
 
 
 def message_hash(text):
@@ -199,7 +329,7 @@ def valid_password(password):
     return None
 
 
-def register_proof_ok(form):
+def register_proof_ok(form, difficulty=None):
     proof = form.get("proof")
     if not isinstance(proof, dict):
         return False
@@ -211,7 +341,9 @@ def register_proof_ok(form):
     expires = REGISTER_CHALLENGES.pop(challenge, None)
     if expires is None or expires < time.time():
         return False
-    return hashlib.sha256((challenge + nonce).encode()).hexdigest().startswith("0" * REGISTER_CHALLENGE_DIFFICULTY)
+    if difficulty is None:
+        difficulty = site_int("register.challenge_difficulty")
+    return hashlib.sha256((challenge + nonce).encode()).hexdigest().startswith("0" * difficulty)
 
 
 # Mirrors proxy.py's public telemetry limits so the 429/413 paths are testable.
@@ -265,6 +397,8 @@ def reset_state():
     TICKETS.extend(copy.deepcopy(INITIAL_TICKETS))
     RECENT_MUTATIONS.clear()
     MODERATION.clear()
+    REFERRAL_USES.clear()
+    ACCOUNT_LEDGER.clear()
     NOTIFICATION_READS.clear()
     CLIENT_ERRORS.clear()
     CLIENT_ERROR_TRIAGE.clear()
@@ -275,6 +409,9 @@ def reset_state():
     SESSIONS.clear()
     CSRF.clear()
     VERIFICATIONS.clear()
+    SITE_SETTINGS.clear()
+    STUDIO_NEWS.clear()
+    STUDIO_NEWS.extend(copy.deepcopy(STUDIO_NEWS_SEED))
     REGISTER_CHALLENGES.clear()
     REGISTER_ATTEMPTS.clear()
     ONLINE_VISITORS.clear()
@@ -588,8 +725,10 @@ class Handler(BaseHTTPRequestHandler):
             challenge = secrets.token_hex(16)
             REGISTER_CHALLENGES[challenge] = now + REGISTER_CHALLENGE_TTL
             return self.reply(200, {"challenge": challenge,
-                                    "difficulty": REGISTER_CHALLENGE_DIFFICULTY,
+                                    "difficulty": site_int("register.challenge_difficulty"),
                                     "expires_in": int(REGISTER_CHALLENGE_TTL)})
+        if path == "/api/site/content":
+            return self.reply(200, site_content_payload())
         if path == "/api/auth/session":
             _, user = self.current_user()
             if user:
@@ -600,12 +739,29 @@ class Handler(BaseHTTPRequestHandler):
             if failure:
                 return self.reply(*failure)
             return self.reply(200, {"user": public(user), "stats": {"support_tickets": len([t for t in TICKETS if t["user_id"] == user["id"]])}})
+        if path == "/api/account/referral":
+            _, user, failure = self.require_auth()
+            if failure:
+                return self.reply(*failure)
+            code = user.get("referral_code") or mint_referral_code(user["id"])
+            cutoff = time.time() - 86400
+            uses_24h = sum(1 for use in REFERRAL_USES if use["code"] == code and use["created_at"] > cutoff)
+            mine = [use for use in REFERRAL_USES if use["code"] == code]
+            bonus = site_int("referral.bonus_acoins")
+            per_day = site_int("referral.uses_per_day")
+            return self.reply(200, {"code": code, "uses_24h": uses_24h,
+                                    "uses_total": len(mine), "remaining_24h": max(0, per_day - uses_24h),
+                                    "rewards_earned_acoins": sum(use["bonus_acoins"] for use in mine),
+                                    "bonus_acoins": bonus, "uses_per_day": per_day})
         if path == "/api/account/transactions":
             _, user, failure = self.require_auth()
             if failure:
                 return self.reply(*failure)
             now = int(time.time())
+            mine = sorted((entry for entry in ACCOUNT_LEDGER if entry["user_id"] == user["id"]),
+                          key=lambda entry: entry["created_at"], reverse=True)
             return self.reply(200, {"transactions": [
+                *mine,
                 {"id": "txn-demo-3", "kind": "game_purchase", "title": "Everenfell Season 1 Pass",
                  "detail": "Season pass via AGP Studios", "amount_cents": 999, "acoins_delta": 0,
                  "game_slug": "everenfell", "status": "completed", "created_at": now - 86400,
@@ -690,7 +846,8 @@ class Handler(BaseHTTPRequestHandler):
                                    muted_at=(mute or {}).get("muted_at", 0),
                                    muted_by=(mute or {}).get("muted_by", "")))
             return self.reply(200, {"errors": listed[:50], "page": 1, "page_size": 50, "status": status})
-        if path in ("/api/admin/summary", "/api/admin/users", "/api/admin/settings",
+        if path in ("/api/admin/summary", "/api/admin/stats", "/api/admin/users", "/api/admin/settings",
+                    "/api/admin/site-settings", "/api/admin/news",
                     "/api/admin/payments/settings", "/api/admin/database/status", "/api/admin/repo-status",
                     "/api/admin/telemetry", "/api/admin/omega/servers"):
             user, failure = self.require_admin()
@@ -700,6 +857,31 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(200, {"users": len(USERS), "active_users": len(USERS),
                                         "disabled_users": 0, "open_tickets": len(TICKETS),
                                         "active_projects": 0, "active_deploys": 0})
+            if path == "/api/admin/stats":
+                # Mirror proxy.py: counts from the mock's in-memory tables, so
+                # quiet suites honestly read zero profits and null game probes.
+                now = int(time.time())
+                created = [u.get("created_at", now) for u in USERS.values()]
+                day_ago = now - 86400
+                stats_games = []
+                for game in GAMES["games"]:
+                    slug = game["slug"]
+                    mine = [e for e in ACCOUNT_LEDGER if e.get("game_slug") == slug]
+                    spent = sum(-e["acoins_delta"] for e in mine if e.get("kind") == "acoins_spend" and (e.get("acoins_delta") or 0) < 0)
+                    stats_games.append({"slug": slug, "title": game["title"], "status": game["status"],
+                                        "online": None, "entitlements": None,
+                                        "acoins_spent": spent, "transactions": len(mine)})
+                return self.reply(200, {
+                    "signups": {
+                        "today": sum(1 for ts in created if ts >= day_ago),
+                        "week": sum(1 for ts in created if ts >= now - 7 * 86400),
+                        "month": sum(1 for ts in created if ts >= now - 30 * 86400),
+                        "total": len(USERS),
+                    },
+                    "profits_cents": {"day": 0, "week": 0, "month": 0, "year": 0},
+                    "online": {"website": len(ONLINE_VISITORS), "paws": None},
+                    "games": stats_games,
+                })
             if path == "/api/admin/users":
                 listing = [
                     dict(public(u),
@@ -719,6 +901,16 @@ class Handler(BaseHTTPRequestHandler):
                                         "paws": {"status": "ok"}, "migrations": self.migrations_summary()})
             if path == "/api/admin/repo-status":
                 return self.reply(200, {"ashathub": {"live": "mock0001", "repo": "mock0001", "state": "current"}})
+            if path == "/api/admin/site-settings":
+                settings = dict(SITE_STRING_DEFAULTS)
+                for key in SITE_INT_DEFAULTS:
+                    settings[key] = site_int(key)
+                for key in SITE_STRING_DEFAULTS:
+                    settings[key] = site_value(key)
+                return self.reply(200, {"settings": settings})
+            if path == "/api/admin/news":
+                listing = sorted(STUDIO_NEWS, key=lambda item: (item.get("published_at", 0), item.get("created_at", 0)), reverse=True)
+                return self.reply(200, {"news": [dict(item) for item in listing]})
             if path == "/api/admin/telemetry":
                 return self.reply(200, {"servers": [], "updated_at": int(time.time())})
             return self.reply(200, {"servers": []})
@@ -775,6 +967,64 @@ class Handler(BaseHTTPRequestHandler):
                 "environment": form["environment"],
             })
             return self.reply(200, {"ok": True})
+
+        if path == "/api/admin/site-settings":
+            user, failure = self.require_admin()
+            if failure:
+                return self.reply(*failure)
+            incoming = form.get("settings") if isinstance(form, dict) else None
+            if not isinstance(incoming, dict):
+                return self.reply(*err("settings object required", 400))
+            unknown = [key for key in incoming if key not in SITE_STRING_DEFAULTS and key not in SITE_INT_DEFAULTS]
+            if unknown:
+                return self.reply(*err("unknown setting: " + ", ".join(sorted(unknown)[:5]), 400))
+            if len(incoming) > 32:
+                return self.reply(*err("too many settings at once", 400))
+            saved = {}
+            for key, value in incoming.items():
+                if key in SITE_INT_DEFAULTS:
+                    default, lo, hi = SITE_INT_DEFAULTS[key]
+                    try:
+                        number = int(str(value).strip())
+                    except (TypeError, ValueError):
+                        return self.reply(*err(f"{key} must be an integer", 400))
+                    if not lo <= number <= hi:
+                        return self.reply(*err(f"{key} must be {lo}-{hi}", 400))
+                    saved[key] = str(number)
+                else:
+                    if not isinstance(value, str):
+                        return self.reply(*err(f"{key} must be text", 400))
+                    text = value.strip()
+                    if len(text) > SITE_STRING_LIMITS[key]:
+                        return self.reply(*err(f"{key} too long (max {SITE_STRING_LIMITS[key]})", 400))
+                    if key == "footer.tagline" and not text:
+                        return self.reply(*err("footer tagline is required", 400))
+                    if key.endswith("_url") and text and not re.fullmatch(r"https?://[^\s]+", text):
+                        return self.reply(*err(f"{key} must be an http(s) URL", 400))
+                    saved[key] = text
+            SITE_SETTINGS.update(saved)
+            return self.reply(200, {"ok": True, "settings": saved})
+
+        if path == "/api/admin/news":
+            user, failure = self.require_admin()
+            if failure:
+                return self.reply(*failure)
+            if not isinstance(form, dict):
+                return self.reply(*err("title is required (max 140)", 400))
+            title = str(form.get("title", "")).strip()
+            summary = str(form.get("summary", "")).strip()
+            url = str(form.get("url", "") or "#news").strip() or "#news"
+            if not title or len(title) > 140:
+                return self.reply(*err("title is required (max 140)", 400))
+            if not summary or len(summary) > 500:
+                return self.reply(*err("summary is required (max 500)", 400))
+            if len(url) > 500:
+                return self.reply(*err("url too long (max 500)", 400))
+            news_id = secrets.token_hex(8)
+            now = int(time.time())
+            STUDIO_NEWS.append({"id": news_id, "title": title, "summary": summary,
+                                "url": url, "published_at": now, "created_at": now})
+            return self.reply(200, {"ok": True, "id": news_id})
 
         if path in ("/api/acoins/order", "/api/acoins/capture"):
             _, user, failure = self.require_auth()
@@ -836,10 +1086,12 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(202, {"logged": True})
 
         if path == "/api/auth/register":
-            address = self.client_address[0]
+            address = real_ip(self)
             now = time.time()
-            REGISTER_ATTEMPTS[address] = [stamp for stamp in REGISTER_ATTEMPTS.get(address, []) if now - stamp < REGISTER_WINDOW]
-            if len(REGISTER_ATTEMPTS[address]) >= REGISTER_BUDGET:
+            budget = site_int("register.budget")
+            window = site_int("register.window_seconds")
+            REGISTER_ATTEMPTS[address] = [stamp for stamp in REGISTER_ATTEMPTS.get(address, []) if now - stamp < window]
+            if len(REGISTER_ATTEMPTS[address]) >= budget:
                 return self.reply(*err("too many registration attempts", 429))
             REGISTER_ATTEMPTS[address].append(now)
             username = form.get("username", "").strip()
@@ -855,17 +1107,25 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(*err("human verification failed", 400))
             if any(u["username"] == username or u["email"].lower() == email.lower() for u in USERS.values()):
                 return self.reply(*err("username_or_email_taken", 409))
+            cap = account_cap()
+            if cap > 0 and sum(1 for u in USERS.values() if u.get("created_ip") == address) >= cap:
+                return self.reply(*err("too many accounts from this address", 409))
             user_id = str(len(USERS) + 1)
             code = secrets.token_hex(4)
             VERIFICATIONS[username] = code
             USERS[user_id] = {"id": user_id, "username": username, "email": email,
                               "display_name": display, "role": "Member",
-                              "password": password, "verified": not CONFIG["verification_required"]}
+                              "password": password, "verified": not CONFIG["verification_required"],
+                              "created_ip": address, "referral_code": "", "acoins_balance": 0,
+                              "created_at": int(time.time())}
+            own_code = mint_referral_code(user_id)
+            referral = redeem_referral(form.get("referral_code"), user_id)
             print(f"[mock] verification code for {username}: {code}", flush=True)
             if CONFIG["verification_required"]:
                 return self.reply(201, {"registered": True, "verification_required": True, "email": email})
             return self.reply(201, {"registered": True, "verification_required": False,
-                                    "user": public(USERS[user_id])})
+                                    "user": public(USERS[user_id]),
+                                    "referral_code": own_code, "referral": referral})
 
         if path == "/api/auth/verify-email/resend":
             username = form.get("identifier", "").strip()
@@ -1140,6 +1400,43 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_PUT(self):
         path = urlparse(self.path).path
+        if path == "/api/admin/site-settings":
+            user, failure = self.require_admin()
+            if failure:
+                return self.reply(*failure)
+            form = self.body_json()
+            incoming = form.get("settings") if isinstance(form, dict) else None
+            if not isinstance(incoming, dict):
+                return self.reply(*err("settings object required", 400))
+            unknown = [key for key in incoming if key not in SITE_STRING_DEFAULTS and key not in SITE_INT_DEFAULTS]
+            if unknown:
+                return self.reply(*err("unknown setting: " + ", ".join(sorted(unknown)[:5]), 400))
+            if len(incoming) > 32:
+                return self.reply(*err("too many settings at once", 400))
+            saved = {}
+            for key, value in incoming.items():
+                if key in SITE_INT_DEFAULTS:
+                    default, lo, hi = SITE_INT_DEFAULTS[key]
+                    try:
+                        number = int(str(value).strip())
+                    except (TypeError, ValueError):
+                        return self.reply(*err(f"{key} must be an integer", 400))
+                    if not lo <= number <= hi:
+                        return self.reply(*err(f"{key} must be {lo}-{hi}", 400))
+                    saved[key] = str(number)
+                else:
+                    if not isinstance(value, str):
+                        return self.reply(*err(f"{key} must be text", 400))
+                    text = value.strip()
+                    if len(text) > SITE_STRING_LIMITS[key]:
+                        return self.reply(*err(f"{key} too long (max {SITE_STRING_LIMITS[key]})", 400))
+                    if key == "footer.tagline" and not text:
+                        return self.reply(*err("footer tagline is required", 400))
+                    if key.endswith("_url") and text and not re.fullmatch(r"https?://[^\s]+", text):
+                        return self.reply(*err(f"{key} must be an http(s) URL", 400))
+                    saved[key] = text
+            SITE_SETTINGS.update(saved)
+            return self.reply(200, {"ok": True, "settings": saved})
         if path.startswith("/api/admin/games/"):
             user, failure = self.require_admin()
             if failure:
@@ -1149,14 +1446,103 @@ class Handler(BaseHTTPRequestHandler):
             if not target:
                 return self.reply(*err("game not found", 404))
             form = self.body_json()
-            poster = form.get("poster")
-            if not isinstance(poster, str):
-                return self.reply(*err("poster url required", 400))
-            poster = poster.strip()
-            if len(poster) > 400:
-                return self.reply(*err("poster url too long (max 400)", 400))
-            target["poster"] = poster
-            return self.reply(200, {"ok": True, "slug": slug, "poster": poster})
+            if not isinstance(form, dict):
+                return self.reply(*err("game fields required", 400))
+            allowed = ("poster", "title", "summary", "status", "url", "featured", "sort_order", "tags")
+            unknown = [key for key in form if key not in allowed]
+            if unknown:
+                return self.reply(*err("unknown field: " + ", ".join(sorted(unknown)[:5]), 400))
+            updates = {}
+            if "poster" in form:
+                poster = form["poster"]
+                if not isinstance(poster, str):
+                    return self.reply(*err("poster url required", 400))
+                poster = poster.strip()
+                if len(poster) > 400:
+                    return self.reply(*err("poster url too long (max 400)", 400))
+                updates["poster"] = poster
+            if "title" in form:
+                title = str(form["title"]).strip()
+                if not title or len(title) > 120:
+                    return self.reply(*err("title is required (max 120)", 400))
+                updates["title"] = title
+            if "summary" in form:
+                summary = str(form["summary"]).strip()
+                if not summary or len(summary) > 500:
+                    return self.reply(*err("summary is required (max 500)", 400))
+                updates["summary"] = summary
+            if "status" in form:
+                if form["status"] not in ("live", "in-development", "coming-soon"):
+                    return self.reply(*err("status must be live, in-development, or coming-soon", 400))
+                updates["status"] = form["status"]
+            if "url" in form:
+                url = str(form["url"] or "").strip()
+                if len(url) > 500:
+                    return self.reply(*err("url too long (max 500)", 400))
+                updates["url"] = url
+            if "featured" in form:
+                if type(form["featured"]) is not bool:
+                    return self.reply(*err("featured must be true or false", 400))
+                updates["featured"] = form["featured"]
+            if "sort_order" in form:
+                try:
+                    order = int(form["sort_order"])
+                except (TypeError, ValueError):
+                    return self.reply(*err("sort_order must be an integer", 400))
+                if not 0 <= order <= 1000:
+                    return self.reply(*err("sort_order must be 0-1000", 400))
+                updates["sort_order"] = order
+            if "tags" in form:
+                tags = form["tags"]
+                if isinstance(tags, str):
+                    tags = [tag.strip() for tag in tags.split(",")]
+                if not isinstance(tags, list) or not tags or len(tags) > 10 or any(not isinstance(tag, str) or not tag.strip() or len(tag) > 40 for tag in tags):
+                    return self.reply(*err("tags must be 1-10 short labels", 400))
+                updates["tags"] = [tag.strip() for tag in tags]
+            if not updates:
+                return self.reply(*err("nothing to update", 400))
+            target.update(updates)
+            result = {"ok": True, "slug": slug, "game": dict(target)}
+            if "poster" in updates:
+                result["poster"] = updates["poster"]
+            return self.reply(200, result)
+        if path.startswith("/api/admin/news/"):
+            user, failure = self.require_admin()
+            if failure:
+                return self.reply(*failure)
+            news_id = path.removeprefix("/api/admin/news/").strip("/")
+            if not news_id:
+                return self.reply(*err("news id required", 400))
+            target = next((item for item in STUDIO_NEWS if item["id"] == news_id), None)
+            if not target:
+                return self.reply(*err("news not found", 404))
+            form = self.body_json()
+            if not isinstance(form, dict) or not form:
+                return self.reply(*err("nothing to update", 400))
+            allowed = ("title", "summary", "url")
+            unknown = [key for key in form if key not in allowed]
+            if unknown:
+                return self.reply(*err("unknown field: " + ", ".join(sorted(unknown)[:5]), 400))
+            updates = {}
+            if "title" in form:
+                title = str(form["title"]).strip()
+                if not title or len(title) > 140:
+                    return self.reply(*err("title is required (max 140)", 400))
+                updates["title"] = title
+            if "summary" in form:
+                summary = str(form["summary"]).strip()
+                if not summary or len(summary) > 500:
+                    return self.reply(*err("summary is required (max 500)", 400))
+                updates["summary"] = summary
+            if "url" in form:
+                url = str(form["url"] or "#news").strip() or "#news"
+                if len(url) > 500:
+                    return self.reply(*err("url too long (max 500)", 400))
+                updates["url"] = url
+            if not updates:
+                return self.reply(*err("nothing to update", 400))
+            target.update(updates)
+            return self.reply(200, {"ok": True, "id": news_id, "updated": updates})
         if path == "/api/account":
             _, user, failure = self.require_auth()
             if failure:
@@ -1182,6 +1568,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         path = urlparse(self.path).path
+        if path.startswith("/api/admin/news/"):
+            user, failure = self.require_admin()
+            if failure:
+                return self.reply(*failure)
+            news_id = path.removeprefix("/api/admin/news/").strip("/").rsplit("/", 1)[-1]
+            if not news_id:
+                return self.reply(*err("news id required", 400))
+            target = next((item for item in STUDIO_NEWS if item["id"] == news_id), None)
+            if not target:
+                return self.reply(*err("news not found", 404))
+            STUDIO_NEWS.remove(target)
+            return self.reply(200, {"ok": True, "deleted": news_id})
         if path.startswith("/api/admin/users/"):
             user, failure = self.require_admin()
             if failure:
@@ -1232,9 +1630,23 @@ def hostile_selection(argv):
     return []
 
 
+def account_cap_flag(argv):
+    """--account-cap=N relaxes the per-IP account cap for test harnesses
+    (suites register many accounts from one loopback IP); 0 disables it.
+    Absent, the register.max_accounts_per_ip setting (default 2) applies."""
+    for argument in argv:
+        if argument.startswith("--account-cap="):
+            try:
+                return max(0, int(argument.split("=", 1)[1]))
+            except ValueError:
+                raise SystemExit("[mock] --account-cap needs an integer (0 disables the cap)")
+    return None
+
+
 if __name__ == "__main__":
     required_verification = "--verification-required" in sys.argv
     hostile = hostile_selection(sys.argv)
+    cap_flag = account_cap_flag(sys.argv)
     unknown = [item for item in hostile if item not in HOSTILE_SHAPES]
     if unknown:
         print(f"[mock] unknown --hostile keys: {', '.join(sorted(unknown))}", flush=True)
@@ -1242,7 +1654,11 @@ if __name__ == "__main__":
         raise SystemExit(2)
     CONFIG["verification_required"] = required_verification
     CONFIG["hostile"] = hostile
+    if cap_flag is not None:
+        CONFIG["account_cap"] = cap_flag
     STARTUP_CONTROLS.update({"verification_required": required_verification, "hostile": list(hostile)})
+    if cap_flag is not None:
+        STARTUP_CONTROLS["account_cap"] = cap_flag
     # PORT mirrors services/python-api/proxy.py so parallel stacks (E2E runs)
     # can bind their own instance without touching the default 3110.
     port = int(os.environ.get("PORT", "3110"))

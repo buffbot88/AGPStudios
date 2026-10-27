@@ -20,7 +20,7 @@ def main():
                 migrate.apply_migration(conn, migration, "test")
             applied = migrate.load_applied(conn.cursor())
             assert len(applied) == len(migrations) and not migrate.plan(migrations, applied).pending
-            assert conn.execute("SELECT COUNT(*) AS n FROM games").fetchone()["n"] == 3
+            assert conn.execute("SELECT COUNT(*) AS n FROM games").fetchone()["n"] == 2
             assert conn.execute("SELECT COUNT(*) AS n FROM studio_news").fetchone()["n"] == 1
             conn.execute("INSERT INTO users(id,username,email,password_hash) VALUES(?,?,?,?)",
                          ("u1", "member", "member@example.test", "hash"))

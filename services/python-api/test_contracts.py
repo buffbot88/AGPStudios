@@ -76,7 +76,7 @@ def main():
     get("/api/account/summary", expected=401)
     get("/api/account/transactions", expected=401)
     _, _, body = get("/api/admin/users", expected=403)
-    assert json.loads(body)["error"]["code"] == "admin_authentication_required"
+    assert json.loads(body)["error"]["code"] == "admin_session_required"
     request = urllib.request.Request(BASE + "/api/account", data=b'{"confirm":"DELETE"}', headers={"Content-Type":"application/json"}, method="DELETE")
     try: urllib.request.urlopen(request, timeout=15)
     except urllib.error.HTTPError as exc: assert exc.code == 401
@@ -98,9 +98,9 @@ class Client:
         self.jar = CookieJar()
         self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.jar))
 
-    def req(self, path, method="GET", body=None, csrf=True):
+    def req(self, path, method="GET", body=None, csrf=True, headers=None):
         data = json.dumps(body).encode() if body is not None else None
-        headers = {"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json", **(headers or {})}
         if csrf and method in ("POST", "PUT", "DELETE"):
             headers["X-CSRF-Token"] = self.csrf()
         request = urllib.request.Request(BASE + path, data=data, method=method, headers=headers)
@@ -173,13 +173,87 @@ def phase2():
     code, body = member.req("/api/auth/login", "POST", {"identifier": username, "password": "smoke-pass-1"})
     assert code == 200 and isinstance((body or {}).get("user"), dict), ("member login", code)
 
+    # -- referrals: permanent code, credit on signup, unknown-code fallback --
+    code, body = member.req("/api/account/referral")
+    assert code == 200 and body.get("code") and body.get("uses_total") == 0, ("referral link", code, body)
+    assert body.get("bonus_acoins") == 100 and body.get("uses_per_day") == 10, ("referral defaults", body)
+    friend = Client()
+    friend_name = f"smoke-ref-{secrets.token_hex(4)}"
+    code, body = friend.req("/api/auth/register-challenge")
+    assert code == 200, ("referral register challenge", code)
+    proof = solve_challenge(body["challenge"], body["difficulty"])
+    # NOTE: the per-IP account cap is enforced here too — this suite runs two
+    # successful registrations from one address (default cap), so no further
+    # registering IPs are introduced below; the strict cap is covered by
+    # test_api_sqlite.py with simulated distinct IPs.
+    code, body = friend.req("/api/auth/register", "POST", {
+        "username": friend_name, "email": f"{friend_name}@example.test",
+        "password": "smoke-pass-1", "display_name": "Smoke Referred",
+        "proof": proof, "referral_code": member.req("/api/account/referral")[1]["code"],
+    })
+    assert code == 201 and (body or {}).get("referral", {}).get("credited") is True, ("referral signup", code, body)
+    assert (body or {}).get("referral", {}).get("bonus_acoins") == 100, ("referral bonus", body)
+    code, body = friend.req("/api/auth/login", "POST", {"identifier": friend_name, "password": "smoke-pass-1"})
+    assert code == 200, ("referred login", code)
+    code, body = friend.req("/api/account/summary")
+    assert code == 200 and body["user"]["acoins_balance"] == 100, ("referred balance", code, body)
+    code, body = friend.req("/api/account/transactions")
+    assert code == 200 and any(t.get("kind") == "referral_bonus" and t.get("acoins_delta") == 100
+                               for t in (body or {}).get("transactions", [])), ("referral ledger", code, body)
+    stranger = Client()
+    stranger_name = f"smoke-str-{secrets.token_hex(4)}"
+    code, body = stranger.req("/api/auth/register-challenge")
+    assert code == 200, ("stranger challenge", code)
+    proof = solve_challenge(body["challenge"], body["difficulty"])
+    # A simulated distinct network: the per-IP account cap counts this
+    # address separately (both the mock and proxy honor X-Forwarded-For).
+    code, body = stranger.req("/api/auth/register", "POST", {
+        "username": stranger_name, "email": f"{stranger_name}@example.test",
+        "password": "smoke-pass-1", "display_name": "Smoke Stranger",
+        "proof": proof, "referral_code": "not-a-real-code",
+    }, headers={"X-Forwarded-For": "10.9.8.9"})
+    assert code == 201 and (body or {}).get("referral") == {"credited": False, "reason": "unknown_referral_code"}, \
+        ("unknown referral code still registers", code, body)
+
+    # -- Website admin: site content, settings, news curation ---------------
+    code, body = member.req("/api/site/content")
+    assert code == 200 and body["footer"]["tagline"] and body["featured_video"]["embed_url"], ("site content", code, body)
+    code, body = member.req("/api/admin/site-settings", csrf=False)
+    assert code == 403, ("site settings are admin-only", code)
+    code, body = admin.req("/api/admin/site-settings")
+    assert code == 200 and body["settings"]["register.budget"] == 5, ("site settings", code, body)
+    code, body = admin.req("/api/admin/site-settings", "PUT", {"settings": {"footer.tagline": "Contract Tagline"}})
+    assert code == 200 and body.get("ok") is True, ("site settings save", code, body)
+    code, body = member.req("/api/site/content")
+    assert body["footer"]["tagline"] == "Contract Tagline", ("homepage reflects the saved tagline", code, body)
+    code, body = admin.req("/api/admin/site-settings", "PUT", {"settings": {"footer.tagline": "A Home For Playable Worlds."}})
+    assert code == 200, ("site settings restore", code, body)
+    code, body = admin.req("/api/admin/news", "POST", {"title": "Contract pinned", "summary": "Pinned by phase 2."})
+    assert code == 200 and body.get("id"), ("news pin", code, body)
+    news_id = body["id"]
+    code, body = admin.req(f"/api/admin/news/{news_id}", "PUT", {"summary": "Pinned by phase 2 (edited)."})
+    assert code == 200, ("news edit", code, body)
+    code, body = admin.req(f"/api/admin/news/{news_id}", "DELETE")
+    assert code == 200 and body.get("deleted") == news_id, ("news delete", code, body)
+
+    # -- GET /api/admin/stats: wall-stats shape ----------------------------
+    code, body = member.req("/api/admin/stats", csrf=False)
+    assert code == 403, ("wall stats are admin-only", code)
+    code, body = admin.req("/api/admin/stats")
+    assert code == 200, ("wall stats", code, body)
+    assert set(("signups", "profits_cents", "online", "games")) <= set(body), ("wall stats sections", body)
+    assert body["signups"]["total"] >= 3, ("wall stats count the suite accounts", body["signups"])
+    assert set(("day", "week", "month", "year")) <= set(body["profits_cents"]), ("profit windows", body)
+    slugs = {game["slug"] for game in body["games"]}
+    assert {"paws-and-parcels", "everenfell"} <= slugs, ("wall stats cover both live games", slugs)
+
     # -- GET /api/account/transactions: newest-first purchase history --------
     code, body = member.req("/api/account/transactions")
     assert code == 200 and isinstance((body or {}).get("transactions"), list), ("transactions list", code, body)
     for txn in body["transactions"]:
         assert set(("id", "kind", "title", "detail", "amount_cents", "acoins_delta",
                     "game_slug", "status", "created_at", "receipt")) <= set(txn), ("transaction shape", txn)
-        assert txn["kind"] in ("acoins_purchase", "acoins_spend", "game_purchase"), ("transaction kind", txn)
+        assert txn["kind"] in ("acoins_purchase", "acoins_spend", "game_purchase", "referral_bonus"), ("transaction kind", txn)
 
     code, body = admin.req("/api/admin/users?q=" + username)
     target = row_for(body, username)

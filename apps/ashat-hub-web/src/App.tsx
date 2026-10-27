@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import './styles.css';
-import { fetchGames, fetchNews, FEATURED_GAME, FEATURED_VIDEO, type Game, type NewsItem } from './content';
+import { fetchGames, fetchNews, fetchSiteContent, FEATURED_GAME, FEATURED_VIDEO, type Game, type NewsItem, type SiteContent } from './content';
 import { SiteHeader } from './components/home/SiteHeader';
 import { HeroSection } from './components/home/HeroSection';
 import { QuickInfoCard } from './components/home/QuickInfoCard';
@@ -61,6 +61,8 @@ function App() {
   const [route, setRoute] = useState<Route>(() => routeFromHash());
   const [games, setGames] = useState<Game[] | null>(null);
   const [news, setNews] = useState<NewsItem[] | null>(null);
+  const [siteContent, setSiteContent] = useState<SiteContent | null>(null);
+  const video = siteContent?.featured_video ?? FEATURED_VIDEO;
   const sessionResolved = peekSession() !== undefined;
 
   useEffect(() => {
@@ -98,6 +100,7 @@ function App() {
   useEffect(() => {
     void fetchGames().then(({ games: next }) => setGames(next));
     void fetchNews().then(({ news: next }) => setNews(next));
+    void fetchSiteContent().then(setSiteContent);
     // Studio news refreshes server-side every 30 minutes; re-poll on the same
     // cadence so a long-open homepage picks up fresh commits without a reload.
     const timer = window.setInterval(() => {
@@ -248,11 +251,11 @@ function App() {
 
         <section className="section reveal" id="featured-video" aria-labelledby="featured-video-title">
           <div className="news-card news-list-panel">
-            <SectionHeader title={FEATURED_VIDEO.title} text="Latest from the studio." />
+            <SectionHeader title={video.title} text="Latest from the studio." />
           <div className="video-frame">
             <iframe
-              src={FEATURED_VIDEO.embedUrl}
-              title={FEATURED_VIDEO.title}
+              src={video.embedUrl}
+              title={video.title}
               loading="lazy"
               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
               referrerPolicy="strict-origin-when-cross-origin"
@@ -260,7 +263,7 @@ function App() {
             />
           </div>
           <p className="community-note">
-            <a className="link-action" href={FEATURED_VIDEO.watchUrl} target="_blank" rel="noreferrer">
+            <a className="link-action" href={video.watchUrl} target="_blank" rel="noreferrer">
               Watch on YouTube <span aria-hidden>→</span>
             </a>
           </p>
@@ -269,7 +272,7 @@ function App() {
           </>
         )}
       </main>
-      <SiteFooter />
+      <SiteFooter content={siteContent?.footer} />
       <ToastHost />
     </div>
   );

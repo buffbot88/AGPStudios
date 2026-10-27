@@ -160,6 +160,18 @@ const byPath: Record<string, Schema<unknown>> = {
     authenticated: bool,
     user: optional(nullable(user), null),
   }),
+  '/account/referral': obj<{
+    code: string; uses_24h: number; uses_total: number; remaining_24h: number;
+    rewards_earned_acoins: number; bonus_acoins: number; uses_per_day: number;
+  }>({
+    code: str,
+    uses_24h: numish,
+    uses_total: numish,
+    remaining_24h: numish,
+    rewards_earned_acoins: numish,
+    bonus_acoins: numish,
+    uses_per_day: numish,
+  }),
   '/account/summary': obj<{ user: unknown; github_linked?: boolean; stats: unknown }>({
     user,
     github_linked: optional(bool, false),
@@ -198,6 +210,24 @@ const byPath: Record<string, Schema<unknown>> = {
     unread_count: numish,
   }),
   '/notifications/read': obj<{ ok: boolean; read: number }>({ ok: bool, read: numish }),
+  '/site/content': obj<{ featured_video: unknown; footer: unknown }>({
+    featured_video: obj<{ title: string; embed_url: string; watch_url: string }>({
+      title: str, embed_url: str, watch_url: str,
+    }),
+    footer: obj<{ tagline: string; discord_url: string; youtube_url: string }>({
+      tagline: str, discord_url: str, youtube_url: str,
+    }),
+  }),
+  '/admin/site-settings': obj<{ settings: unknown }>({ settings: recordOf(anyValue) }),
+  '/admin/news': obj<{ news: unknown[] }>({
+    news: list(obj<{ id: string; title: string; summary: string; url: string; published_at: number }>({
+      id: str,
+      title: str,
+      summary: str,
+      url: str,
+      published_at: numish,
+    })),
+  }),
   '/game/ticket': obj<{ ticket: string; expires_in: number; user: { id: string; username: string } }>({
     ticket: str,
     expires_in: num,
@@ -230,6 +260,27 @@ const byPath: Record<string, Schema<unknown>> = {
     migrations: optional(anyValue, undefined),
   }),
   '/admin/games': obj<{ games: unknown[] }>({ games: list(game) }),
+  '/admin/stats': obj<{
+    signups: unknown; profits_cents: unknown; online: unknown; games: unknown[];
+  }>({
+    signups: obj<{ today: number; week: number; month: number; total: number }>({
+      today: numish, week: numish, month: numish, total: numish,
+    }),
+    profits_cents: obj<{ day: number; week: number; month: number; year: number }>({
+      day: numish, week: numish, month: numish, year: numish,
+    }),
+    online: obj<{ website: number; paws: number | null }>({
+      website: numish, paws: nullable(numish),
+    }),
+    games: list(obj<{
+      slug: string; title: string; status: string; online: number | null;
+      entitlements: number | null; acoins_spent: number; transactions: number;
+    }>({
+      slug: str, title: str, status: str,
+      online: nullable(numish), entitlements: nullable(numish),
+      acoins_spent: numish, transactions: numish,
+    })),
+  }),
   '/admin/client-errors': obj<{ errors: unknown[]; page?: number; page_size?: number; status?: string }>({
     errors: list(clientError),
     page: optional(numish, 1),
