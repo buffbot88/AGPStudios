@@ -74,19 +74,24 @@ const drifts = new Map<string, ShapeDrift>();
 const driftListeners = new Set<() => void>();
 let driftSnapshot: ShapeDrift[] = [];
 
-/** Call site that reached a helper, skipping this module's own frames. */
+/** Call site that reached a helper.
+ *
+ * The stack layout is fixed — [callerOrigin, noteDrift, safe* helper, real
+ * caller, ...] — so skip by position, not by name: minification renames every
+ * function (and strips .ts filenames), which is why the old name-based skip
+ * kept returning the helper's own frame instead of the true call site.
+ */
 function callerOrigin(): string {
   const stack = new Error().stack;
   if (!stack) return '';
-  for (const frame of stack.split('\n').slice(1)) {
-    const text = frame.trim();
-    if (!text.startsWith('at ')) continue;
-    // Skip the helper, noteDrift, and this function itself.
-    if (/[/\\]api\.ts|api\.ts:|[/\\]api\.js/.test(text)) continue;
-    const match = text.match(/([^/\\()\s]+:\d+)(?::\d+)?\)?$/);
-    if (match) return match[1];
-  }
-  return '';
+  const frames = stack
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith('at ') || line.includes('@'));
+  const caller = frames[3] ?? '';
+  const match =
+    caller.match(/([^/\\()\s]+:\d+)(?::\d+)?\)?$/) ?? caller.match(/@([^\s]+:\d+)(?::\d+)?$/);
+  return match ? match[1] : '';
 }
 
 /** Describe an unexpected value for the log, capped so payloads stay small. */

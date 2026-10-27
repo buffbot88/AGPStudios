@@ -39,8 +39,19 @@ function readCached(): SessionUser | null | undefined {
   try {
     const raw = sessionStorage.getItem(STORAGE_KEY);
     if (raw === null) return undefined;
-    const parsed = JSON.parse(raw) as SessionUser;
-    return parsed && typeof parsed.id === 'string' ? parsed : null;
+    const parsed = JSON.parse(raw) as Partial<SessionUser>;
+    // A stale entry from an older app shape (missing keys the UI reads)
+    // must not hydrate: it renders blank fields and logs shape drift on
+    // every paint until revalidation replaces it. Treat it as a cache miss
+    // so the first paint waits for the authoritative network answer.
+    const complete =
+      !!parsed &&
+      typeof parsed.id === 'string' &&
+      typeof parsed.username === 'string' &&
+      typeof parsed.email === 'string' &&
+      typeof parsed.display_name === 'string' &&
+      typeof parsed.role === 'string';
+    return complete ? (parsed as SessionUser) : undefined;
   } catch {
     return undefined;
   }

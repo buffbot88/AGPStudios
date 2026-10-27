@@ -274,6 +274,9 @@ export function AdminSurface({ user }: { user: User | null }) {
       await request(`${API}/admin/games/${encodeURIComponent(slug)}`, { method: 'PUT', body: JSON.stringify(fields) });
       toast('Game updated.', 'success');
       await load();
+      // The homepage snapshot was taken once on load — tell it to re-pull so
+      // the just-saved edit shows up without a full reload.
+      window.dispatchEvent(new CustomEvent('agp:games-changed'));
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Game update failed'); }
     finally { setBusy(false); }
   }
@@ -284,6 +287,7 @@ export function AdminSurface({ user }: { user: User | null }) {
       const result = await request<{ ok: boolean; slug: string }>(`${API}/admin/games`, { method: 'POST', body: JSON.stringify(fields) });
       toast('Game added.', 'success');
       await load();
+      window.dispatchEvent(new CustomEvent('agp:games-changed'));
       return safeText(result.slug) || null;
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Game creation failed'); return null; }
     finally { setBusy(false); }
@@ -336,7 +340,7 @@ export function AdminSurface({ user }: { user: User | null }) {
 
       {tab === 'overview' && <OverviewTab summary={summary} games={games} onNavigate={setTab} />}
       {tab === 'users' && <UsersTab users={users} query={query} onQueryChange={setQuery} onSearch={load} onSelectUser={selectUser} selectedUser={selectedUser} busy={busy} currentUser={user} onUpdateUser={updateUser} onBanUser={banUser} onDeleteUser={deleteUser} moderation={moderation} moderationError={moderationError} onRefreshModeration={() => selectedUser && void loadModeration(selectedUser.id)} />}
-      {tab === 'games' && <GamesTab games={games} busy={busy} onUpdateGame={updateGame} onCreateGame={createGame} />}
+      {tab === 'games' && <GamesTab games={games} loaded={loaded} busy={busy} onUpdateGame={updateGame} onCreateGame={createGame} />}
       {tab === 'website' && <WebsiteTab />}
       {tab === 'payments' && <PaymentsTab />}
       {tab === 'system' && <SystemTab loaded={loaded} database={database} settings={settings} onPush={pushGithub} onUpdate={systemUpdate} status={repoStatus} busy={busy} onApplyMigrations={applyMigrations} clientErrors={clientErrors} clientErrorsError={clientErrorsError} clientErrorsBusy={clientErrorsBusy} clientErrorsFilter={clientErrorsFilter} onFilterClientErrors={setClientErrorsFilter} onRefreshClientErrors={loadClientErrors} onTriageClientError={triageClientError} onMuteClientErrorMessage={muteClientErrorMessage} />}
@@ -382,7 +386,7 @@ function PaymentsTab() {
 
 // ── Games Tab ──
 
-function GamesTab({ games, busy, onUpdateGame, onCreateGame }: { games: AdminGame[]; busy: boolean; onUpdateGame: (slug: string, fields: Record<string, unknown>) => void; onCreateGame: (fields: Record<string, unknown>) => Promise<string | null> }) {
+function GamesTab({ games, loaded, busy, onUpdateGame, onCreateGame }: { games: AdminGame[]; loaded: boolean; busy: boolean; onUpdateGame: (slug: string, fields: Record<string, unknown>) => void; onCreateGame: (fields: Record<string, unknown>) => Promise<string | null> }) {
   type GameDraft = { title: string; summary: string; status: string; url: string; featured: boolean; sort_order: string; tags: string; poster: string };
   const [drafts, setDrafts] = useState<Record<string, Partial<GameDraft>>>({});
   const [selected, setSelected] = useState<string | null>(null);
@@ -407,6 +411,15 @@ function GamesTab({ games, busy, onUpdateGame, onCreateGame }: { games: AdminGam
   function save(game: AdminGame) {
     const slug = safeText(game.slug);
     const current = draft(game);
+    // Drop the local draft as it is handed to the server: the form then reads
+    // back the stored row on reload instead of echoing possibly-normalized
+    // input forever (which reads as "my save didn't stick").
+    setDrafts((prev) => {
+      if (!(slug in prev)) return prev;
+      const next = { ...prev };
+      delete next[slug];
+      return next;
+    });
     onUpdateGame(slug, {
       title: current.title.trim(), summary: current.summary.trim(), status: current.status,
       url: current.url.trim(), featured: current.featured,
@@ -516,7 +529,8 @@ function GamesTab({ games, busy, onUpdateGame, onCreateGame }: { games: AdminGam
           );
         })}
       </div>
-      {list.length === 0 && !adding && <div className="adm-empty">No games configured.</div>}
+      {!loaded && list.length === 0 && !adding && <div className="adm-empty">Loading games…</div>}
+      {loaded && list.length === 0 && !adding && <div className="adm-empty">No games configured.</div>}
     </div>
   );
 }

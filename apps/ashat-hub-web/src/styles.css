@@ -2480,6 +2480,10 @@ a.news-row-title:hover {
   width: 72px;
   height: 48px;
   flex-shrink: 0;
+  /* Containing block for PosterImage's absolute fallback: without this the
+     "no art" frame (position:absolute; inset:0) escapes to the page and
+     covers the whole surface with a centered glyph that also eats clicks. */
+  position: relative;
   border-radius: 6px;
   overflow: hidden;
   background: var(--surface-2);

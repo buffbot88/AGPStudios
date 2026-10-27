@@ -110,6 +110,15 @@ function App() {
     return () => window.clearInterval(timer);
   }, []);
 
+  // Admin game edits land in the database but this snapshot was taken once on
+  // mount — re-pull it when the admin surface reports a mutation, otherwise a
+  // just-saved edit looks like it "didn't stick" until the next full reload.
+  useEffect(() => {
+    const refresh = () => { void fetchGames().then(({ games: next }) => setGames(next)); };
+    window.addEventListener('agp:games-changed', refresh);
+    return () => window.removeEventListener('agp:games-changed', refresh);
+  }, []);
+
   // Restrained scroll reveals for homepage sections. Re-observes after
   // every render so content that arrives late (games, news) is covered;
   // already-revealed elements are skipped and unobserved once shown.
