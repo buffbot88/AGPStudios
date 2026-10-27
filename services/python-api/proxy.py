@@ -340,7 +340,7 @@ class Proxy(BaseHTTPRequestHandler):
             return self.admin_get()
         if urlparse(self.path).path == "/api/notifications":
             return self.notifications_list()
-        if urlparse(self.path).path in ("/api/support", "/api/account/summary") or urlparse(self.path).path.startswith("/api/support/"):
+        if urlparse(self.path).path in ("/api/support", "/api/account/summary", "/api/account/transactions") or urlparse(self.path).path.startswith("/api/support/"):
             return self.member_get()
         self.forward()
 
@@ -671,6 +671,7 @@ class Proxy(BaseHTTPRequestHandler):
                             conn.rollback(); return error(self,'PayPal payment is not complete',409)
                         cur.execute("UPDATE acoin_orders SET status='completed',paypal_capture_id=?,completed_at=CAST(strftime('%s','now') AS INTEGER) WHERE id=? AND status='pending'",(capture_id,order['id']))
                         cur.execute('UPDATE users SET acoins_balance=acoins_balance+? WHERE id=?',(order['acoins'],str(user['id'])))
+                        cur.execute("INSERT OR IGNORE INTO account_transactions (id,user_id,kind,title,detail,amount_cents,acoins_delta,game_slug,status,created_at,receipt) VALUES (?,?,?,?,?,?,?,NULL,'completed',CAST(strftime('%s','now') AS INTEGER),?)",('txn-'+order['id'],str(user['id']),'acoins_purchase',str(order['acoins'])+' ACoins purchase','ACoins package via PayPal ('+order['environment']+')',order['amount_cents'],order['acoins'],'{"paypal_order_id":"'+order['paypal_order_id']+'","paypal_capture_id":"'+(capture_id or '')+'"}'))
                         cur.execute('SELECT acoins_balance FROM users WHERE id=?',(str(user['id']),))
                         balance=cur.fetchone()['acoins_balance']
                     conn.commit()
@@ -1024,6 +1025,15 @@ class Proxy(BaseHTTPRequestHandler):
                         cur.execute("SELECT COUNT(*) AS n FROM support_tickets WHERE user_id=?", (user["id"],)); tickets=cur.fetchone()["n"]
                         cur.execute("SELECT acoins_balance FROM users WHERE id=?", (user["id"],)); balance=cur.fetchone()["acoins_balance"]
                         return oidc_json(self, {"user":{**self.safe_user(user),"acoins_balance":balance},"stats":{"support_tickets":tickets}})
+                    if path == "/api/account/transactions":
+                        cur.execute("SELECT id,kind,title,detail,amount_cents,acoins_delta,game_slug,status,created_at,receipt FROM account_transactions WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT 100",(str(user["id"]),))
+                        rows=[]
+                        for row in cur.fetchall():
+                            try: receipt=json.loads(row["receipt"] or "{}")
+                            except ValueError: receipt={}
+                            if not isinstance(receipt,dict): receipt={}
+                            rows.append({"id":row["id"],"kind":row["kind"],"title":row["title"],"detail":row["detail"],"amount_cents":row["amount_cents"],"acoins_delta":row["acoins_delta"],"game_slug":row["game_slug"],"status":row["status"],"created_at":row["created_at"],"receipt":receipt})
+                        return oidc_json(self,{"transactions":rows})
                     ticket_id=path.removeprefix('/api/support/').strip('/')
                     if ticket_id:
                         cur.execute("SELECT id,user_id,subject,status,priority,category,message,created_at,updated_at FROM support_tickets WHERE id=? AND user_id=?",(ticket_id,user["id"])); ticket=cur.fetchone()

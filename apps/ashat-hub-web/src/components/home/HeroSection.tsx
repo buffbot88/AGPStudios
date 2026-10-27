@@ -17,7 +17,6 @@ export function HeroSection({
         {/* Cinematic backdrop: art-directed castle vista under a grey glass
             veil so the photo sits back behind the foreground content. */}
         <div className="hero-art" aria-hidden />
-        <div className="hero-fade" aria-hidden />
       </section>
       <section className="worlds reveal" aria-label="Featured worlds">
         <div className="worlds-inner">

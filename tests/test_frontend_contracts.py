@@ -196,6 +196,20 @@ def run():
           "/api/account/summary: stats.support_tickets is a number (the conversation_messages regression)", repr(stats))
     check_user_shape((body or {}).get("user") or {}, "account summary")
 
+    # Purchase history (PurchaseHistoryPanel request call site): newest-first
+    # rows with an expandable receipt; no ACoins buy buttons live here anymore.
+    code, body = member.req("/api/account/transactions")
+    check(code == 200 and isinstance((body or {}).get("transactions"), list),
+          "/api/account/transactions returns 200 {transactions[]}", str(code))
+    for txn in (body or {}).get("transactions", []):
+        check(isinstance(txn, dict) and all(k in txn for k in (
+            "id", "kind", "title", "detail", "amount_cents", "acoins_delta",
+            "game_slug", "status", "created_at", "receipt")),
+              "/api/account/transactions: rows carry id/kind/title/detail/amount/coins/game/status/date/receipt",
+              repr(txn)[:160])
+        check(txn.get("kind") in ("acoins_purchase", "acoins_spend", "game_purchase"),
+              "/api/account/transactions: kind is a known purchase type", repr(txn.get("kind")))
+
     code, body = member.req("/api/support")
     check(code == 200 and isinstance((body or {}).get("tickets"), list),
           "/api/support: {tickets: [...]}")

@@ -214,8 +214,8 @@ function App() {
         />
 
         <section className="section reveal" id="news" aria-labelledby="news-title">
-          <SectionHeader title="Studio News" text="Recent commits from across the studio." />
           <div className="news-card news-list-panel">
+            <SectionHeader title="Studio News" text="Recent commits from across the studio." />
             <ol className="news-rows">
               {newsList.slice(0, 10).map((item, index) => {
                 const href = safeText(item.url, '#news');
@@ -240,7 +240,8 @@ function App() {
         </section>
 
         <section className="section reveal" id="featured-video" aria-labelledby="featured-video-title">
-          <SectionHeader title={FEATURED_VIDEO.title} text="Latest from the studio." />
+          <div className="news-card news-list-panel">
+            <SectionHeader title={FEATURED_VIDEO.title} text="Latest from the studio." />
           <div className="video-frame">
             <iframe
               src={FEATURED_VIDEO.embedUrl}
@@ -256,6 +257,7 @@ function App() {
               Watch on YouTube <span aria-hidden>→</span>
             </a>
           </p>
+          </div>
         </section>
           </>
         )}

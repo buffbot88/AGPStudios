@@ -73,6 +73,8 @@ def main():
 
             status, body, _ = request("/api/account/summary", authenticated=True)
             assert status == 200 and body["user"]["acoins_balance"] == 0
+            status, history, _ = request("/api/account/transactions", authenticated=True)
+            assert status == 200 and history["transactions"] == []
             status, body, _ = request("/api/support", "POST", {
                 "subject": "SQLite check", "message": "support row"}, authenticated=True)
             assert status == 201

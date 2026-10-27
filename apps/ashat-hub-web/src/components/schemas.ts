@@ -165,6 +165,25 @@ const byPath: Record<string, Schema<unknown>> = {
     github_linked: optional(bool, false),
     stats: obj<{ support_tickets: number }>({ support_tickets: numish }),
   }),
+  '/account/transactions': obj<{ transactions: unknown[] }>({
+    transactions: list(obj<{
+      id: string; kind: string; title: string; detail: string;
+      amount_cents: number | null; acoins_delta: number;
+      game_slug: string | null; status: string; created_at: number;
+      receipt: unknown;
+    }>({
+      id: str,
+      kind: str,
+      title: str,
+      detail: str,
+      amount_cents: optional(nullable(numish), null),
+      acoins_delta: numish,
+      game_slug: optional(nullable(str), null),
+      status: str,
+      created_at: numish,
+      receipt: recordOf(anyValue),
+    })),
+  }),
   '/support': obj<{ tickets: unknown[] }>({ tickets: list(ticketSummary) }),
   '/notifications': obj<{ notifications: unknown[]; unread_count: number }>({
     notifications: list(obj<{ id: string; kind: string; subject: string; message: string; created_at: string | number; read: boolean; ticket_id?: string }>({

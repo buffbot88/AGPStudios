@@ -498,6 +498,25 @@ class Handler(BaseHTTPRequestHandler):
             if failure:
                 return self.reply(*failure)
             return self.reply(200, {"user": public(user), "stats": {"support_tickets": len([t for t in TICKETS if t["user_id"] == user["id"]])}})
+        if path == "/api/account/transactions":
+            _, user, failure = self.require_auth()
+            if failure:
+                return self.reply(*failure)
+            now = int(time.time())
+            return self.reply(200, {"transactions": [
+                {"id": "txn-demo-3", "kind": "game_purchase", "title": "Everenfell Season 1 Pass",
+                 "detail": "Season pass via AGP Studios", "amount_cents": 999, "acoins_delta": 0,
+                 "game_slug": "everenfell", "status": "completed", "created_at": now - 86400,
+                 "receipt": {"order_id": "DEMO-3"}},
+                {"id": "txn-demo-2", "kind": "acoins_spend", "title": "500 ACoins spent",
+                 "detail": "In-game purchase", "amount_cents": None, "acoins_delta": -500,
+                 "game_slug": "paws-and-parcels", "status": "completed", "created_at": now - 86400 * 3,
+                 "receipt": {}},
+                {"id": "txn-demo-1", "kind": "acoins_purchase", "title": "1,000 ACoins purchase",
+                 "detail": "ACoins package via PayPal (sandbox)", "amount_cents": 100, "acoins_delta": 1000,
+                 "game_slug": None, "status": "completed", "created_at": now - 86400 * 9,
+                 "receipt": {"paypal_order_id": "DEMO-PAYPAL-1", "paypal_capture_id": "DEMO-CAPTURE-1"}},
+            ]})
         if path == "/api/support":
             _, user, failure = self.require_auth()
             if failure:

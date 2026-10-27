@@ -33,6 +33,7 @@ contract the Vite portal consumes.
 | GET | `/api/auth/github` | 404 (stub) | Not implemented; documented shape only. Returns `404 not_implemented`. |
 | GET | `/api/auth/me` | 200/401 | Alias of session for authenticated callers |
 | GET | `/api/account/summary` | 200/401 | Authenticated account and support summary; shape documented below |
+| GET | `/api/account/transactions` | 200/401 | Authenticated purchase history (ACoins buys, ACoins spending, game purchases), newest first; shape documented below |
 | PUT | `/api/account` | 200/401 | Authenticated account update; requirements documented below |
 | DELETE | `/api/account` | 200/401 | Authenticated account self-deletion. JSON body `{confirm: 'DELETE'}` required (400 otherwise). Deletes the user row, all associated data and sessions, and expires the `ashat_rust_sid` and `ashat_csrf` cookies in the response. |
 | POST | `/api/account/github` | 404 (stub) | Not implemented. Always 404. |
@@ -161,6 +162,26 @@ object keyed by what the API actually tracks:
 `user.acoins_balance` is the AGP-wide ACoins account balance. `stats.support_tickets` counts the member's support tickets. Fields the frontend
 previously assumed here — `projects`, `deployments`, `conversation_messages` —
 are **not** part of this response; consuming them crashes on `undefined`.
+
+#### GET `/api/account/transactions`
+
+Requires an authenticated session (401 otherwise). Returns the member's own
+purchase history, newest first (max 100), drawn from the `account_transactions`
+ledger (migration 0005 backfills completed ACoins orders; captures append rows).
+`kind` is one of `acoins_purchase`, `acoins_spend`, or `game_purchase`
+(some games do not use ACoins). `amount_cents` is the real-money part or
+null; `acoins_delta` is signed (+credited / −spent). `receipt` carries the
+provider references shown in the receipt view. No refunds are issued for the
+purchase of digital content or currency.
+
+```json
+{
+  "transactions": [
+    { "id", "kind", "title", "detail", "amount_cents", "acoins_delta",
+      "game_slug", "status", "created_at", "receipt": { "paypal_order_id" } }
+  ]
+}
+```
 
 #### GET `/api/notifications` / POST `/api/notifications/read`
 

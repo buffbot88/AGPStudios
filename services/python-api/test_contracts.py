@@ -73,6 +73,7 @@ def main():
     status, headers, body = get("/api/support", expected=401)
     assert json.loads(body)["error"]["code"] == "authentication_required"
     get("/api/account/summary", expected=401)
+    get("/api/account/transactions", expected=401)
     _, _, body = get("/api/admin/users", expected=403)
     assert json.loads(body)["error"]["code"] == "admin_authentication_required"
     request = urllib.request.Request(BASE + "/api/account", data=b'{"confirm":"DELETE"}', headers={"Content-Type":"application/json"}, method="DELETE")
@@ -140,6 +141,14 @@ def phase2():
     assert code == 201, ("register", code, body)
     code, body = member.req("/api/auth/login", "POST", {"identifier": username, "password": "smoke-pass-1"})
     assert code == 200 and isinstance((body or {}).get("user"), dict), ("member login", code)
+
+    # -- GET /api/account/transactions: newest-first purchase history --------
+    code, body = member.req("/api/account/transactions")
+    assert code == 200 and isinstance((body or {}).get("transactions"), list), ("transactions list", code, body)
+    for txn in body["transactions"]:
+        assert set(("id", "kind", "title", "detail", "amount_cents", "acoins_delta",
+                    "game_slug", "status", "created_at", "receipt")) <= set(txn), ("transaction shape", txn)
+        assert txn["kind"] in ("acoins_purchase", "acoins_spend", "game_purchase"), ("transaction kind", txn)
 
     code, body = admin.req("/api/admin/users?q=" + username)
     target = row_for(body, username)

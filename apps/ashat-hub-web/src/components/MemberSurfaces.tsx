@@ -130,7 +130,7 @@ export function MemberSurfaces({ user, initialTab = 'support' }: { user: User | 
 
   return (
     <section className="member-section" aria-label="Ashat member surfaces">
-      <div className="section-heading"><div><span className="eyebrow">Ashat member surfaces</span><h2>Explore the platform</h2></div><span className="refresh-state">{user ? `Signed in as ${user.username}` : 'Community and support'}</span></div>
+      <div className="section-heading"><div><h2>Explore the platform</h2></div></div>
       <nav className="member-tabs" aria-label="Member navigation">
         {tabs.map((item) => <button type="button" key={item.id} className={tab === item.id ? 'member-tab selected' : 'member-tab'} onClick={() => { setTab(item.id); setSelectedTicket(null); }}>{item.label}</button>)}
       </nav>
@@ -141,7 +141,7 @@ export function MemberSurfaces({ user, initialTab = 'support' }: { user: User | 
 
       {tab === 'support' && <div className="member-panel support-layout">{!user ? <div className="tool-empty"><p>Sign in to create and view support tickets.</p></div> : <><div className="support-sidebar"><div className="member-toolbar"><span className="eyebrow">Your tickets</span><button type="button" className="secondary-button" onClick={() => setSelectedTicket(null)}>New</button></div>{tickets.map((ticket) => <button type="button" className={selectedTicket?.ticket.id === ticket.id ? 'ticket-row selected' : 'ticket-row'} key={safeText(ticket.id)} onClick={() => void showTicket(safeText(ticket.id))}><strong>{safeText(ticket.subject)}</strong><small>{safeText(ticket.status)} · {safeText(ticket.priority)}</small></button>)}{!tickets.length && <p className="muted">No tickets yet.</p>}</div><div className="support-detail">{selectedTicket ? <><button type="button" className="back-button" onClick={() => setSelectedTicket(null)}>← New ticket</button><span className="eyebrow">{safeText(selectedTicket.ticket.status)} · {safeText(selectedTicket.ticket.priority)}</span><h3>{safeText(selectedTicket.ticket.subject)}</h3><p className="ticket-message">{safeText(selectedTicket.ticket.message)}</p><div className="ticket-replies">{safeList<TicketReply>(selectedTicket.replies).map((item) => <article className={item.is_staff ? 'ticket-reply staff' : 'ticket-reply'} key={safeText(item.id)}><small>{safeText(item.display_name) || safeText(item.username) || 'Member'} · {safeTime(item.created_at)}</small><p>{safeText(item.message)}</p></article>)}</div><form className="member-form" onSubmit={(event) => void sendReply(event)}><textarea value={reply} onChange={(event) => setReply(event.target.value)} placeholder="Reply to this ticket" rows={3} required /><button type="submit" disabled={busy}>Reply</button></form></> : <form className="member-form" onSubmit={(event) => void createTicket(event)}><span className="eyebrow">New support ticket</span><input value={supportSubject} onChange={(event) => setSupportSubject(event.target.value)} placeholder="Subject" required /><div className="form-row"><select value={supportCategory} onChange={(event) => setSupportCategory(event.target.value)}><option value="bug">Bug</option><option value="feature">Feature</option><option value="account">Account</option><option value="billing">Billing</option><option value="other">Other</option></select><select value={supportPriority} onChange={(event) => setSupportPriority(event.target.value)}><option value="low">Low</option><option value="normal">Normal</option><option value="high">High</option><option value="urgent">Urgent</option></select></div><textarea value={supportMessage} onChange={(event) => setSupportMessage(event.target.value)} placeholder="Describe the issue or request" rows={7} required /><button type="submit" disabled={busy}>Create ticket</button></form>}</div></>}</div>}
 
-      {tab === 'account' && <div className="member-panel account-grid">{!user ? <div className="tool-empty"><p>Sign in to view your account.</p></div> : !accountLoaded ? <div className="tool-empty"><p>Loading account...</p></div> : !account?.user ? <UnexpectedDataPanel what="Your account details" reason={error ?? undefined} onRetry={() => { setAccountLoaded(false); void loadAccount(); }} /> : <><AccountForm user={account.user} githubLinked={!!account.github_linked} onSaved={(next) => setAccount({ ...account, user: next })} onGithubChange={(linked) => setAccount({ ...account, github_linked: linked })} onDeleted={() => window.location.reload()} /><div className="account-stats"><Metric label="Support tickets" value={safeNumber(account.stats?.support_tickets)} /><AcoinsPanel balance={safeNumber(account.user.acoins_balance)} onBalanceChange={(balance) => setAccount({ ...account, user: { ...account.user, acoins_balance: balance } })} /></div></>}</div>}
+      {tab === 'account' && <div className="member-panel account-grid">{!user ? <div className="tool-empty"><p>Sign in to view your account.</p></div> : !accountLoaded ? <div className="tool-empty"><p>Loading account...</p></div> : !account?.user ? <UnexpectedDataPanel what="Your account details" reason={error ?? undefined} onRetry={() => { setAccountLoaded(false); void loadAccount(); }} /> : <><AccountForm user={account.user} githubLinked={!!account.github_linked} onSaved={(next) => setAccount({ ...account, user: next })} onGithubChange={(linked) => setAccount({ ...account, github_linked: linked })} onDeleted={() => window.location.reload()} /><div className="account-stats"><Metric label="Support tickets" value={safeNumber(account.stats?.support_tickets)} /><PurchaseHistoryPanel /></div></>}</div>}
 
 
     </section>
@@ -203,54 +203,133 @@ function AccountForm({ user, githubLinked, onSaved, onGithubChange, onDeleted }:
               : <a className="secondary-button" href={`${API}/auth/github`}>Link GitHub account</a>}</div><button type="button" className="delete-account-button" onClick={() => void deleteAccount()} disabled={busy}>Delete account and all data</button>{message && <small className="auth-success">{message}</small>}{error && <small className="auth-error">{error}</small>}</form>;
 }
 
-function AcoinsPanel({ balance, onBalanceChange }: { balance: number; onBalanceChange: (balance: number) => void }) {
-  const [busy, setBusy] = useState(false);
+type PurchaseTransaction = {
+  id: string;
+  kind: 'acoins_purchase' | 'acoins_spend' | 'game_purchase';
+  title: string;
+  detail: string;
+  amount_cents: number | null;
+  acoins_delta: number;
+  game_slug: string | null;
+  status: string;
+  created_at: number;
+  receipt: Record<string, unknown>;
+};
+
+/** Purchase history: past ACoins buys, ACoins spending, and per-game
+ *  purchases (some games do not use ACoins). Newest first, searchable,
+ *  with an expandable receipt per row. No refunds are issued for the
+ *  purchase of digital content or currency. */
+function PurchaseHistoryPanel() {
+  const [transactions, setTransactions] = useState<PurchaseTransaction[] | null>(null);
+  const [query, setQuery] = useState('');
+  const [openId, setOpenId] = useState<string | null>(null);
   const [message, setMessage] = useState('');
-  const [pendingOrder, setPendingOrder] = useState('');
-  const packages = [[1000, 1], [5000, 5], [10000, 10]] as const;
 
-  async function capture(orderId: string) {
-    setBusy(true);
+  const load = async () => {
     try {
-      const result = await request<{ balance: number; credited: number }>(`${API}/acoins/capture`, {
-        method: 'POST', body: JSON.stringify({ order_id: orderId }),
-      });
-      onBalanceChange(result.balance);
-      setPendingOrder('');
-      setMessage(`${safeNumber(result.credited).toLocaleString()} ACoins added.`);
-      const url = new URL(window.location.href);
-      url.search = '';
-      window.history.replaceState({}, '', `${url.pathname}${url.hash}`);
+      const data = await request<{ transactions: PurchaseTransaction[] }>(`${API}/account/transactions`);
+      setTransactions(Array.isArray(data.transactions) ? data.transactions : []);
     } catch (reason) {
-      setMessage(reason instanceof Error ? reason.message : 'Payment confirmation failed. Retry below.');
-    } finally { setBusy(false); }
-  }
+      setMessage(reason instanceof Error ? reason.message : 'Purchase history unavailable');
+      setTransactions([]);
+    }
+  };
 
+  // In-flight PayPal returns still land here (?acoins=return&token=):
+  // confirm the capture so the purchase posts to history, then reload.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    if (params.get('acoins') === 'return' && params.get('token')) {
-      setPendingOrder(params.get('token')!);
-      void capture(params.get('token')!);
+    const token = params.get('token');
+    if (params.get('acoins') === 'return' && token) {
+      request(`${API}/acoins/capture`, { method: 'POST', body: JSON.stringify({ order_id: token }) })
+        .then(() => setMessage('Payment confirmed. Your purchase is listed below.'))
+        .catch((reason: unknown) => setMessage(reason instanceof Error ? reason.message : 'Payment confirmation failed.'))
+        .finally(() => {
+          const url = new URL(window.location.href);
+          url.search = '';
+          window.history.replaceState({}, '', `${url.pathname}${url.hash}`);
+          void load();
+        });
     } else if (params.get('acoins') === 'cancel') {
-      setMessage('Payment canceled. No ACoins were added.');
+      setMessage('Payment canceled. No charges were made.');
       window.history.replaceState({}, '', `${window.location.pathname}${window.location.hash}`);
     }
+    void load();
   }, []);
 
-  async function buy(acoins: number) {
-    setBusy(true); setMessage('');
-    try {
-      const order = await request<{ approval_url: string }>(`${API}/acoins/order`, {
-        method: 'POST', body: JSON.stringify({ acoins }),
-      });
-      window.location.assign(order.approval_url);
-    } catch (reason) {
-      setMessage(reason instanceof Error ? reason.message : 'PayPal checkout unavailable');
-      setBusy(false);
-    }
-  }
+  const needle = query.trim().toLowerCase();
+  const visible = (transactions ?? []).filter((item) =>
+    !needle ||
+    [item.title, item.detail, item.game_slug ?? '', item.kind].some((field) => field.toLowerCase().includes(needle)),
+  );
 
-  return <section className="acoins-panel" aria-labelledby="acoins-title"><div><span className="eyebrow">AGP Coins</span><h3 id="acoins-title">ACoins balance</h3><strong className="acoins-balance">{safeNumber(balance).toLocaleString()}</strong></div><div className="acoins-packages">{packages.map(([coins, dollars]) => <button key={coins} type="button" disabled={busy} onClick={() => void buy(coins)}>Buy {coins.toLocaleString()} · ${dollars}</button>)}</div>{message && <p role="status">{message}</p>}{pendingOrder && <button type="button" className="secondary-button" disabled={busy} onClick={() => void capture(pendingOrder)}>Retry payment confirmation</button>}</section>;
+  const money = (cents: number | null) =>
+    cents == null ? '—' : `$${(cents / 100).toFixed(2)}`;
+  const coins = (delta: number) =>
+    delta === 0 ? '—' : `${delta > 0 ? '+' : ''}${delta.toLocaleString()} ACoins`;
+
+  return (
+    <section className="purchase-history" aria-labelledby="purchase-history-title">
+      <div>
+        <span className="eyebrow">Purchases</span>
+        <h3 id="purchase-history-title">Purchase history</h3>
+      </div>
+      <input
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+        placeholder="Search purchases"
+        aria-label="Search purchase history"
+      />
+      {message && <p role="status">{message}</p>}
+      {transactions === null ? (
+        <p className="muted">Loading purchase history...</p>
+      ) : visible.length === 0 ? (
+        <p className="muted">{transactions.length === 0 ? 'No purchases yet.' : 'No purchases match your search.'}</p>
+      ) : (
+        <ol className="purchase-rows">
+          {visible.map((item) => {
+            const open = openId === item.id;
+            return (
+              <li key={safeText(item.id)}>
+                <button
+                  type="button"
+                  className={`purchase-row${open ? ' selected' : ''}`}
+                  onClick={() => setOpenId(open ? null : safeText(item.id))}
+                  aria-expanded={open}
+                >
+                  <span className="purchase-row-main">
+                    <strong>{safeText(item.title)}</strong>
+                    <small>{safeText(item.detail)} · {safeTime(item.created_at)}</small>
+                  </span>
+                  <span className="purchase-row-amounts">
+                    <span>{money(item.amount_cents)}</span>
+                    <span>{coins(safeNumber(item.acoins_delta))}</span>
+                  </span>
+                </button>
+                {open && (
+                  <div className="purchase-receipt">
+                    <dl>
+                      <div><dt>Transaction</dt><dd>{safeText(item.id)}</dd></div>
+                      <div><dt>Type</dt><dd>{safeText(item.kind)}</dd></div>
+                      <div><dt>Date</dt><dd>{safeTime(item.created_at)}</dd></div>
+                      <div><dt>Amount</dt><dd>{money(item.amount_cents)}</dd></div>
+                      <div><dt>ACoins</dt><dd>{coins(safeNumber(item.acoins_delta))}</dd></div>
+                      {item.game_slug && <div><dt>Game</dt><dd>{safeText(item.game_slug)}</dd></div>}
+                      {Object.entries(item.receipt ?? {}).map(([key, value]) => (
+                        <div key={key}><dt>{safeText(key)}</dt><dd>{safeText(String(value))}</dd></div>
+                      ))}
+                    </dl>
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      )}
+      <p className="purchase-policy">No refunds will be issued for the purchase of digital content or currency.</p>
+    </section>
+  );
 }
 
 function Metric({ label, value }: { label: string; value: number | undefined }) {
