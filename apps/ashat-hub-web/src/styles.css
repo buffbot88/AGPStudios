@@ -551,7 +551,7 @@ h3 {
   padding: 22px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: linear-gradient(150deg, rgba(42, 51, 58, 0.78), rgba(16, 20, 23, 0.85));
+  background: linear-gradient(150deg, rgba(22, 26, 30, 0.92), rgba(10, 12, 14, 0.94));
   box-shadow: var(--shadow);
 }
 
@@ -984,7 +984,7 @@ h3 {
   padding: 22px 28px 8px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: linear-gradient(150deg, rgba(42, 51, 58, 0.78), rgba(16, 20, 23, 0.85));
+  background: linear-gradient(150deg, rgba(22, 26, 30, 0.92), rgba(10, 12, 14, 0.94));
 }
 
 .news-rows {
