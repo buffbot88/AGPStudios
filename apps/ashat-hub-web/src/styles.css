@@ -3061,13 +3061,12 @@ a.news-row-title:hover {
 .adm-detail-actions {
   padding: 14px 18px;
   border-top: 1px solid var(--border);
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
   gap: 8px;
 }
 
 .adm-detail-actions button {
-  flex: 1 1 auto;
+  width: 100%;
 }
 
 .adm-detail-actions button {

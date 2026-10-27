@@ -173,6 +173,12 @@ def phase2():
     code, body = member.req("/api/auth/login", "POST", {"identifier": username, "password": "smoke-pass-1"})
     assert code == 200 and isinstance((body or {}).get("user"), dict), ("member login", code)
 
+    # -- GET /api/support: exact path is the list, never a detail lookup ----
+    # Regression: removeprefix('/api/support/') on the exact path used to
+    # return the whole path as a ticket id and 404 every list fetch.
+    code, body = member.req("/api/support")
+    assert code == 200 and (body or {}).get("tickets") == [], ("fresh member lists zero tickets", code, body)
+
     # -- referrals: permanent code, credit on signup, unknown-code fallback --
     code, body = member.req("/api/account/referral")
     assert code == 200 and body.get("code") and body.get("uses_total") == 0, ("referral link", code, body)

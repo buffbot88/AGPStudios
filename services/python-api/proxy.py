@@ -1535,7 +1535,10 @@ class Proxy(BaseHTTPRequestHandler):
                             if not isinstance(receipt,dict): receipt={}
                             rows.append({"id":row["id"],"kind":row["kind"],"title":row["title"],"detail":row["detail"],"amount_cents":row["amount_cents"],"acoins_delta":row["acoins_delta"],"game_slug":row["game_slug"],"status":row["status"],"created_at":row["created_at"],"receipt":receipt})
                         return oidc_json(self,{"transactions":rows})
-                    ticket_id=path.removeprefix('/api/support/').strip('/')
+                    # Exact '/api/support' has no prefix to remove: removeprefix
+                    # would hand back the whole path as a ticket id and 404 the
+                    # list. Only treat a real '/api/support/<id>' as a detail fetch.
+                    ticket_id=path[len('/api/support/'):].strip('/') if path.startswith('/api/support/') else ''
                     if ticket_id:
                         cur.execute("SELECT id,user_id,subject,status,priority,category,message,created_at,updated_at FROM support_tickets WHERE id=? AND user_id=?",(ticket_id,user["id"])); ticket=cur.fetchone()
                         if not ticket: return error(self,"ticket not found",404)
