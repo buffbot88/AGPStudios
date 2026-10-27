@@ -427,6 +427,19 @@ def run():
     code, body = admin.req("/api/admin/settings")
     check(code == 200 and isinstance(body, dict), "/api/admin/settings: 200 object", str(code))
 
+    code, body = member.req("/api/admin/runtime")
+    check(code == 403, "/api/admin/runtime is admin-only", str(code))
+    code, body = admin.req("/api/admin/runtime")
+    check(code == 200 and isinstance(body, dict), "/api/admin/runtime: 200 object", str(code))
+    check(all(k in (body or {}) for k in ("port", "database_path", "oidc_issuer", "probes", "news", "uptime_seconds")),
+          "/api/admin/runtime: carries port/database_path/oidc_issuer/probes/news/uptime_seconds", repr(body)[:200])
+    check(all(k in (body or {}).get("probes", {}) for k in ("paws_health_url", "paws_online_url", "everenfell_online_url")),
+          "/api/admin/runtime: probes carries the three game-server URLs", repr((body or {}).get("probes"))[:160])
+    check(all(k in (body or {}).get("news", {}) for k in ("commits", "age_seconds", "ttl_seconds")),
+          "/api/admin/runtime: news carries commits/age_seconds/ttl_seconds", repr((body or {}).get("news"))[:160])
+    check(all(secret not in (body or {}) for secret in ("payment_encryption_key", "world_of_ra_mint_key", "mysql_source_url", "oidc_private_key_file", "oidc_clients")),
+          "/api/admin/runtime: never exposes secrets", repr(sorted((body or {}).keys()))[:160])
+
     # -- website surfaces (WebsiteTab + fetchSiteContent call sites) ---------
     code, body = member.req("/api/site/content")
     check(code == 200 and isinstance((body or {}).get("featured_video"), dict)
@@ -482,6 +495,9 @@ def run():
     code, body = admin.req(f"/api/admin/news/{news_id}", "DELETE", None, admin_csrf)
     check(code == 200 and (body or {}).get("deleted") == news_id,
           "DELETE /api/admin/news/:id removes the row", f"{code} {repr(body)[:120]}")
+    code, body = admin.req("/api/admin/news/refresh", "POST", {}, admin_csrf)
+    check(code == 200 and (body or {}).get("ok") is True and isinstance((body or {}).get("commits"), int),
+          "POST /api/admin/news/refresh force-refreshes GitHub news", f"{code} {repr(body)[:160]}")
 
     code, body = admin.req("/api/admin/games/everenfell", "PUT", {
         "title": "Everenfell", "featured": True, "sort_order": 2, "tags": ["Adventure", "Contract"],

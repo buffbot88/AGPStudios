@@ -849,6 +849,7 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/api/admin/summary", "/api/admin/stats", "/api/admin/users", "/api/admin/settings",
                     "/api/admin/site-settings", "/api/admin/news",
                     "/api/admin/payments/settings", "/api/admin/database/status", "/api/admin/repo-status",
+                    "/api/admin/runtime",
                     "/api/admin/telemetry", "/api/admin/omega/servers"):
             user, failure = self.require_admin()
             if failure:
@@ -885,6 +886,16 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/admin/settings":
                 return self.reply(200, {"email_verification_enabled": CONFIG["verification_required"],
                                         "secure_cookie": False, "backend": "python"})
+            if path == "/api/admin/runtime":
+                commits = sum(1 for item in NEWS.get("news", [])
+                              if str(item.get("id", "")).startswith("github:"))
+                return self.reply(200, {
+                    "port": 3110, "database_path": "mock",
+                    "oidc_issuer": "https://www.agpstudios.org/api/oauth",
+                    "probes": {"paws_health_url": "", "paws_online_url": "",
+                               "everenfell_online_url": ""},
+                    "news": {"commits": commits, "age_seconds": 0, "ttl_seconds": 1800},
+                    "uptime_seconds": 0})
             if path == "/api/admin/payments/settings":
                 return self.reply(200, dict(PAYMENT_SETTINGS))
             if path == "/api/admin/database/status":
@@ -1044,6 +1055,14 @@ class Handler(BaseHTTPRequestHandler):
                                     "poster": poster, "featured": featured,
                                     "sort_order": sort_order})
             return self.reply(200, {"ok": True, "slug": slug})
+
+        if path == "/api/admin/news/refresh":
+            user, failure = self.require_admin()
+            if failure:
+                return self.reply(*failure)
+            commits = sum(1 for item in NEWS.get("news", [])
+                          if str(item.get("id", "")).startswith("github:"))
+            return self.reply(200, {"ok": True, "commits": commits})
 
         if path == "/api/admin/news":
             user, failure = self.require_admin()

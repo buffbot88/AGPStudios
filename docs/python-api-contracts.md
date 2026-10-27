@@ -66,6 +66,7 @@ contract the Vite portal consumes.
 | GET | `/api/admin/database/status` | 200 | Database/Paws health plus the schema-migration summary |
 | POST | `/api/admin/database/migrations/apply` | 200 | Run pending migrations (or baseline existing ones) |
 | GET | `/api/admin/settings` | 200 | Runtime API settings |
+| GET | `/api/admin/runtime` | 200 | Advanced server facts: port, database path, OIDC issuer, game probe URLs, news cache state, uptime; secrets never included |
 | GET | `/api/admin/payments/settings` | 200 | PayPal ACoins settings; never returns the client secret |
 | POST | `/api/admin/payments/settings` | 200 | Save PayPal email, Client ID, encrypted Client Secret, and sandbox/live mode |
 | GET | `/api/admin/repo-status` | 200 | Live/repository commit comparison |
@@ -79,6 +80,7 @@ contract the Vite portal consumes.
 | POST | `/api/admin/news` | 200 | JSON `{title, summary, url?}`; pins a curated news row |
 | PUT | `/api/admin/news/:id` | 200 | Edit a curated news row |
 | DELETE | `/api/admin/news/:id` | 200 | Remove a curated news row |
+| POST | `/api/admin/news/refresh` | 200 | Force-refresh the GitHub commit cache now; `{ok: true, commits}` |
 | POST | `/api/admin/github/push` | 404 (stub) | Not implemented. Returns `404 not_implemented`. |
 | POST | `/api/admin/system/update` | 404 (stub) | Not implemented. Returns `404 not_implemented`. |
 | POST | `/api/admin/everenfell/s1` | 200 | JSON `{user_id, enabled: bool}`; grants/revokes Everenfell S1 entitlement. Admin-only + CSRF. Only active `Admin` accounts may receive S1 (`400` otherwise). Idempotency-guarded per target + intent. |
@@ -372,6 +374,34 @@ in `services/python-api/migrate.py`; this endpoint only reports and applies.)
   (checksum mismatch) — they are **not** re-run automatically.
 - `missing` lists recorded files that are no longer in the repository.
 
+#### GET `/api/admin/runtime`
+
+Requires an admin session (403 otherwise). Read-only advanced server facts
+for the System tab — the allowlisted, non-secret slice of the host config
+plus live process state. Secrets (`payment_encryption_key`,
+`world_of_ra_mint_key`, `mysql_source_url`, private-key paths, OIDC
+clients) are never included.
+
+```json
+{
+  "port": 3110,
+  "database_path": "storage/ashathub.sqlite3",
+  "oidc_issuer": "https://www.agpstudios.org/api/oauth",
+  "probes": {
+    "paws_health_url": "http://127.0.0.1:3003/api/health",
+    "paws_online_url": "http://127.0.0.1:3003/api/online-count",
+    "everenfell_online_url": ""
+  },
+  "news": { "commits": 14, "age_seconds": 320, "ttl_seconds": 1800 },
+  "uptime_seconds": 86400
+}
+```
+
+- Empty probe URLs mean that game server isn't configured; the wall treats
+  its presence as `null` (unknown).
+- `news.age_seconds` is `null` when the commit cache has never been filled;
+  `POST /api/admin/news/refresh` refills it on demand.
+
 #### POST `/api/admin/database/migrations/apply`
 
 Requires an admin session and the CSRF header.
@@ -548,6 +578,10 @@ Requires an admin session and (for writes) the CSRF header:
 - `POST /api/admin/news` takes `{title (1–140), summary (1–500), url? (≤500, default #news)}` → `{ok: true, id}`; audit `site.news.created`.
 - `PUT /api/admin/news/:id` takes any of `{title, summary, url}` → `{ok: true, id, updated}`; unknown id 404.
 - `DELETE /api/admin/news/:id` → `{ok: true, deleted}`; audit `site.news.deleted`.
+- `POST /api/admin/news/refresh` force-refreshes the GitHub commit cache
+  immediately (normally 30 minutes) → `{ok: true, commits: <count>}`;
+  audit `site.news.refreshed`. Double-submit guarded (409) to protect the
+  60-request/hour unauthenticated GitHub budget.
 
 #### GET `/api/admin/games`
 

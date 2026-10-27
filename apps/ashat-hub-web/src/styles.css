@@ -2569,8 +2569,57 @@ a.news-row-title:hover {
 .adm-toolbar { margin-bottom: 10px; }
 .adm-user-row, .adm-game-row { padding: 10px 12px; }
 
-/* Website tab + full game editor */
-.adm-website { display: grid; gap: 12px; }
+/* Shared side-nav layout: one settings category at a time (Website, System) */
+.adm-side-layout {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  gap: 14px;
+  align-items: start;
+}
+
+.adm-side-nav {
+  display: grid;
+  gap: 6px;
+  position: sticky;
+  top: 118px;
+}
+
+.adm-side-nav-item {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.adm-side-nav-item strong {
+  font-size: 13px;
+}
+
+.adm-side-nav-item small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.adm-side-nav-item:hover {
+  background: var(--surface-2);
+}
+
+.adm-side-nav-item.selected {
+  background: var(--surface-2);
+  border-color: rgba(241, 194, 91, 0.35);
+  box-shadow: inset 2px 0 0 var(--gold);
+}
+
+.adm-side-panel {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
 .adm-form-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -2623,9 +2672,10 @@ a.news-row-title:hover {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 9px 12px;
+  padding: 10px 12px;
   background: var(--surface);
   border: 1px solid var(--border);
+  border-left: 2px solid rgba(241, 194, 91, 0.45);
   border-radius: var(--radius-sm);
 }
 .adm-news-list .adm-form-grid { flex: 1; margin: 0; }
@@ -3069,19 +3119,15 @@ a.news-row-title:hover {
   cursor: default;
 }
 
-/* System tab */
-.adm-system-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-}
-
+/* System tab (sections render one category at a time via the side nav) */
 .adm-panel {
   padding: 18px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: linear-gradient(160deg, rgba(13, 36, 49, 0.55), rgba(9, 26, 37, 0.8));
+  background: linear-gradient(160deg, var(--surface-2), var(--surface));
 }
+
+
 
 .adm-panel h3 {
   margin: 8px 0 12px;
@@ -3106,12 +3152,6 @@ a.news-row-title:hover {
 }
 .adm-payments > p { color: var(--text-muted); font-size: 13px; }
 .adm-payments .workspace-error { color: var(--text); }
-
-.system-status-ok {
-  color: var(--live);
-  font-size: 12px;
-  font-weight: 700;
-}
 
 .adm-migration-list {
   display: grid;
@@ -3146,7 +3186,7 @@ a.news-row-title:hover {
 .adm-commit-comparison > div {
   min-width: 0;
   padding: 9px;
-  background: rgba(6, 18, 27, 0.7);
+  background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: 7px;
 }
@@ -3685,8 +3725,13 @@ a.news-row-title:hover {
   .support-layout,
   .account-grid,
   .adm-panel-layout,
-  .adm-system-grid {
+  .adm-side-layout {
     grid-template-columns: 1fr;
+  }
+
+  .adm-side-nav {
+    position: static;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
   }
 
   .adm-metric-cards,

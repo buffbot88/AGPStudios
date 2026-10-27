@@ -557,9 +557,18 @@ const REGISTER_FIELDS: { key: string; label: string; hint: string; min: number; 
   { key: 'referral.uses_per_day', label: 'Paid referral uses per link per day', hint: 'Each link pays this many bonuses per rolling 24h; extra signups still register.', min: 1, max: 1000 },
 ];
 
+type WebsiteSection = 'homepage' | 'registration' | 'news';
+
+const WEBSITE_SECTIONS: { id: WebsiteSection; label: string; hint: string }[] = [
+  { id: 'homepage', label: 'Homepage', hint: 'Video & footer' },
+  { id: 'registration', label: 'Registration', hint: 'Bot defenses' },
+  { id: 'news', label: 'Studio News', hint: 'Pinned items' },
+];
+
 function WebsiteTab() {
   const [settings, setSettings] = useState<Record<string, string> | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [section, setSection] = useState<WebsiteSection>('homepage');
   const [news, setNews] = useState<CuratedNews[]>([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
@@ -638,6 +647,16 @@ function WebsiteTab() {
     finally { setBusy(false); }
   }
 
+  async function refreshNews() {
+    setBusy(true); setError(''); setMessage('');
+    try {
+      const result = await request<{ ok: boolean; commits: number }>(`${API}/admin/news/refresh`, { method: 'POST', body: JSON.stringify({}) });
+      setMessage(`GitHub news refreshed — ${safeNumber(result.commits)} commit items live on the homepage.`);
+      void loadAll();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'News refresh failed'); }
+    finally { setBusy(false); }
+  }
+
   async function deleteNews(id: string, title: string) {
     if (!(await confirmModal({ title: 'Remove this news item?', message: `"${title}" will no longer appear in Studio News.`, confirmLabel: 'Remove', requireText: 'DELETE' }))) return;
     setBusy(true); setError(''); setMessage('');
@@ -652,9 +671,18 @@ function WebsiteTab() {
   if (!settings) return <section className="adm-panel"><p>{error || 'Loading website settings…'}</p></section>;
 
   return (
-    <div className="adm-website">
+    <div className="adm-side-layout">
+      <nav className="adm-side-nav" aria-label="Website settings sections">
+        {WEBSITE_SECTIONS.map((item) => (
+          <button key={item.id} type="button" className={section === item.id ? 'adm-side-nav-item selected' : 'adm-side-nav-item'} onClick={() => setSection(item.id)}>
+            <strong>{item.label}</strong><small>{item.hint}</small>
+          </button>
+        ))}
+      </nav>
+      <div className="adm-side-panel">
       {message && <p role="status" className="auth-success">{message}</p>}
       {error && <p className="workspace-error" role="alert">{error}</p>}
+      {section === 'homepage' && (
       <section className="adm-panel">
         <span className="eyebrow">Homepage</span>
         <h3>Featured video & footer</h3>
@@ -669,6 +697,8 @@ function WebsiteTab() {
         </div>
         <button type="button" className="secondary-button" disabled={busy} onClick={() => void saveKeys(HOMEPAGE_FIELDS.map((f) => f.key), 'Homepage content')}>Save homepage</button>
       </section>
+      )}
+      {section === 'registration' && (
       <section className="adm-panel">
         <span className="eyebrow">Registration</span>
         <h3>Bot defenses</h3>
@@ -683,9 +713,11 @@ function WebsiteTab() {
         </div>
         <button type="button" className="secondary-button" disabled={busy} onClick={() => void saveKeys(REGISTER_FIELDS.map((f) => f.key), 'Registration controls')}>Save registration controls</button>
       </section>
+      )}
+      {section === 'news' && (
       <section className="adm-panel">
-        <div className="adm-toolbar"><div><span className="eyebrow">Studio news</span><h3>Pinned items</h3></div><button type="button" className="secondary-button" onClick={() => setAdding((open) => !open)}>{adding ? 'Close' : 'Pin news item'}</button></div>
-        <p className="muted">Pinned rows merge with recent GitHub commits on the homepage, newest first.</p>
+        <div className="adm-toolbar"><div><span className="eyebrow">Studio news</span><h3>Pinned items</h3></div><span className="adm-toolbar-spacer" /><button type="button" className="secondary-button" disabled={busy} onClick={() => void refreshNews()}>↻ Refresh GitHub news</button><button type="button" className="secondary-button" onClick={() => setAdding((open) => !open)}>{adding ? 'Close' : 'Pin news item'}</button></div>
+        <p className="muted">Pinned rows merge with recent GitHub commits on the homepage, newest first. Refresh pulls the latest commits now instead of waiting for the 30-minute cache.</p>
         {adding && (
           <form className="adm-form-grid" onSubmit={(e) => void addNews(e)}>
             <label>Title<input value={newItem.title} maxLength={140} required onChange={(e) => setNewItem({ ...newItem, title: e.target.value })} /></label>
@@ -708,7 +740,7 @@ function WebsiteTab() {
                   </div>
                 </div>
               ) : (
-                <><div className="adm-news-text"><strong>{safeText(item.title)}</strong><small>{safeText(item.summary)}</small></div>
+                <><div className="adm-news-text"><strong>{safeText(item.title)}</strong><small>{safeText(item.summary)} · {safeTime(item.published_at)}</small></div>
                 <div className="adm-row-actions">
                   <button type="button" className="secondary-button" disabled={busy} onClick={() => startEdit(item)}>Edit</button>
                   <button type="button" className="secondary-button" disabled={busy} onClick={() => void deleteNews(safeText(item.id), safeText(item.title))}>Remove</button>
@@ -719,6 +751,8 @@ function WebsiteTab() {
         </ol>
         {news.length === 0 && <div className="adm-empty">No pinned items — the homepage shows GitHub commits only.</div>}
       </section>
+      )}
+      </div>
     </div>
   );
 }
@@ -1162,6 +1196,54 @@ function ClientErrorsPanel({ errors, error, busy, status, onStatusChange, onRefr
 
 // ── System Tab ──
 
+type SystemSection = 'services' | 'updates' | 'migrations' | 'errors' | 'config';
+
+const SYSTEM_SECTIONS: { id: SystemSection; label: string; hint: string }[] = [
+  { id: 'services', label: 'Services', hint: 'Runtime & probes' },
+  { id: 'updates', label: 'Updates', hint: 'Git & deploy' },
+  { id: 'migrations', label: 'Migrations', hint: 'Schema state' },
+  { id: 'errors', label: 'Client Errors', hint: 'Browser reports' },
+  { id: 'config', label: 'Configuration', hint: 'Runtime flags' },
+];
+
+type RuntimeInfo = {
+  port: number; database_path: string; oidc_issuer: string;
+  probes: { paws_health_url: string; paws_online_url: string; everenfell_online_url: string };
+  news: { commits: number; age_seconds: number | null; ttl_seconds: number };
+  uptime_seconds: number;
+};
+
+function formatDuration(totalSeconds: number): string {
+  let rest = Math.max(0, Math.floor(safeNumber(totalSeconds)));
+  const days = Math.floor(rest / 86400); rest -= days * 86400;
+  const hours = Math.floor(rest / 3600); rest -= hours * 3600;
+  const minutes = Math.floor(rest / 60);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m`;
+  return 'just started';
+}
+
+function formatCacheAge(ageSeconds: number | null | undefined): string {
+  if (ageSeconds === null || ageSeconds === undefined) return 'never refreshed';
+  const age = Math.max(0, Math.floor(safeNumber(ageSeconds)));
+  if (age < 60) return `${age}s ago`;
+  if (age < 3600) return `${Math.floor(age / 60)}m ago`;
+  return `${Math.floor(age / 3600)}h ago`;
+}
+
+function ProbeRow({ label, url }: { label: string; url: string }) {
+  const target = safeText(url);
+  return (
+    <div className="adm-field">
+      <span className="adm-field-label">{label}</span>
+      {target
+        ? <span className="adm-field-value mono">{target}</span>
+        : <span className="adm-badge">not configured</span>}
+    </div>
+  );
+}
+
 function SystemTab({ loaded, database, settings, onPush, onUpdate, status, busy, onApplyMigrations, clientErrors, clientErrorsError, clientErrorsBusy, clientErrorsFilter, onFilterClientErrors, onRefreshClientErrors, onTriageClientError, onMuteClientErrorMessage }: {
   loaded: boolean;
   database: DatabaseStatus | null; settings: Record<string, string | boolean> | null;
@@ -1174,30 +1256,91 @@ function SystemTab({ loaded, database, settings, onPush, onUpdate, status, busy,
   onTriageClientError: (id: number, status: ClientErrorStatus) => void;
   onMuteClientErrorMessage: (id: number, muted: boolean) => void;
 }) {
+  const [section, setSection] = useState<SystemSection>('services');
+  const [runtime, setRuntime] = useState<RuntimeInfo | null>(null);
+  const [runtimeFailed, setRuntimeFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void request<RuntimeInfo>(`${API}/admin/runtime`)
+      .then((data) => { if (!cancelled) { clearShapeDrifts(); setRuntime(data); } })
+      .catch(() => { if (!cancelled) setRuntimeFailed(true); });
+    return () => { cancelled = true; };
+  }, []);
+
   return (
-    <div className="adm-system">
-      <MigrationsPanel loaded={loaded} migrations={database?.migrations} busy={busy} onApplyMigrations={onApplyMigrations} />
-      <ClientErrorsPanel errors={clientErrors} error={clientErrorsError} busy={clientErrorsBusy} status={clientErrorsFilter} onStatusChange={onFilterClientErrors} onRefresh={() => onRefreshClientErrors()} onTriage={onTriageClientError} onMute={onMuteClientErrorMessage} />
-      <div className="adm-system-grid">
+    <div className="adm-side-layout">
+      <nav className="adm-side-nav" aria-label="System settings sections">
+        {SYSTEM_SECTIONS.map((item) => (
+          <button key={item.id} type="button" className={section === item.id ? 'adm-side-nav-item selected' : 'adm-side-nav-item'} onClick={() => setSection(item.id)}>
+            <strong>{item.label}</strong><small>{item.hint}</small>
+          </button>
+        ))}
+      </nav>
+      <div className="adm-side-panel">
+      {section === 'services' && (
+        <>
         <section className="adm-panel">
-          <span className="eyebrow">Database</span>
-          <h3>{safeText(database?.version) || 'Loading...'}</h3><p className="system-status-ok">● Connected</p>
-          <span className="eyebrow">Database Management</span>
-          <div className="adm-field"><span className="adm-field-label">Backend</span><span className="adm-field-value">{safeText(database?.database) || 'Unknown'}</span></div>
-          <div className="adm-field"><span className="adm-field-label">Update Method</span><span className="adm-field-value">Versioned</span></div>
-          <div className="adm-field"><span className="adm-field-label">Direct SQL Console</span><span className="adm-field-value">Disabled</span></div>
-          {database?.paws && <div className="adm-field"><span className="adm-field-label">Paws & Parcels</span><span className="adm-field-value">{safeText(database.paws.status) || 'unknown'}</span></div>}
+          <div className="adm-migrations-heading">
+            <div><span className="eyebrow">Database</span><h3>{safeText(database?.version) || 'Loading…'}</h3></div>
+            <span className="adm-badge ok">● Connected</span>
+          </div>
+          <div className="adm-detail-fields">
+            <div className="adm-field"><span className="adm-field-label">Backend</span><span className="adm-field-value">{safeText(database?.database) || 'Unknown'}</span></div>
+            <div className="adm-field"><span className="adm-field-label">Schema revision</span><span className="adm-field-value mono">{safeText(database?.migrations?.current_revision) || '—'}</span></div>
+            <div className="adm-field"><span className="adm-field-label">Schema updates</span><span className="adm-field-value">Versioned</span></div>
+            <div className="adm-field"><span className="adm-field-label">Paws & Parcels probe</span>{database?.paws ? <span className="adm-badge ok">{safeText(database.paws.status) || 'ok'}</span> : <span className="adm-badge">unknown</span>}</div>
+          </div>
         </section>
         <section className="adm-panel">
-          <span className="eyebrow">Application Runtime</span>
-          <h3>Services</h3><div className="adm-field"><span className="adm-field-label">Backend</span><span className="adm-field-value">Python · <b className="system-status-ok">● Running</b></span></div><div className="adm-field"><span className="adm-field-label">Frontend</span><span className="adm-field-value">Vite · <b className="system-status-ok">● Available</b></span></div><span className="eyebrow">Security & Configuration</span>
-          <div className={`adm-system-updates adm-repo-${safeText(status?.ashathub?.state) || 'unknown'}`}><span className="adm-field-label">System Updates</span><div className="adm-commit-comparison"><div><span>Live commit</span><code>{safeText(status?.ashathub?.live).slice(0, 8) || '—'}</code></div><div><span>Repo commit</span><code>{safeText(status?.ashathub?.repo).slice(0, 8) || '—'}</code></div></div><div className="adm-system-update-actions"><button type="button" className="secondary-button" onClick={onPush}>Push Changes to GitHub</button><button type="button" className="secondary-button" onClick={onUpdate}>Pull, Build & Restart</button></div></div>
+          <div className="adm-migrations-heading">
+            <div><span className="eyebrow">Advanced</span><h3>Server runtime</h3></div>
+            <span className="adm-badge ok">● Running</span>
+          </div>
+          <p className="muted">Non-secret host configuration and live process state. Secrets are never exposed here.</p>
+          {runtime ? (
+            <div className="adm-detail-fields">
+              <div className="adm-field"><span className="adm-field-label">API port</span><span className="adm-field-value mono">{safeNumber(runtime.port)}</span></div>
+              <div className="adm-field"><span className="adm-field-label">Database path</span><span className="adm-field-value mono">{safeText(runtime.database_path) || '—'}</span></div>
+              <div className="adm-field"><span className="adm-field-label">OIDC issuer</span><span className="adm-field-value mono">{safeText(runtime.oidc_issuer) || '—'}</span></div>
+              <div className="adm-field"><span className="adm-field-label">Uptime</span><span className="adm-field-value">{formatDuration(runtime.uptime_seconds)}</span></div>
+              <div className="adm-field"><span className="adm-field-label">News cache</span><span className="adm-field-value">{safeNumber(runtime.news?.commits)} commits · {formatCacheAge(runtime.news?.age_seconds ?? null)}</span></div>
+              <ProbeRow label="Paws health" url={safeText(runtime.probes?.paws_health_url)} />
+              <ProbeRow label="Paws online" url={safeText(runtime.probes?.paws_online_url)} />
+              <ProbeRow label="Everenfell online" url={safeText(runtime.probes?.everenfell_online_url)} />
+            </div>
+          ) : (
+            <p className="muted">{runtimeFailed ? 'Runtime facts unavailable.' : 'Loading runtime facts…'}</p>
+          )}
+        </section>
+        </>
+      )}
+      {section === 'updates' && (
+        <section className="adm-panel">
+          <span className="eyebrow">Deployment</span>
+          <h3>System updates</h3>
+          <p className="muted">Live checkout versus the repository. Push committed work to GitHub, or pull, rebuild, and restart the live service.</p>
+          <div className={`adm-system-updates adm-repo-${safeText(status?.ashathub?.state) || 'unknown'}`}><div className="adm-commit-comparison"><div><span>Live commit</span><code>{safeText(status?.ashathub?.live).slice(0, 8) || '—'}</code></div><div><span>Repo commit</span><code>{safeText(status?.ashathub?.repo).slice(0, 8) || '—'}</code></div></div><div className="adm-system-update-actions"><button type="button" className="secondary-button" onClick={onPush}>Push Changes to GitHub</button><button type="button" className="secondary-button" onClick={onUpdate}>Pull, Build & Restart</button></div></div>
+        </section>
+      )}
+      {section === 'migrations' && (
+        <MigrationsPanel loaded={loaded} migrations={database?.migrations} busy={busy} onApplyMigrations={onApplyMigrations} />
+      )}
+      {section === 'errors' && (
+        <ClientErrorsPanel errors={clientErrors} error={clientErrorsError} busy={clientErrorsBusy} status={clientErrorsFilter} onStatusChange={onFilterClientErrors} onRefresh={() => onRefreshClientErrors()} onTriage={onTriageClientError} onMute={onMuteClientErrorMessage} />
+      )}
+      {section === 'config' && (
+        <section className="adm-panel">
+          <span className="eyebrow">Configuration</span>
+          <h3>Runtime flags</h3>
+          <p className="muted">Live flags reported by the API. Content and registration settings live under Website; PayPal under Payments.</p>
           {settings && Object.entries(settings)
             .filter(([key]) => key !== 'backend') // internal value, not a user-facing setting
             .map(([key, value]) => (
               <div className="adm-setting-row" key={key}><span>{key.replace(/_/g, ' ')}</span><strong>{typeof value === 'boolean' ? (value ? '✓ Enabled' : '○ Disabled') : String(value)}</strong></div>
             ))}
         </section>
+      )}
       </div>
     </div>
   );

@@ -217,6 +217,9 @@ GITHUB_NEWS_MAX_REPOS = 10
 GITHUB_NEWS_PER_REPO = 3
 GITHUB_NEWS_CACHE = {"items": [], "fetched_at": 0.0}
 GITHUB_NEWS_LOCK = threading.Lock()
+# Process start for the admin runtime panel (uptime_seconds). Set at import so
+# a fresh deploy/restart reads zero, not a guess.
+STARTED_AT = time.time()
 NEWS_REFRESHER_STARTED = False
 NEWS_REFRESHER_LOCK = threading.Lock()
 
@@ -835,6 +838,20 @@ class Proxy(BaseHTTPRequestHandler):
                     if path == '/api/admin/audit':
                         page=max(1,min(1000,int(query.get('page',['1'])[0]))); cur.execute("SELECT id,actor_id,actor_name,action,target_type,target_id,detail,created_at FROM admin_audit_events ORDER BY created_at DESC,id DESC LIMIT 50 OFFSET ?",((page-1)*50,)); return oidc_json(self,{"events":cur.fetchall(),"page":page,"page_size":50})
                     if path == '/api/admin/settings': return oidc_json(self,{"email_verification_enabled":False,"secure_cookie":True,"backend":"python"})
+                    if path == '/api/admin/runtime':
+                        with GITHUB_NEWS_LOCK:
+                            cached = list(GITHUB_NEWS_CACHE["items"])
+                            fetched_at = GITHUB_NEWS_CACHE["fetched_at"]
+                        return oidc_json(self,{"port": int(CONFIG.get("port", 3110)),
+                            "database_path": str(CONFIG.get("database_path", "")),
+                            "oidc_issuer": str(CONFIG.get("oidc_issuer", "")),
+                            "probes": {"paws_health_url": str(CONFIG.get("paws_health_url", "") or ""),
+                                       "paws_online_url": str(CONFIG.get("paws_online_url", "") or ""),
+                                       "everenfell_online_url": str(CONFIG.get("everenfell_online_url", "") or "")},
+                            "news": {"commits": len(cached),
+                                     "age_seconds": int(time.time() - fetched_at) if fetched_at else None,
+                                     "ttl_seconds": GITHUB_NEWS_TTL},
+                            "uptime_seconds": int(time.time() - STARTED_AT)})
                     if path == '/api/admin/site-settings':
                         settings = dict(SITE_SETTING_DEFAULTS)
                         for key in SITE_INT_SETTINGS:

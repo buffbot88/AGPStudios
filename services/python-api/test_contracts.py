@@ -235,6 +235,10 @@ def phase2():
     assert code == 200, ("news edit", code, body)
     code, body = admin.req(f"/api/admin/news/{news_id}", "DELETE")
     assert code == 200 and body.get("deleted") == news_id, ("news delete", code, body)
+    code, body = member.req("/api/admin/news/refresh", "POST", {})
+    assert code == 403, ("news refresh is admin-only", code, body)
+    code, body = admin.req("/api/admin/news/refresh", "POST", {})
+    assert code == 200 and (body or {}).get("ok") is True and isinstance((body or {}).get("commits"), int), ("news refresh", code, body)
 
     # -- GET /api/admin/stats: wall-stats shape ----------------------------
     code, body = member.req("/api/admin/stats", csrf=False)
@@ -246,6 +250,17 @@ def phase2():
     assert set(("day", "week", "month", "year")) <= set(body["profits_cents"]), ("profit windows", body)
     assert set(("website", "paws", "everenfell")) <= set(body["online"]), ("online platform breakdown", body["online"])
     assert "games" not in body, ("no per-game ACoins cards", body)
+
+    # -- GET /api/admin/runtime: advanced server facts, no secrets ----------
+    code, body = member.req("/api/admin/runtime", csrf=False)
+    assert code == 403, ("runtime is admin-only", code)
+    code, body = admin.req("/api/admin/runtime")
+    assert code == 200, ("runtime", code, body)
+    assert set(("port", "database_path", "oidc_issuer", "probes", "news", "uptime_seconds")) <= set(body), ("runtime sections", body)
+    assert set(("paws_health_url", "paws_online_url", "everenfell_online_url")) <= set(body["probes"]), ("runtime probes", body["probes"])
+    assert set(("commits", "age_seconds", "ttl_seconds")) <= set(body["news"]), ("runtime news cache", body["news"])
+    assert not {"payment_encryption_key", "world_of_ra_mint_key", "mysql_source_url",
+                "oidc_private_key_file", "oidc_clients"} & set(body), ("runtime never exposes secrets", sorted(body))
 
     # -- GET /api/account/transactions: newest-first purchase history --------
     code, body = member.req("/api/account/transactions")
