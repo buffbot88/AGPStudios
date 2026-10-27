@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import './styles.css';
-import { fetchGames, fetchNews, fetchSiteContent, FEATURED_GAME, FEATURED_VIDEO, type Game, type NewsItem, type SiteContent } from './content';
+import { fetchGames, fetchNews, fetchSiteContent, FEATURED_GAME, FEATURED_VIDEO, goHome, type Game, type NewsItem, type SiteContent } from './content';
 import { SiteHeader } from './components/home/SiteHeader';
 import { HeroSection } from './components/home/HeroSection';
 import { QuickInfoCard } from './components/home/QuickInfoCard';
@@ -91,7 +91,7 @@ function App() {
     return onSessionExpired(() => {
       toast('Your session has ended. Sign in again to continue.', 'info', 7000);
       if (window.location.hash && window.location.hash !== '#top') {
-        window.location.hash = '#top';
+        goHome();
         setRoute('home');
       }
     });
@@ -140,11 +140,11 @@ function App() {
     if (!sessionResolved) return;
     if (route === 'admin' && user?.role?.toLowerCase() !== 'admin') {
       toast(user ? 'Administrator access required.' : 'Sign in with an administrator account to view the admin panel.');
-      window.location.hash = '#top';
+      goHome();
       setRoute('home');
     } else if (route === 'account' && !user) {
       toast('Sign in to view your account.');
-      window.location.hash = '#top';
+      goHome();
       setRoute('home');
     }
   }, [route, user, sessionResolved]);

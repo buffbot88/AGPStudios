@@ -261,7 +261,7 @@ const byPath: Record<string, Schema<unknown>> = {
   }),
   '/admin/games': obj<{ games: unknown[] }>({ games: list(game) }),
   '/admin/stats': obj<{
-    signups: unknown; profits_cents: unknown; online: unknown; games: unknown[];
+    signups: unknown; profits_cents: unknown; online: unknown;
   }>({
     signups: obj<{ today: number; week: number; month: number; total: number }>({
       today: numish, week: numish, month: numish, total: numish,
@@ -269,17 +269,9 @@ const byPath: Record<string, Schema<unknown>> = {
     profits_cents: obj<{ day: number; week: number; month: number; year: number }>({
       day: numish, week: numish, month: numish, year: numish,
     }),
-    online: obj<{ website: number; paws: number | null }>({
-      website: numish, paws: nullable(numish),
+    online: obj<{ website: number; paws: number | null; everenfell: number | null }>({
+      website: numish, paws: nullable(numish), everenfell: nullable(numish),
     }),
-    games: list(obj<{
-      slug: string; title: string; status: string; online: number | null;
-      entitlements: number | null; acoins_spent: number; transactions: number;
-    }>({
-      slug: str, title: str, status: str,
-      online: nullable(numish), entitlements: nullable(numish),
-      acoins_spent: numish, transactions: numish,
-    })),
   }),
   '/admin/client-errors': obj<{ errors: unknown[]; page?: number; page_size?: number; status?: string }>({
     errors: list(clientError),

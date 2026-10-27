@@ -138,11 +138,11 @@ test.describe('auth lifecycle', () => {
     await openGuardedRoute(page, '#account', 'Sign in to view your account.');
     await expect(page.locator('.account-grid')).toHaveCount(0);
     await expect(page.locator('.member-panel')).toHaveCount(0);
-    expect(new URL(page.url()).hash, 'guard sends the visitor home').toBe('#top');
+    expect(new URL(page.url()).hash, 'guard sends the visitor home').toBe('');
 
     await openGuardedRoute(page, '#admin', 'Sign in with an administrator account to view the admin panel.');
     await expect(page.locator('.adm-surface')).toHaveCount(0);
-    expect(new URL(page.url()).hash).toBe('#top');
+    expect(new URL(page.url()).hash).toBe('');
   });
 
   test('a member is bounced from #admin but may open #account', async ({ page }) => {
@@ -151,7 +151,7 @@ test.describe('auth lifecycle', () => {
     await page.evaluate(() => { window.location.hash = '#admin'; });
     await expect(page.locator('.adm-surface')).toHaveCount(0);
     await expect(toast(page)).toContainText('Administrator access required.');
-    expect(new URL(page.url()).hash).toBe('#top');
+    expect(new URL(page.url()).hash).toBe('');
     // The bounce is a redirect home, not a sign-out: the session survives it.
     await expect(page.locator('.auth-menu-trigger')).toContainText(username);
 

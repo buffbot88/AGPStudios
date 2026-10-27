@@ -6,6 +6,7 @@
   "payment_encryption_key": "",
   "paws_health_url": "http://127.0.0.1:3003/api/health",
   "paws_online_url": "http://127.0.0.1:3003/api/online-count",
+  "everenfell_online_url": "",
   "world_of_ra_mint_url": "",
   "world_of_ra_mint_key": "",
   "oidc_clients": {

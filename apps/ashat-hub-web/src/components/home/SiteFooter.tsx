@@ -1,4 +1,4 @@
-import { FOOTER } from '../../content';
+import { FOOTER, goHome } from '../../content';
 
 function SocialIcon({ icon }: { icon: string }) {
   switch (icon) {
@@ -30,7 +30,7 @@ export function SiteFooter({ content }: {
   return (
     <footer className="site-footer">
       <div className="footer-inner">
-        <a className="wordmark" href="#top">
+        <a className="wordmark" href="/" onClick={(event) => { event.preventDefault(); goHome(); }}>
           <b>AGP</b> STUDIOS
         </a>
         <span className="footer-identity">{tagline}</span>

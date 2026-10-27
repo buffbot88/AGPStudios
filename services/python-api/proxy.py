@@ -314,11 +314,13 @@ def github_repo_commits(repo):
         return []
 
 
-def github_commit_news():
-    """Recent commits across the user's public repos; [] when GitHub is unreachable."""
+def github_commit_news(force=False):
+    """Recent commits across the user's public repos; [] when GitHub is unreachable.
+
+    force=True skips the 30-minute cache (admin refresh button)."""
     now = time.time()
     with GITHUB_NEWS_LOCK:
-        if GITHUB_NEWS_CACHE["items"] and now - GITHUB_NEWS_CACHE["fetched_at"] < GITHUB_NEWS_TTL:
+        if not force and GITHUB_NEWS_CACHE["items"] and now - GITHUB_NEWS_CACHE["fetched_at"] < GITHUB_NEWS_TTL:
             return list(GITHUB_NEWS_CACHE["items"])
     try:
         repos = github_get_json(
@@ -863,12 +865,25 @@ class Proxy(BaseHTTPRequestHandler):
             with urlopen(CONFIG["paws_health_url"], timeout=5) as response: return json.loads(response.read())
         except Exception: return {"status":"unavailable"}
 
+    def probe_online_count(self, key):
+        """Best-effort game-server presence probe. Returns a count, or None
+        when no URL is configured or the server doesn't answer."""
+        url = CONFIG.get(key, "")
+        if not url:
+            return None
+        try:
+            with urlopen(url, timeout=2) as response:
+                return max(0, int(json.loads(response.read()).get('online_count', 0)))
+        except Exception:
+            return None
+
     def wall_stats(self, cur):
         """Live wall stats for the admin dashboard: member signups, PayPal
-        profits, and per-game activity. Every number derives from local tables
-        (users, completed acoin_orders, account_transactions, entitlements) or
-        a best-effort game-server probe — nothing is invented, so quiet days
-        honestly read zero."""
+        profits, and per-platform presence. Every number derives from local
+        tables (users, completed acoin_orders) or a best-effort probe —
+        nothing is invented, so quiet days honestly read zero and silent game
+        servers read null. ACoins are studio-wide, not per-game, so there is
+        deliberately no per-game spend here."""
         cur.execute("SELECT COUNT(*) AS n FROM users WHERE date(created_at) = date('now')")
         today = cur.fetchone()['n']
         cur.execute("SELECT COUNT(*) AS n FROM users WHERE date(created_at) >= date('now','-6 days')")
@@ -888,38 +903,16 @@ class Proxy(BaseHTTPRequestHandler):
         for key, cutoff in bounds.items():
             cur.execute("SELECT COALESCE(SUM(amount_cents),0) AS s FROM acoin_orders WHERE status='completed' AND COALESCE(completed_at,created_at) >= ?", (cutoff,))
             profits[key] = cur.fetchone()['s']
-        games = []
-        cur.execute("SELECT slug,title,status FROM games ORDER BY sort_order,created_at")
-        for game in cur.fetchall():
-            slug = game['slug']
-            cur.execute("SELECT COUNT(*) AS n FROM account_transactions WHERE game_slug=?", (slug,))
-            transactions = cur.fetchone()['n']
-            cur.execute("SELECT COALESCE(SUM(-acoins_delta),0) AS s FROM account_transactions WHERE game_slug=? AND kind='acoins_spend' AND acoins_delta < 0", (slug,))
-            spent = cur.fetchone()['s']
-            entitlements = None
-            if slug == 'everenfell':
-                cur.execute("SELECT COUNT(*) AS n FROM everenfell_s1_entitlements")
-                entitlements = cur.fetchone()['n']
-            online = None
-            if slug == 'paws-and-parcels':
-                try:
-                    with urlopen(CONFIG["paws_online_url"], timeout=2) as response:
-                        online = max(0, int(json.loads(response.read()).get('online_count', 0)))
-                except Exception:
-                    online = None
-            games.append({"slug": slug, "title": game['title'], "status": game['status'],
-                          "online": online, "entitlements": entitlements,
-                          "acoins_spent": spent, "transactions": transactions})
         with ONLINE_VISITORS_LOCK:
             for key, seen in list(ONLINE_VISITORS.items()):
                 if now - seen >= ONLINE_VISITOR_TTL:
                     ONLINE_VISITORS.pop(key, None)
             website_online = len(ONLINE_VISITORS)
-        paws_online = next((g['online'] for g in games if g['slug'] == 'paws-and-parcels'), None)
         return {"signups": {"today": today, "week": week, "month": month, "total": total},
                 "profits_cents": profits,
-                "online": {"website": website_online, "paws": paws_online},
-                "games": games}
+                "online": {"website": website_online,
+                           "paws": self.probe_online_count("paws_online_url"),
+                           "everenfell": self.probe_online_count("everenfell_online_url")}}
 
     def acoins_order(self):
         user=self.current_user()
@@ -1170,6 +1163,47 @@ class Proxy(BaseHTTPRequestHandler):
                         audit_target_type='site_settings'; audit_target_id='website'; log_moderation=False
                         audit_detail=json.dumps({'keys':sorted(saved)})
                         result_extra={'settings':saved}
+                    elif path == '/api/admin/games':
+                        slug=str(form.get('slug','')).strip().lower()
+                        title=str(form.get('title','')).strip()
+                        summary=str(form.get('summary','')).strip()
+                        status=form.get('status','in-development')
+                        url=str(form.get('url') or '').strip()
+                        poster=str(form.get('poster') or '').strip()
+                        featured=form.get('featured',False)
+                        sort_order=form.get('sort_order',0)
+                        tags=form.get('tags',[])
+                        if not re.fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)*',slug) or len(slug) > 60: return error(self,'slug must be lowercase letters, numbers, and hyphens (max 60)')
+                        if not title or len(title) > 120: return error(self,'title is required (max 120)')
+                        if not summary or len(summary) > 500: return error(self,'summary is required (max 500)')
+                        if status not in ('live','in-development','coming-soon'): return error(self,'status must be live, in-development, or coming-soon')
+                        if len(url) > 500: return error(self,'url too long (max 500)')
+                        if len(poster) > 400: return error(self,'poster url too long (max 400)')
+                        if type(featured) is not bool: return error(self,'featured must be true or false')
+                        try: sort_order=int(sort_order)
+                        except (TypeError,ValueError): return error(self,'sort_order must be an integer')
+                        if not 0 <= sort_order <= 1000: return error(self,'sort_order must be 0-1000')
+                        if isinstance(tags,str): tags=[tag.strip() for tag in tags.split(',')]
+                        if not isinstance(tags,list) or not tags or len(tags) > 10 or any(not isinstance(tag,str) or not tag.strip() or len(tag) > 40 for tag in tags):
+                            return error(self,'tags must be 1-10 short labels')
+                        tags=[tag.strip() for tag in tags]
+                        if self.duplicate_submit(path,form,slug): return error(self,'duplicate submission; retry shortly',409)
+                        cur.execute("SELECT slug FROM games WHERE slug=?",(slug,))
+                        if cur.fetchone(): return error(self,'a game with that slug already exists',409)
+                        game_id=secrets.token_hex(8)
+                        cur.execute("INSERT INTO games (id,slug,title,summary,status,tags,url,poster,featured,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,CAST(strftime('%s','now') AS INTEGER),CAST(strftime('%s','now') AS INTEGER))",(game_id,slug,title,summary,status,json.dumps(tags),url,poster,1 if featured else 0,sort_order))
+                        action='site.game.created'
+                        audit_target_type='game'; audit_target_id=slug; log_moderation=False
+                        audit_detail=json.dumps({'slug':slug,'title':title})
+                        result_extra={'slug':slug}
+                    elif path == '/api/admin/news/refresh':
+                        if self.duplicate_submit(path,form): return error(self,'duplicate submission; retry shortly',409)
+                        try: items=github_commit_news(force=True)
+                        except Exception as exc: return error(self,f'news refresh failed: {exc}',503)
+                        action='site.news.refreshed'
+                        audit_target_type='studio_news'; audit_target_id='github'; log_moderation=False
+                        audit_detail=json.dumps({'commits':len(items)})
+                        result_extra={'commits':len(items)}
                     elif path == '/api/admin/news':
                         title=str(form.get('title','')).strip()
                         summary=str(form.get('summary','')).strip()

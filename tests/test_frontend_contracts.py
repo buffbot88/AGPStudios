@@ -373,15 +373,15 @@ def run():
     code, body = admin.req("/api/admin/stats")
     check(code == 200, "/api/admin/stats returns 200", str(code))
     stats = body or {}
-    for section in ("signups", "profits_cents", "online", "games"):
+    for section in ("signups", "profits_cents", "online"):
         check(section in stats, f"/api/admin/stats: carries {section}", repr(stats)[:160])
+    check("games" not in stats, "/api/admin/stats: no per-game ACoins cards", repr(stats)[:160])
     check(all(k in (stats.get("signups") or {}) for k in ("today", "week", "month", "total")),
           "/api/admin/stats: signups has today/week/month/total", repr(stats.get("signups"))[:120])
     check(all(k in (stats.get("profits_cents") or {}) for k in ("day", "week", "month", "year")),
           "/api/admin/stats: profits_cents has day/week/month/year", repr(stats.get("profits_cents"))[:120])
-    for game in (stats.get("games") or []):
-        check(all(k in game for k in ("slug", "title", "status", "online", "entitlements", "acoins_spent", "transactions")),
-              "/api/admin/stats: game rows carry slug/title/status/online/entitlements/spend/transactions", repr(game)[:160])
+    check(all(k in (stats.get("online") or {}) for k in ("website", "paws", "everenfell")),
+          "/api/admin/stats: online has website/paws/everenfell breakdown", repr(stats.get("online"))[:160])
     check(is_num((stats.get("signups") or {}).get("total")) and (stats.get("signups") or {}).get("total") >= 1,
           "/api/admin/stats: total signups counts the suite's own accounts", repr(stats.get("signups"))[:120])
 
@@ -499,6 +499,18 @@ def run():
     check(code == 200, "game row restored", str(code))
     code, body = admin.req("/api/admin/games/everenfell", "PUT", {"status": "live-ish"}, admin_csrf)
     check(code == 400, "bogus game status is rejected", str(code))
+    created_slug = f"contract-game-{secrets.token_hex(4)}"
+    code, body = admin.req("/api/admin/games", "POST", {
+        "slug": created_slug, "title": "Contract Game", "summary": "Created by the contract suite.",
+        "tags": ["Contract"],
+    }, admin_csrf)
+    check(code == 200 and (body or {}).get("slug") == created_slug,
+          "POST /api/admin/games creates the row", f"{code} {repr(body)[:160]}")
+    code, body = admin.req("/api/admin/games", "POST", {
+        "slug": created_slug, "title": "Duplicate", "summary": "Duplicate slug.",
+        "tags": ["Contract"],
+    }, admin_csrf)
+    check(code == 409, "duplicate game slug is rejected", str(code))
 
     code, body = admin.req("/api/admin/payments/settings")
     check(code == 200 and (body or {}).get("client_secret_configured") is False,

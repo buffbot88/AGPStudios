@@ -863,14 +863,6 @@ class Handler(BaseHTTPRequestHandler):
                 now = int(time.time())
                 created = [u.get("created_at", now) for u in USERS.values()]
                 day_ago = now - 86400
-                stats_games = []
-                for game in GAMES["games"]:
-                    slug = game["slug"]
-                    mine = [e for e in ACCOUNT_LEDGER if e.get("game_slug") == slug]
-                    spent = sum(-e["acoins_delta"] for e in mine if e.get("kind") == "acoins_spend" and (e.get("acoins_delta") or 0) < 0)
-                    stats_games.append({"slug": slug, "title": game["title"], "status": game["status"],
-                                        "online": None, "entitlements": None,
-                                        "acoins_spent": spent, "transactions": len(mine)})
                 return self.reply(200, {
                     "signups": {
                         "today": sum(1 for ts in created if ts >= day_ago),
@@ -879,8 +871,7 @@ class Handler(BaseHTTPRequestHandler):
                         "total": len(USERS),
                     },
                     "profits_cents": {"day": 0, "week": 0, "month": 0, "year": 0},
-                    "online": {"website": len(ONLINE_VISITORS), "paws": None},
-                    "games": stats_games,
+                    "online": {"website": len(ONLINE_VISITORS), "paws": None, "everenfell": None},
                 })
             if path == "/api/admin/users":
                 listing = [
@@ -1004,6 +995,55 @@ class Handler(BaseHTTPRequestHandler):
                     saved[key] = text
             SITE_SETTINGS.update(saved)
             return self.reply(200, {"ok": True, "settings": saved})
+
+        if path == "/api/admin/games":
+            user, failure = self.require_admin()
+            if failure:
+                return self.reply(*failure)
+            if not isinstance(form, dict):
+                return self.reply(*err("game fields required", 400))
+            slug = str(form.get("slug", "")).strip().lower()
+            title = str(form.get("title", "")).strip()
+            summary = str(form.get("summary", "")).strip()
+            status = form.get("status", "in-development")
+            url = str(form.get("url") or "").strip()
+            poster = str(form.get("poster") or "").strip()
+            featured = form.get("featured", False)
+            sort_order = form.get("sort_order", 0)
+            tags = form.get("tags", [])
+            if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", slug) or len(slug) > 60:
+                return self.reply(*err("slug must be lowercase letters, numbers, and hyphens (max 60)", 400))
+            if not title or len(title) > 120:
+                return self.reply(*err("title is required (max 120)", 400))
+            if not summary or len(summary) > 500:
+                return self.reply(*err("summary is required (max 500)", 400))
+            if status not in ("live", "in-development", "coming-soon"):
+                return self.reply(*err("status must be live, in-development, or coming-soon", 400))
+            if len(url) > 500:
+                return self.reply(*err("url too long (max 500)", 400))
+            if len(poster) > 400:
+                return self.reply(*err("poster url too long (max 400)", 400))
+            if type(featured) is not bool:
+                return self.reply(*err("featured must be true or false", 400))
+            try:
+                sort_order = int(sort_order)
+            except (TypeError, ValueError):
+                return self.reply(*err("sort_order must be an integer", 400))
+            if not 0 <= sort_order <= 1000:
+                return self.reply(*err("sort_order must be 0-1000", 400))
+            if isinstance(tags, str):
+                tags = [tag.strip() for tag in tags.split(",")]
+            if not isinstance(tags, list) or not tags or len(tags) > 10 or any(
+                    not isinstance(tag, str) or not tag.strip() or len(tag) > 40 for tag in tags):
+                return self.reply(*err("tags must be 1-10 short labels", 400))
+            tags = [tag.strip() for tag in tags]
+            if any(g["slug"] == slug for g in GAMES["games"]):
+                return self.reply(*err("a game with that slug already exists", 409))
+            GAMES["games"].append({"slug": slug, "title": title, "summary": summary,
+                                    "status": status, "tags": tags, "url": url,
+                                    "poster": poster, "featured": featured,
+                                    "sort_order": sort_order})
+            return self.reply(200, {"ok": True, "slug": slug})
 
         if path == "/api/admin/news":
             user, failure = self.require_admin()

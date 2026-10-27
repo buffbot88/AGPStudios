@@ -1992,33 +1992,6 @@ a.news-row-title:hover {
   background: rgba(221, 97, 89, 0.08);
 }
 
-.account-stats {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-}
-
-.account-stat {
-  padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: rgba(16, 20, 23, 0.6);
-}
-
-.account-stat span {
-  color: var(--text-muted);
-  font-size: 10px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
-
-.account-stat strong {
-  display: block;
-  margin-top: 10px;
-  color: var(--gold);
-  font-size: 24px;
-}
-
 .purchase-history {
   grid-column: 1 / -1;
   display: grid;
@@ -2185,7 +2158,7 @@ a.news-row-title:hover {
   padding: 18px 20px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: linear-gradient(160deg, rgba(13, 36, 49, 0.55), rgba(9, 26, 37, 0.8));
+  background: linear-gradient(160deg, var(--surface-2), var(--surface));
 }
 
 .adm-metric-label {
@@ -2318,6 +2291,10 @@ a.news-row-title:hover {
   width: auto;
 }
 
+.adm-toolbar-spacer {
+  flex: 1;
+}
+
 .adm-empty {
   padding: 32px;
   text-align: center;
@@ -2326,7 +2303,71 @@ a.news-row-title:hover {
 
 .adm-user-list {
   display: grid;
-  gap: 2px;
+  gap: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.adm-user-list-head {
+  display: grid;
+  grid-template-columns: 1fr auto 12px;
+  gap: 14px;
+  align-items: center;
+  padding: 8px 14px;
+  color: var(--text-muted);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.adm-user-list-head > span:last-child {
+  justify-self: center;
+}
+
+.adm-user-list .adm-user-row {
+  display: grid;
+  grid-template-columns: 1fr auto 12px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+}
+
+.adm-user-list .adm-user-row:last-child {
+  border-bottom: 0;
+}
+
+.adm-user-list .adm-user-row > span:last-child {
+  justify-self: center;
+}
+
+.adm-user-list .adm-user-row.selected {
+  background: var(--surface-2);
+  box-shadow: inset 2px 0 0 var(--gold);
+  border-color: var(--border);
+  border-bottom-color: var(--border);
+}
+
+.adm-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.adm-pagination > span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.adm-detail-empty > p {
+  margin: 0;
+  padding: 18px;
 }
 
 /* Migrations panel (System tab) */
@@ -2399,10 +2440,81 @@ a.news-row-title:hover {
   font-size: 0.75rem;
 }
 
-/* Games tab: poster swap */
-.adm-games-list {
+/* Games tab: full-width card list with click-to-edit */
+.adm-games {
   display: grid;
+  gap: 12px;
+}
+
+.adm-games-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: 10px;
+}
+
+.adm-game-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.adm-game-card:hover {
+  background: var(--surface-2);
+  border-color: rgba(241, 194, 91, 0.35);
+}
+
+.adm-game-card.selected {
+  background: var(--surface-2);
+  border-color: rgba(241, 194, 91, 0.35);
+  box-shadow: inset 2px 0 0 var(--gold);
+}
+
+.adm-game-card-thumb {
+  width: 72px;
+  height: 48px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+
+.adm-game-card-info {
+  display: grid;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.adm-game-card-info strong {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.adm-game-card-info small {
+  color: var(--text-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.adm-game-card > b {
+  color: var(--gold);
+  font-size: 15px;
+}
+
+.adm-game-add {
+  border-style: dashed;
 }
 
 .adm-game-row {
@@ -2900,7 +3012,12 @@ a.news-row-title:hover {
   padding: 14px 18px;
   border-top: 1px solid var(--border);
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
+}
+
+.adm-detail-actions button {
+  flex: 1 1 auto;
 }
 
 .adm-detail-actions button {
@@ -3473,6 +3590,13 @@ a.news-row-title:hover {
   display: flex;
   gap: 8px;
   align-items: center;
+}
+
+.referral-link-row .referral-copy {
+  flex-shrink: 0;
+  white-space: nowrap;
+  padding: 9px 16px;
+  font-size: 13px;
 }
 
 .referral-link {

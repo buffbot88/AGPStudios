@@ -60,7 +60,7 @@ contract the Vite portal consumes.
 | POST | `/api/admin/users/status` | 200 | JSON `{user_id, status}`; see request-body reference below |
 | POST | `/api/admin/support/:id/reply` | 200 | Staff reply on a member's ticket; JSON `{message}`; creates the `is_staff=1` reply member notifications are built from |
 | GET | `/api/admin/summary` | 200 | Admin overview counts |
-| GET | `/api/admin/stats` | 200 | Live wall stats: member signups, PayPal profits, per-game activity; shape documented below |
+| GET | `/api/admin/stats` | 200 | Live wall stats: member signups, PayPal profits, per-platform online presence; shape documented below |
 | GET | `/api/admin/users` | 200 | Filtered admin user list; optional `q` query |
 | GET | `/api/admin/users/:id/moderation` | 200 | Per-user moderation timeline; see shape reference below |
 | GET | `/api/admin/database/status` | 200 | Database/Paws health plus the schema-migration summary |
@@ -70,6 +70,7 @@ contract the Vite portal consumes.
 | POST | `/api/admin/payments/settings` | 200 | Save PayPal email, Client ID, encrypted Client Secret, and sandbox/live mode |
 | GET | `/api/admin/repo-status` | 200 | Live/repository commit comparison |
 | GET | `/api/admin/games` | 200 | Admin game list incl. poster URLs |
+| POST | `/api/admin/games` | 200 | Create a game row (`slug`, `title`, `summary` required; see shape reference below) |
 | PUT | `/api/admin/games/:slug` | 200 | Update game fields (poster, title, summary, status, url, featured, sort_order, tags) without a migration; see shape reference below |
 | GET | `/api/site/content` | 200 | Public homepage content (featured video, footer) from Website settings; stock defaults when unset |
 | GET | `/api/admin/site-settings` | 200 | All Website settings with effective values |
@@ -428,6 +429,24 @@ timeline, newest first, from the `user_moderation_history` table.
   table has no FK and the deletion paths do not purge it.
 - Limited to the 100 most recent events; there is no pagination yet.
 
+#### POST `/api/admin/games`
+
+Requires an admin session and the CSRF header. Creates a game row — no
+migration or redeploy needed; the public `GET /api/games` picks it up
+immediately. Required: `slug` (lowercase letters, numbers, hyphens,
+max 60, unique), `title` (1–120), `summary` (1–500). Optional:
+`status` (default `in-development`), `url` (max 500), `poster`
+(max 400), `featured` (boolean, default false), `sort_order` (0–1000,
+default 0), `tags` (array or comma-separated string, 1–10 short labels).
+
+```json
+{ "slug": "starlight-drift", "title": "Starlight Drift", "summary": "Race the nebula.", "status": "coming-soon", "tags": ["Racing", "Space"] }
+```
+
+- Duplicate slug returns 409 `a game with that slug already exists`;
+  bad slugs/shapes return 400; audit `site.game.created`.
+- Success returns `{ "ok": true, "slug": "..." }`.
+
 #### PUT `/api/admin/games/:slug`
 
 Requires an admin session and the CSRF header. Updates game fields in
@@ -506,26 +525,19 @@ probe, so quiet days honestly read zero and unreachable game servers read
 {
   "signups": { "today": 2, "week": 5, "month": 9, "total": 42 },
   "profits_cents": { "day": 0, "week": 100, "month": 100, "year": 2500 },
-  "online": { "website": 3, "paws": 12 },
-  "games": [
-    { "slug": "paws-and-parcels", "title": "Paws & Parcels", "status": "live",
-      "online": 12, "entitlements": null, "acoins_spent": 500, "transactions": 4 },
-    { "slug": "everenfell", "title": "Everenfell", "status": "live",
-      "online": null, "entitlements": 7, "acoins_spent": 0, "transactions": 0 }
-  ]
+  "online": { "website": 3, "paws": 12, "everenfell": null }
 }
 ```
 
 - `signups` counts `users` rows by `created_at` (today / trailing 7d / trailing
   30d / all time).
 - `profits_cents` sums completed `acoin_orders` by completion time (trailing
-  24h / 7d / 30d / 365d) — real PayPal money, in cents.
-- `online.website` is the site's 90-second presence window; `online.paws` is
-  the Paws game server's online count (`null` when it doesn't answer).
-- Per-game rows come from the `games` catalog: `entitlements` is the Season 1
-  count for Everenfell (`null` for other titles), `acoins_spent` totals
-  `acoins_spend` ledger rows for that `game_slug`, and `transactions` counts
-  all ledger rows for it.
+  24h / 7d / 30d / 365d) — real PayPal money, in cents. ACoins are
+  studio-wide and are never attributed to Paws & Parcels or Everenfell.
+- `online` is the per-platform presence breakdown: `website` is the AGP
+  Studios site's 90-second presence window, `paws` is the Paws & Parcels
+  game server's online count, and `everenfell` is the Everenfell game
+  server's online count (`null` when that server doesn't answer).
 
 #### Curated studio news (Website tab)
 

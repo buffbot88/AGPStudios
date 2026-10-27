@@ -293,6 +293,17 @@ export function AdminSurface({ user }: { user: User | null }) {
     finally { setBusy(false); }
   }
 
+  async function createGame(fields: Record<string, unknown>): Promise<string | null> {
+    setBusy(true); setError(null);
+    try {
+      const result = await request<{ ok: boolean; slug: string }>(`${API}/admin/games`, { method: 'POST', body: JSON.stringify(fields) });
+      toast('Game added.', 'success');
+      await load();
+      return safeText(result.slug) || null;
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Game creation failed'); return null; }
+    finally { setBusy(false); }
+  }
+
   async function deleteUser(userId: string) {
     if (!(await confirmModal({
       title: 'Delete user permanently?',
@@ -340,7 +351,7 @@ export function AdminSurface({ user }: { user: User | null }) {
 
       {tab === 'overview' && <OverviewTab summary={summary} games={games} onNavigate={setTab} />}
       {tab === 'users' && <UsersTab users={users} query={query} onQueryChange={setQuery} onSearch={load} onSelectUser={selectUser} selectedUser={selectedUser} busy={busy} currentUser={user} onUpdateUser={updateUser} onSetEverenfellS1={setEverenfellS1} onBanUser={banUser} onDeleteUser={deleteUser} moderation={moderation} moderationError={moderationError} onRefreshModeration={() => selectedUser && void loadModeration(selectedUser.id)} />}
-      {tab === 'games' && <GamesTab games={games} busy={busy} onUpdateGame={updateGame} />}
+      {tab === 'games' && <GamesTab games={games} busy={busy} onUpdateGame={updateGame} onCreateGame={createGame} />}
       {tab === 'website' && <WebsiteTab />}
       {tab === 'payments' && <PaymentsTab />}
       {tab === 'system' && <SystemTab loaded={loaded} database={database} settings={settings} onPush={pushGithub} onUpdate={systemUpdate} status={repoStatus} busy={busy} onApplyMigrations={applyMigrations} clientErrors={clientErrors} clientErrorsError={clientErrorsError} clientErrorsBusy={clientErrorsBusy} clientErrorsFilter={clientErrorsFilter} onFilterClientErrors={setClientErrorsFilter} onRefreshClientErrors={loadClientErrors} onTriageClientError={triageClientError} onMuteClientErrorMessage={muteClientErrorMessage} />}
@@ -386,10 +397,19 @@ function PaymentsTab() {
 
 // ── Games Tab ──
 
-function GamesTab({ games, busy, onUpdateGame }: { games: AdminGame[]; busy: boolean; onUpdateGame: (slug: string, fields: Record<string, unknown>) => void }) {
+function GamesTab({ games, busy, onUpdateGame, onCreateGame }: { games: AdminGame[]; busy: boolean; onUpdateGame: (slug: string, fields: Record<string, unknown>) => void; onCreateGame: (fields: Record<string, unknown>) => Promise<string | null> }) {
   type GameDraft = { title: string; summary: string; status: string; url: string; featured: boolean; sort_order: string; tags: string; poster: string };
   const [drafts, setDrafts] = useState<Record<string, Partial<GameDraft>>>({});
-  const blank: GameDraft = { title: '', summary: '', status: '', url: '', featured: false, sort_order: '', tags: '', poster: '' };
+  const [selected, setSelected] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [created, setCreated] = useState({ slug: '', title: '', summary: '', status: 'in-development', url: '', featured: false, sort_order: '0', tags: '', poster: '' });
+  const list = safeList<AdminGame>(games).filter(Boolean);
+  // A reloaded list drops edits for games that no longer exist; the open
+  // editor follows suit instead of editing a ghost row.
+  useEffect(() => {
+    if (selected && !list.some((game) => safeText(game?.slug) === selected)) setSelected(null);
+  }, [games, selected]);
+  const openGame = list.find((game) => safeText(game?.slug) === selected) ?? null;
   const draft = (game: AdminGame): GameDraft => ({
     title: safeText(game.title), summary: safeText(game.summary), status: safeText(game.status),
     url: safeText(game.url), featured: Boolean(game.featured),
@@ -410,42 +430,108 @@ function GamesTab({ games, busy, onUpdateGame }: { games: AdminGame[]; busy: boo
       poster: current.poster.trim(),
     });
   }
+  async function saveNew(event: FormEvent) {
+    event.preventDefault();
+    const slug = await onCreateGame({
+      slug: created.slug.trim().toLowerCase(), title: created.title.trim(), summary: created.summary.trim(),
+      status: created.status, url: created.url.trim(), featured: created.featured,
+      sort_order: created.sort_order.trim() === '' ? 0 : Number(created.sort_order),
+      tags: created.tags.split(',').map((tag) => tag.trim()).filter(Boolean),
+      poster: created.poster.trim(),
+    });
+    if (slug) {
+      setCreated({ slug: '', title: '', summary: '', status: 'in-development', url: '', featured: false, sort_order: '0', tags: '', poster: '' });
+      setAdding(false);
+      setSelected(slug);
+    }
+  }
+  // Click a card to edit that game; the editor replaces the list so only
+  // one full form is ever on screen.
+  if (openGame && !adding) {
+    const slug = safeText(openGame.slug);
+    const current = draft(openGame);
+    return (
+      <div className="adm-games">
+        <div className="adm-toolbar">
+          <button type="button" className="secondary-button" onClick={() => setSelected(null)}>← All games</button>
+          <span className="eyebrow">Editing {safeText(openGame.title) || slug}</span>
+        </div>
+        <form className="adm-game-row adm-game-edit" onSubmit={(e) => { e.preventDefault(); save(openGame); }}>
+          <div className="adm-game-thumb">
+            <PosterImage
+              src={current.poster}
+              alt=""
+              fallbackClass="thumb-fallback fallback-in-development"
+              fallback={<span aria-hidden>◎</span>}
+            />
+          </div>
+          <div className="adm-game-fields">
+            <div className="adm-game-grid">
+              <label>Title<input value={current.title} onChange={(e) => set(slug, { title: e.target.value })} required maxLength={120} /></label>
+              <label>Slug<span className="adm-field-value mono">{slug}</span></label>
+              <label className="adm-span">Summary<textarea value={current.summary} onChange={(e) => set(slug, { summary: e.target.value })} required maxLength={500} rows={2} /></label>
+              <label>Status<select value={current.status} onChange={(e) => set(slug, { status: e.target.value })}><option value="live">live</option><option value="in-development">in-development</option><option value="coming-soon">coming-soon</option></select></label>
+              <label>Sort<input type="number" min={0} max={1000} value={current.sort_order} onChange={(e) => set(slug, { sort_order: e.target.value })} /></label>
+              <label className="adm-span">URL<input value={current.url} onChange={(e) => set(slug, { url: e.target.value })} placeholder="https://…" spellCheck={false} maxLength={500} /></label>
+              <label className="adm-span">Tags (comma separated)<input value={current.tags} onChange={(e) => set(slug, { tags: e.target.value })} placeholder="Cozy, Exploration" maxLength={200} /></label>
+              <label className="adm-span">Poster URL<input className="adm-game-poster-input" value={current.poster} onChange={(e) => set(slug, { poster: e.target.value })} placeholder="/poster.svg or https://…" spellCheck={false} /></label>
+              <label className="adm-check"><input type="checkbox" checked={current.featured} onChange={(e) => set(slug, { featured: e.target.checked })} /> Featured on homepage</label>
+            </div>
+            <div className="adm-game-actions"><button type="submit" className="secondary-button" disabled={busy}>Save game</button></div>
+          </div>
+        </form>
+      </div>
+    );
+  }
   return (
-    <div className="adm-panel-layout">
-      <div className="adm-games-list">
-        <div className="adm-toolbar"><span className="eyebrow">Games</span><span className="refresh-state">Edits apply live — no redeploy needed</span></div>
-        {safeList<AdminGame>(games).filter(Boolean).map((game) => {
-          const slug = safeText(game.slug);
-          const current = draft(game);
+    <div className="adm-games">
+      <div className="adm-toolbar">
+        <span className="eyebrow">Games</span>
+        <span className="refresh-state">Edits apply live — no redeploy needed</span>
+        <span className="adm-toolbar-spacer" />
+        <button type="button" className="secondary-button" onClick={() => { setAdding((open) => !open); setSelected(null); }}>{adding ? 'Cancel' : '+ Add game'}</button>
+      </div>
+      {adding && (
+        <form className="adm-game-row adm-game-add" onSubmit={(e) => void saveNew(e)}>
+          <div className="adm-game-fields">
+            <div className="adm-game-grid">
+              <label>Slug<input value={created.slug} onChange={(e) => setCreated({ ...created, slug: e.target.value })} required maxLength={60} placeholder="starlight-drift" spellCheck={false} /></label>
+              <label>Title<input value={created.title} onChange={(e) => setCreated({ ...created, title: e.target.value })} required maxLength={120} /></label>
+              <label className="adm-span">Summary<textarea value={created.summary} onChange={(e) => setCreated({ ...created, summary: e.target.value })} required maxLength={500} rows={2} /></label>
+              <label>Status<select value={created.status} onChange={(e) => setCreated({ ...created, status: e.target.value })}><option value="live">live</option><option value="in-development">in-development</option><option value="coming-soon">coming-soon</option></select></label>
+              <label>Sort<input type="number" min={0} max={1000} value={created.sort_order} onChange={(e) => setCreated({ ...created, sort_order: e.target.value })} /></label>
+              <label className="adm-span">URL<input value={created.url} onChange={(e) => setCreated({ ...created, url: e.target.value })} placeholder="https://…" spellCheck={false} maxLength={500} /></label>
+              <label className="adm-span">Tags (comma separated)<input value={created.tags} onChange={(e) => setCreated({ ...created, tags: e.target.value })} placeholder="Cozy, Exploration" maxLength={200} /></label>
+              <label className="adm-span">Poster URL<input className="adm-game-poster-input" value={created.poster} onChange={(e) => setCreated({ ...created, poster: e.target.value })} placeholder="/poster.svg or https://…" spellCheck={false} /></label>
+              <label className="adm-check"><input type="checkbox" checked={created.featured} onChange={(e) => setCreated({ ...created, featured: e.target.checked })} /> Featured on homepage</label>
+            </div>
+            <div className="adm-game-actions"><button type="submit" className="secondary-button" disabled={busy}>Add game</button></div>
+          </div>
+        </form>
+      )}
+      <div className="adm-games-grid">
+        {list.map((game) => {
+          const slug = safeText(game?.slug);
           return (
-            <form className="adm-game-row adm-game-edit" key={slug} onSubmit={(e) => { e.preventDefault(); save(game); }}>
-              <div className="adm-game-thumb">
+            <button key={slug} type="button" className={selected === slug ? 'adm-game-card selected' : 'adm-game-card'} onClick={() => { setSelected(slug); setAdding(false); }}>
+              <span className="adm-game-card-thumb">
                 <PosterImage
-                  src={current.poster}
+                  src={safeText(game?.poster)}
                   alt=""
                   fallbackClass="thumb-fallback fallback-in-development"
                   fallback={<span aria-hidden>◎</span>}
                 />
-              </div>
-              <div className="adm-game-fields">
-                <div className="adm-game-grid">
-                  <label>Title<input value={current.title} onChange={(e) => set(slug, { title: e.target.value })} required maxLength={120} /></label>
-                  <label>Slug<span className="adm-field-value mono">{slug}</span></label>
-                  <label className="adm-span">Summary<textarea value={current.summary} onChange={(e) => set(slug, { summary: e.target.value })} required maxLength={500} rows={2} /></label>
-                  <label>Status<select value={current.status} onChange={(e) => set(slug, { status: e.target.value })}><option value="live">live</option><option value="in-development">in-development</option><option value="coming-soon">coming-soon</option></select></label>
-                  <label>Sort<input type="number" min={0} max={1000} value={current.sort_order} onChange={(e) => set(slug, { sort_order: e.target.value })} /></label>
-                  <label className="adm-span">URL<input value={current.url} onChange={(e) => set(slug, { url: e.target.value })} placeholder="https://…" spellCheck={false} maxLength={500} /></label>
-                  <label className="adm-span">Tags (comma separated)<input value={current.tags} onChange={(e) => set(slug, { tags: e.target.value })} placeholder="Cozy, Exploration" maxLength={200} /></label>
-                  <label className="adm-span">Poster URL<input className="adm-game-poster-input" value={current.poster} onChange={(e) => set(slug, { poster: e.target.value })} placeholder="/poster.svg or https://…" spellCheck={false} /></label>
-                  <label className="adm-check"><input type="checkbox" checked={current.featured} onChange={(e) => set(slug, { featured: e.target.checked })} /> Featured on homepage</label>
-                </div>
-                <div className="adm-game-actions"><button type="submit" className="secondary-button" disabled={busy}>Save game</button></div>
-              </div>
-            </form>
+              </span>
+              <span className="adm-game-card-info">
+                <strong>{safeText(game?.title) || slug}</strong>
+                <small>{safeText(game?.status)} · {safeText(game?.url) || 'no URL yet'}</small>
+              </span>
+              <b aria-hidden>→</b>
+            </button>
           );
         })}
-        {games.length === 0 && <div className="adm-empty">No games configured.</div>}
       </div>
+      {list.length === 0 && !adding && <div className="adm-empty">No games configured.</div>}
     </div>
   );
 }
@@ -642,8 +728,7 @@ function WebsiteTab() {
 type WallStats = {
   signups: { today: number; week: number; month: number; total: number };
   profits_cents: { day: number; week: number; month: number; year: number };
-  online: { website: number; paws: number | null };
-  games: { slug: string; title: string; status: string; online: number | null; entitlements: number | null; acoins_spent: number; transactions: number }[];
+  online: { website: number; paws: number | null; everenfell: number | null };
 };
 
 const money = (cents: number): string =>
@@ -711,28 +796,10 @@ function WallStats() {
       />
       <WallStatCard
         label="Online now"
-        value={safeNumber(stats.online.website)}
-        display={safeNumber(stats.online.website).toLocaleString()}
-        sub={stats.online.paws === null || stats.online.paws === undefined
-          ? 'site presence · Paws status unknown'
-          : `site presence · ${safeNumber(stats.online.paws)} in Paws & Parcels`}
+        value={safeNumber(stats.online.website) + safeNumber(stats.online.paws) + safeNumber(stats.online.everenfell)}
+        display={(safeNumber(stats.online.website) + safeNumber(stats.online.paws) + safeNumber(stats.online.everenfell)).toLocaleString()}
+        sub={`AGP Studios ${safeNumber(stats.online.website)} · Paws & Parcels ${stats.online.paws === null || stats.online.paws === undefined ? 'unknown' : safeNumber(stats.online.paws)} · Everenfell ${stats.online.everenfell === null || stats.online.everenfell === undefined ? 'unknown' : safeNumber(stats.online.everenfell)}`}
       />
-      {stats.games.map((game) => {
-        return (
-          <WallStatCard
-            key={safeText(game.slug)}
-            label={`${safeText(game.title)} · ${safeText(game.status)}`}
-            value={safeNumber(game.acoins_spent)}
-            display={`${safeNumber(game.acoins_spent).toLocaleString()} ACoins`}
-            sub={
-              (game.online === null || game.online === undefined
-                ? (game.entitlements === null || game.entitlements === undefined ? 'no live probe' : `${safeNumber(game.entitlements)} Season 1 players`)
-                : `${safeNumber(game.online)} online now`) +
-              ` · ${safeNumber(game.transactions)} ledger rows`
-            }
-          />
-        );
-      })}
     </div>
   );
 }
@@ -786,6 +853,8 @@ function OverviewTab({ summary, games, onNavigate }: { summary: AdminSummary | n
 
 // ── Users Tab ──
 
+const USERS_PER_PAGE = 5;
+
 function UsersTab({ users, query, onQueryChange, onSearch, onSelectUser, selectedUser, busy, currentUser, onUpdateUser, onSetEverenfellS1, onBanUser, onDeleteUser, moderation, moderationError, onRefreshModeration }: {
   users: AdminUser[]; query: string; onQueryChange: (q: string) => void; onSearch: () => void;
   onSelectUser: (u: AdminUser | null) => void; selectedUser: AdminUser | null;
@@ -794,6 +863,13 @@ function UsersTab({ users, query, onQueryChange, onSearch, onSelectUser, selecte
   onBanUser: (id: string, banned: boolean) => void; onDeleteUser: (id: string) => void;
   moderation: ModerationEvent[]; moderationError: string | null; onRefreshModeration: () => void;
 }) {
+  const [page, setPage] = useState(0);
+  const rows = safeList<AdminUser>(users).filter(Boolean);
+  const pageCount = Math.max(1, Math.ceil(rows.length / USERS_PER_PAGE));
+  // A new search (or a reloaded list) starts back on the first page.
+  useEffect(() => { setPage(0); }, [users, query]);
+  const safePage = Math.min(page, pageCount - 1);
+  const visible = rows.slice(safePage * USERS_PER_PAGE, safePage * USERS_PER_PAGE + USERS_PER_PAGE);
   return (
     <div className="adm-panel-layout">
       <div className="adm-panel-list">
@@ -802,7 +878,10 @@ function UsersTab({ users, query, onQueryChange, onSearch, onSelectUser, selecte
           <button type="button" className="secondary-button" onClick={onSearch}>Search</button>
         </div>
         <div className="adm-user-list">
-          {safeList<AdminUser>(users).filter(Boolean).map((u) => (
+          <div className="adm-user-list-head" aria-hidden>
+            <span>Member</span><span>Role</span><span>Status</span>
+          </div>
+          {visible.map((u) => (
             <button key={safeText(u.id)} type="button" className={selectedUser?.id === u?.id ? 'adm-user-row selected' : 'adm-user-row'} onClick={() => onSelectUser(u)}>
               <div className="adm-user-row-info">
                 <strong>{safeText(u?.display_name) || safeText(u?.username)}</strong>
@@ -812,10 +891,20 @@ function UsersTab({ users, query, onQueryChange, onSearch, onSelectUser, selecte
               <span className={u?.is_active ? 'adm-status-dot active' : 'adm-status-dot disabled'} />
             </button>
           ))}
-          {users.length === 0 && <div className="adm-empty">No users found.</div>}
+          {rows.length === 0 && <div className="adm-empty">No users found.</div>}
+        </div>
+        <div className="adm-pagination">
+          <button type="button" className="secondary-button" disabled={safePage === 0} onClick={() => setPage(safePage - 1)}>← Prev</button>
+          <span>Page {safePage + 1} of {pageCount} · {rows.length} member{rows.length === 1 ? '' : 's'}</span>
+          <button type="button" className="secondary-button" disabled={safePage >= pageCount - 1} onClick={() => setPage(safePage + 1)}>Next →</button>
         </div>
       </div>
-      {selectedUser && <UserDetailPanel user={selectedUser} busy={busy} currentUser={currentUser} onUpdate={onUpdateUser} onSetEverenfellS1={onSetEverenfellS1} onBan={onBanUser} onDelete={onDeleteUser} onClose={() => onSelectUser(null)} moderation={moderation} moderationError={moderationError} onRefreshModeration={onRefreshModeration} />}
+      {selectedUser ? <UserDetailPanel user={selectedUser} busy={busy} currentUser={currentUser} onUpdate={onUpdateUser} onSetEverenfellS1={onSetEverenfellS1} onBan={onBanUser} onDelete={onDeleteUser} onClose={() => onSelectUser(null)} moderation={moderation} moderationError={moderationError} onRefreshModeration={onRefreshModeration} /> : (
+        <div className="adm-detail-panel adm-detail-empty">
+          <div className="adm-detail-header"><h3>Member profile</h3></div>
+          <p className="muted">Select a member to view their profile.</p>
+        </div>
+      )}
     </div>
   );
 }

@@ -241,11 +241,11 @@ def phase2():
     assert code == 403, ("wall stats are admin-only", code)
     code, body = admin.req("/api/admin/stats")
     assert code == 200, ("wall stats", code, body)
-    assert set(("signups", "profits_cents", "online", "games")) <= set(body), ("wall stats sections", body)
+    assert set(("signups", "profits_cents", "online")) <= set(body), ("wall stats sections", body)
     assert body["signups"]["total"] >= 3, ("wall stats count the suite accounts", body["signups"])
     assert set(("day", "week", "month", "year")) <= set(body["profits_cents"]), ("profit windows", body)
-    slugs = {game["slug"] for game in body["games"]}
-    assert {"paws-and-parcels", "everenfell"} <= slugs, ("wall stats cover both live games", slugs)
+    assert set(("website", "paws", "everenfell")) <= set(body["online"]), ("online platform breakdown", body["online"])
+    assert "games" not in body, ("no per-game ACoins cards", body)
 
     # -- GET /api/account/transactions: newest-first purchase history --------
     code, body = member.req("/api/account/transactions")
@@ -388,6 +388,26 @@ def phase2():
     assert code == 404, ("unknown slug 404", code, body)
     code, body = admin.req(f"/api/admin/games/{game['slug']}", "PUT", {})
     assert code == 400, ("missing poster 400", code, body)
+
+    # -- POST /api/admin/games (create) ------------------------------------
+    created_slug = f"contract-test-{secrets.token_hex(4)}"
+    code, body = admin.req("/api/admin/games", "POST", {
+        "slug": created_slug, "title": "Contract Test Game",
+        "summary": "Created by the phase 2 suite.", "status": "coming-soon",
+        "tags": ["Test"], "url": "", "poster": "", "featured": False, "sort_order": 999})
+    assert code == 200 and (body or {}).get("slug") == created_slug, ("game create", code, body)
+    code, body = admin.req("/api/admin/games")
+    assert any(g.get("slug") == created_slug for g in (body or {}).get("games", [])), \
+        ("created game listed", code, body)
+    code, body = member.req("/api/games")
+    assert any(g.get("slug") == created_slug for g in (body or {}).get("games", [])), \
+        ("created game public", code, body)
+    code, body = admin.req("/api/admin/games", "POST", {
+        "slug": created_slug, "title": "Duplicate", "summary": "Duplicate slug.", "tags": ["Test"]})
+    assert code == 409, ("duplicate slug 409", code, body)
+    code, body = admin.req("/api/admin/games", "POST", {
+        "slug": "Bad Slug!", "title": "Bad", "summary": "Bad slug.", "tags": ["Test"]})
+    assert code == 400, ("bad slug 400", code, body)
 
     # -- PUT /api/account: {username, email, display_name} required -----------
     code, body = member.req("/api/account", "PUT", {

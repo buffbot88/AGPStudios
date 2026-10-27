@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { NAV_LINKS } from '../../content';
+import { NAV_LINKS, goHome } from '../../content';
 import { AuthPanel } from '../AuthPanel';
 import { request, safeList, safeNumber, safeText, safeTime } from '../api';
 import type { User } from './primitives';
@@ -142,7 +142,7 @@ function NotificationBell() {
 
 function Wordmark() {
   return (
-    <a className="wordmark" href="#top">
+    <a className="wordmark" href="/" onClick={(event) => { event.preventDefault(); goHome(); }}>
       <b>AGP</b> STUDIOS
     </a>
   );
@@ -151,11 +151,13 @@ function Wordmark() {
 export function SiteHeader({ user, onUserChange }: { user: User | null; onUserChange: (user: User | null) => void }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [onlineUsers, setOnlineUsers] = useState<number | null>(null);
-  const [active, setActive] = useState<string>(() => window.location.hash || '#top');
+  // The homepage is a clean `/` (no `#top` hash); legacy `#top` URLs count as home too.
+  const homeActive = () => (!window.location.hash || window.location.hash === '#top' ? '/' : window.location.hash);
+  const [active, setActive] = useState<string>(() => homeActive());
 
   useEffect(() => {
     const onHash = () => {
-      setActive(window.location.hash || '#top');
+      setActive(homeActive());
       setMenuOpen(false);
     };
     window.addEventListener('hashchange', onHash);
@@ -202,7 +204,7 @@ export function SiteHeader({ user, onUserChange }: { user: User | null; onUserCh
         <Wordmark />
         <nav className="main-nav" aria-label="Primary">
           {visibleLinks.map((link) => (
-            <a key={link.href} href={link.href} className={active === link.href ? 'active' : undefined}>
+            <a key={link.href} href={link.href} className={active === link.href ? 'active' : undefined} onClick={link.href === '/' ? (event) => { event.preventDefault(); goHome(); } : undefined}>
               {link.label}
             </a>
           ))}
@@ -229,7 +231,7 @@ export function SiteHeader({ user, onUserChange }: { user: User | null; onUserCh
       {menuOpen && (
         <nav className="mobile-nav" aria-label="Mobile">
           {visibleLinks.map((link) => (
-            <a key={link.href} href={link.href} className={active === link.href ? 'active' : undefined}>
+            <a key={link.href} href={link.href} className={active === link.href ? 'active' : undefined} onClick={link.href === '/' ? (event) => { event.preventDefault(); goHome(); } : undefined}>
               {link.label}
             </a>
           ))}

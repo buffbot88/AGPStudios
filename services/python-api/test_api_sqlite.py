@@ -162,18 +162,14 @@ def main():
             assert status == 200
             status, referral, _ = request("/api/account/referral", authenticated=True)
             assert referral["uses_total"] == 1 and referral["rewards_earned_acoins"] == 100, referral
-            # -- wall stats: signups, profits, per-game activity --
+            # -- wall stats: signups, profits, per-platform presence --
             status, stats, _ = request("/api/admin/stats", authenticated=True)
             assert status == 200, status
             assert stats["signups"]["total"] >= 6, stats["signups"]
             assert stats["signups"]["today"] >= 6, stats["signups"]
             assert stats["profits_cents"] == {"day": 0, "week": 0, "month": 0, "year": 0}, stats["profits_cents"]
-            slugs = {game["slug"] for game in stats["games"]}
-            assert {"paws-and-parcels", "everenfell"} <= slugs, slugs
-            for game in stats["games"]:
-                assert game["acoins_spent"] >= 0 and game["transactions"] >= 0, game
-            everenfell = next(game for game in stats["games"] if game["slug"] == "everenfell")
-            assert everenfell["entitlements"] == 0, everenfell
+            assert set(("website", "paws", "everenfell")) <= set(stats["online"]), stats["online"]
+            assert "games" not in stats, stats
             assert stats["online"]["website"] >= 0, stats["online"]
             status, _, _ = request("/api/admin/site-settings", "PUT", {
                 "settings": {"footer.tagline": "SQLite Tagline", "register.budget": 7}}, authenticated=True)
@@ -193,6 +189,15 @@ def main():
             status, game, _ = request("/api/admin/games/paws-and-parcels", "PUT", {
                 "featured": True, "sort_order": 1}, authenticated=True)
             assert status == 200 and game["game"]["slug"] == "paws-and-parcels"
+            status, created, _ = request("/api/admin/games", "POST", {
+                "slug": "sqlite-test-game", "title": "SQLite Test Game",
+                "summary": "Created by the SQLite suite.", "tags": ["Test"]}, authenticated=True)
+            assert status == 200 and created["slug"] == "sqlite-test-game", created
+            status, listing, _ = request("/api/admin/games", authenticated=True)
+            assert any(g["slug"] == "sqlite-test-game" for g in listing["games"]), listing
+            status, dup, _ = request("/api/admin/games", "POST", {
+                "slug": "sqlite-test-game", "title": "Duplicate", "summary": "Duplicate.", "tags": ["Test"]}, authenticated=True)
+            assert status == 409, dup
             status, _, _ = request("/api/admin/database/status", authenticated=True)
             assert status == 200
             status, settings, _ = request("/api/admin/payments/settings", authenticated=True)
