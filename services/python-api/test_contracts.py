@@ -13,6 +13,7 @@ boss / admin-pass-1) and creates one throwaway member, then cleans up after
 itself. Run against the mock or a credentialed environment — never against a
 deployment you don't own.
 """
+import hashlib
 import json
 import os
 import urllib.error
@@ -118,6 +119,16 @@ class Client:
         return ""
 
 
+def solve_challenge(challenge, difficulty):
+    """Solve a proof-of-work registration challenge like the frontend does."""
+    prefix = "0" * max(1, min(difficulty, 8))
+    nonce = 0
+    while True:
+        if hashlib.sha256(f"{challenge}{nonce}".encode()).hexdigest().startswith(prefix):
+            return {"challenge": challenge, "nonce": str(nonce)}
+        nonce += 1
+
+
 def row_for(users, username):
     return next((u for u in (users or {}).get("users", []) if u.get("username") == username), None)
 
@@ -134,11 +145,31 @@ def phase2():
     # -- create a throwaway member via the mock-compatible register shape ----
     member = Client()
     username = f"smoke-shape-{secrets.token_hex(4)}"
+    code, body = member.req("/api/auth/register-challenge")
+    assert code == 200 and body.get("challenge") and isinstance(body.get("difficulty"), int), ("register challenge", code, body)
+    proof = solve_challenge(body["challenge"], body["difficulty"])
     code, body = member.req("/api/auth/register", "POST", {
         "username": username, "email": f"{username}@example.test",
         "password": "smoke-pass-1", "display_name": "Smoke Shape",
+        "proof": proof,
     })
     assert code == 201, ("register", code, body)
+    # Bot deterrents: reserved names, disposable email, and missing proof.
+    code, body = member.req("/api/auth/register", "POST", {
+        "username": "admin", "email": f"reserved-{username}@example.test",
+        "password": "smoke-pass-1", "display_name": "Reserved",
+    })
+    assert code == 400 and body["error"]["code"] == "that_username_is_reserved", ("reserved username", code, body)
+    code, body = member.req("/api/auth/register", "POST", {
+        "username": f"disp-{username}"[:30], "email": "throwaway@mailinator.com",
+        "password": "smoke-pass-1", "display_name": "Disposable",
+    })
+    assert code == 400 and body["error"]["code"] == "disposable_email_addresses_are_not_accepted", ("disposable email", code, body)
+    code, body = member.req("/api/auth/register", "POST", {
+        "username": f"noproof-{username}"[:30], "email": f"noproof-{username}@example.test",
+        "password": "smoke-pass-1", "display_name": "No Proof",
+    })
+    assert code == 400 and body["error"]["code"] == "human_verification_failed", ("missing proof", code, body)
     code, body = member.req("/api/auth/login", "POST", {"identifier": username, "password": "smoke-pass-1"})
     assert code == 200 and isinstance((body or {}).get("user"), dict), ("member login", code)
 

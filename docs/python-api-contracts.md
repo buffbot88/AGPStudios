@@ -18,10 +18,10 @@ contract the Vite portal consumes.
 | GET | `/api/game-status` | 200 | Paws health projection: `online`, `source`, `health` |
 | POST | `/api/online-presence` | 200 | Public browser heartbeat with `{visitor_id}`; returns `{online_users}` from recent website visitors plus live Paws players |
 | GET | `/api/games` | 200/503 | Public homepage games list: `{games: [{slug, title, summary, status, tags, url, poster, featured}]}` sorted by `sort_order` |
-| GET | `/api/news` | 200/503 | Public homepage studio news: `{news: [{id, title, summary, url, published_at}]}` newest first — curated `studio_news` rows merged with recent commits across buffbot88's public GitHub repos (cached 30 min; curated rows alone when GitHub is unreachable). Commit items use `id: github:<sha>`, the commit subject as title, `{repo} · {subject}` as summary, and the commit URL |
+| GET | `/api/news` | 200/503 | Public homepage studio news: `{news: [{id, title, summary, url, published_at}]}` newest first — curated `studio_news` rows merged with recent commits across buffbot88's public GitHub repos (refreshed every 30 min by a background refresher plus lazily on request; curated rows alone when GitHub is unreachable). Commit items use `id: github:<sha>` and the commit URL; titles/summaries are friendlified (`feat:` → "New:", `fix:` → "Fixed:", …) and merge commits are skipped |
 | GET | `/api/auth/session` | 200 | `{authenticated: boolean, user?: User}` |
 | POST | `/api/auth/login` | 200 | JSON `{identifier, password}`; returns `{user}` and secure session cookie |
-| POST | `/api/auth/register` | 201 | JSON `{username, email, password, display_name}`; activates the account immediately |
+| POST | `/api/auth/register` | 201/400/409/429 | JSON `{username, email, password, display_name, proof}`; validation, human-verification, and rate limits documented below |
 | POST | `/api/auth/logout` | 200 | Revokes the current session and expires the cookie |
 | GET | `/api/auth/verify-email?token=...` | 200 | Verifies a single-use email token |
 | POST | `/api/auth/verify-email/resend` | 202 | JSON `{identifier}`; sends a fresh verification mail |
@@ -36,7 +36,8 @@ contract the Vite portal consumes.
 | GET | `/api/account/transactions` | 200/401 | Authenticated purchase history (ACoins buys, ACoins spending, game purchases), newest first; shape documented below |
 | PUT | `/api/account` | 200/401 | Authenticated account update; requirements documented below |
 | DELETE | `/api/account` | 200/401 | Authenticated account self-deletion. JSON body `{confirm: 'DELETE'}` required (400 otherwise). Deletes the user row, all associated data and sessions, and expires the `ashat_rust_sid` and `ashat_csrf` cookies in the response. |
-| POST | `/api/account/github` | 404 (stub) | Not implemented. Always 404. |
+| POST | `/api/account/github` | 404 (stub) | Not implemented. Always 404. GitHub linking was removed from the account page. |
+| GET | `/api/auth/register-challenge` | 200 | Issues a single-use proof-of-work challenge for registration; shape documented below |
 | GET | `/api/support` | 200/401 | Authenticated ticket list |
 | POST | `/api/support` | 201/401 | Authenticated ticket creation |
 | GET | `/api/support/:id` | 200/401/404 | Authenticated ticket and replies |
@@ -206,6 +207,33 @@ entries, newest first (max 20). `id` is an opaque ref (`reply:<reply_id>` or
 `{all: true}` (marks every currently unread item read) or `{ids: [...]}`
 (one or more `reply:`/`mod:` refs). Returns `{ok: true, read: n}`.
 
+#### Registration, filtering, and human verification
+
+`POST /api/auth/register` activates the account immediately on success
+(`{registered: true, verification_required: false, user}`) but rejects bots
+and junk identities up front:
+
+- **Username filter:** 3–30 chars, must start with a letter, letters/numbers
+  /`_`/`-` only. Reserved names (`admin`, `support`, game titles, service
+  names, etc.) return 400 `that username is reserved`.
+- **Email filter:** must be a well-formed address (local part ≤ 64 chars, no
+  leading/trailing/consecutive dots, valid domain labels) and must not come
+  from a known disposable/throwaway domain (400
+  `disposable email addresses are not accepted`). Uniqueness is
+  case-insensitive.
+- **Password filter:** 8–128 chars; common passwords (`password123`,
+  `qwerty`, studio/game names, …) return 400 `that password is too common`.
+- **Human verification:** the client first calls
+  `GET /api/auth/register-challenge`, which returns
+  `{challenge, difficulty, expires_in}`. It finds a `nonce` whose
+  `sha256(challenge + nonce)` hex starts with `difficulty` zeros and submits
+  it as `proof: {challenge, nonce}` with the registration. Challenges are
+  single-use, expire after 10 minutes, and a missing/bad proof returns 400
+  `human verification failed`. No third-party captcha keys are involved.
+- **Rate limit:** 5 registrations per IP per 10 minutes (429
+  `too many registration attempts`).
+- `username`/`email` collisions return 409 `username_or_email_taken`.
+
 #### ACoins PayPal purchases
 
 `POST /api/acoins/order` and `/api/acoins/capture` require an authenticated session and
@@ -231,12 +259,15 @@ An **absent** `display_name` key falls back to the current value; a **blank**
 `display_name` (or blank `username`/`email`) returns 400. Extra fields (e.g. a
 tag name shown in the UI) are accepted but ignored. Behavior:
 
-- `username` and `email` are unique-checked against other users; a collision
-  returns 409 `username or email already in use`.
+- `username` and `email` are unique-checked against other users (email
+  case-insensitively); a collision returns 409
+  `username or email already in use`.
+- The same username/email filters as registration apply — a rename to a
+  reserved username or a disposable email returns 400.
 - On success returns `{ "user": { ...updated safe user... } }` — the caller should
   replace its session-cached user with this value.
-- The API does not expose GitHub unlinking; only linking exists, so a
-  `POST /api/account/github` currently returns 404.
+- GitHub linking was removed from the account page; `GET /api/auth/github`
+  and `POST /api/account/github` remain 404 stubs.
 
 #### GET `/api/admin/users`
 

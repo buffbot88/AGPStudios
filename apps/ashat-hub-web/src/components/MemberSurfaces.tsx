@@ -28,7 +28,7 @@ type TicketSummary = { id: string; subject: string; status: string; priority: st
 type TicketReply = { id: string; ticket_id: string; user_id: string; message: string; is_staff: number; created_at: string; username?: string; display_name?: string; role?: string };
 type Ticket = { id: string; user_id: string; subject: string; status: string; priority: string; category: string; message: string; created_at: string; updated_at: string };
 /** Shape of GET /api/account/summary per the Python API: {user, stats:{support_tickets}}. */
-type AccountSummary = { user: User; github_linked?: boolean; stats: { support_tickets: number } };
+type AccountSummary = { user: User; stats: { support_tickets: number } };
 
 
 const categories = ['all', 'tools', 'ai', 'pipeline', 'games', 'general'];
@@ -141,14 +141,14 @@ export function MemberSurfaces({ user, initialTab = 'support' }: { user: User | 
 
       {tab === 'support' && <div className="member-panel support-layout">{!user ? <div className="tool-empty"><p>Sign in to create and view support tickets.</p></div> : <><div className="support-sidebar"><div className="member-toolbar"><span className="eyebrow">Your tickets</span><button type="button" className="secondary-button" onClick={() => setSelectedTicket(null)}>New</button></div>{tickets.map((ticket) => <button type="button" className={selectedTicket?.ticket.id === ticket.id ? 'ticket-row selected' : 'ticket-row'} key={safeText(ticket.id)} onClick={() => void showTicket(safeText(ticket.id))}><strong>{safeText(ticket.subject)}</strong><small>{safeText(ticket.status)} · {safeText(ticket.priority)}</small></button>)}{!tickets.length && <p className="muted">No tickets yet.</p>}</div><div className="support-detail">{selectedTicket ? <><button type="button" className="back-button" onClick={() => setSelectedTicket(null)}>← New ticket</button><span className="eyebrow">{safeText(selectedTicket.ticket.status)} · {safeText(selectedTicket.ticket.priority)}</span><h3>{safeText(selectedTicket.ticket.subject)}</h3><p className="ticket-message">{safeText(selectedTicket.ticket.message)}</p><div className="ticket-replies">{safeList<TicketReply>(selectedTicket.replies).map((item) => <article className={item.is_staff ? 'ticket-reply staff' : 'ticket-reply'} key={safeText(item.id)}><small>{safeText(item.display_name) || safeText(item.username) || 'Member'} · {safeTime(item.created_at)}</small><p>{safeText(item.message)}</p></article>)}</div><form className="member-form" onSubmit={(event) => void sendReply(event)}><textarea value={reply} onChange={(event) => setReply(event.target.value)} placeholder="Reply to this ticket" rows={3} required /><button type="submit" disabled={busy}>Reply</button></form></> : <form className="member-form" onSubmit={(event) => void createTicket(event)}><span className="eyebrow">New support ticket</span><input value={supportSubject} onChange={(event) => setSupportSubject(event.target.value)} placeholder="Subject" required /><div className="form-row"><select value={supportCategory} onChange={(event) => setSupportCategory(event.target.value)}><option value="bug">Bug</option><option value="feature">Feature</option><option value="account">Account</option><option value="billing">Billing</option><option value="other">Other</option></select><select value={supportPriority} onChange={(event) => setSupportPriority(event.target.value)}><option value="low">Low</option><option value="normal">Normal</option><option value="high">High</option><option value="urgent">Urgent</option></select></div><textarea value={supportMessage} onChange={(event) => setSupportMessage(event.target.value)} placeholder="Describe the issue or request" rows={7} required /><button type="submit" disabled={busy}>Create ticket</button></form>}</div></>}</div>}
 
-      {tab === 'account' && <div className="member-panel account-grid">{!user ? <div className="tool-empty"><p>Sign in to view your account.</p></div> : !accountLoaded ? <div className="tool-empty"><p>Loading account...</p></div> : !account?.user ? <UnexpectedDataPanel what="Your account details" reason={error ?? undefined} onRetry={() => { setAccountLoaded(false); void loadAccount(); }} /> : <><AccountForm user={account.user} githubLinked={!!account.github_linked} onSaved={(next) => setAccount({ ...account, user: next })} onGithubChange={(linked) => setAccount({ ...account, github_linked: linked })} onDeleted={() => window.location.reload()} /><div className="account-stats"><Metric label="Support tickets" value={safeNumber(account.stats?.support_tickets)} /><PurchaseHistoryPanel /></div></>}</div>}
+      {tab === 'account' && <div className="member-panel account-grid">{!user ? <div className="tool-empty"><p>Sign in to view your account.</p></div> : !accountLoaded ? <div className="tool-empty"><p>Loading account...</p></div> : !account?.user ? <UnexpectedDataPanel what="Your account details" reason={error ?? undefined} onRetry={() => { setAccountLoaded(false); void loadAccount(); }} /> : <><AccountForm user={account.user} onSaved={(next) => setAccount({ ...account, user: next })} onDeleted={() => window.location.reload()} /><div className="account-stats"><Metric label="Support tickets" value={safeNumber(account.stats?.support_tickets)} /><PurchaseHistoryPanel /></div></>}</div>}
 
 
     </section>
   );
 }
 
-function AccountForm({ user, githubLinked, onSaved, onGithubChange, onDeleted }: { user: User; githubLinked: boolean; onSaved: (user: User) => void; onGithubChange: (linked: boolean) => void; onDeleted: () => void }) {
+function AccountForm({ user, onSaved, onDeleted }: { user: User; onSaved: (user: User) => void; onDeleted: () => void }) {
   // tag_name is the UI label for the API's display_name (PUT /api/account requires
   // {username, email, display_name}; discord_tag/location/interests are accepted extras).
   // safeText everywhere: a null/wrong-shape user object degrades to blank fields.
@@ -160,20 +160,6 @@ function AccountForm({ user, githubLinked, onSaved, onGithubChange, onDeleted }:
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  async function unlinkGithub() {
-    setBusy(true); setError('');
-    try {
-      await request(`${API}/account/github`, { method: 'POST' });
-      onGithubChange(false);
-      setMessage('GitHub account unlinked.');
-    }
-    catch (reason) {
-      const message = reason instanceof Error ? reason.message : 'Unable to unlink GitHub';
-      // The API only implements GitHub *linking*; unlinking is not a real endpoint yet.
-      setError(message === 'Request failed (404)' ? 'GitHub unlinking is not available yet.' : message);
-    }
-    finally { setBusy(false); }
-  }
   async function deleteAccount() {
     if (!(await confirmModal({
       title: 'Delete your account?',
@@ -198,9 +184,7 @@ function AccountForm({ user, githubLinked, onSaved, onGithubChange, onDeleted }:
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Account update failed'); }
     finally { setBusy(false); }
   }
-  return <form className="member-form account-form" onSubmit={(event) => void save(event)}><span className="eyebrow">Account details</span><div className="form-row"><input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} placeholder="Username" required /><input value={form.tag_name} onChange={(e) => setForm({ ...form, tag_name: e.target.value })} placeholder="Display name" required /></div><input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="Email" type="email" required /><button type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save account'}</button><div className="account-danger"><strong>GitHub connection</strong><span>{githubLinked ? 'GitHub account linked.' : 'No GitHub account linked.'}</span>{githubLinked
-              ? <button type="button" className="secondary-button" onClick={() => void unlinkGithub()} disabled={busy} title="Unlinking is not available on the API yet">Unlink GitHub</button>
-              : <a className="secondary-button" href={`${API}/auth/github`}>Link GitHub account</a>}</div><button type="button" className="delete-account-button" onClick={() => void deleteAccount()} disabled={busy}>Delete account and all data</button>{message && <small className="auth-success">{message}</small>}{error && <small className="auth-error">{error}</small>}</form>;
+  return <form className="member-form account-form" onSubmit={(event) => void save(event)}><span className="eyebrow">Account details</span><div className="form-row"><input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} placeholder="Username" required /><input value={form.tag_name} onChange={(e) => setForm({ ...form, tag_name: e.target.value })} placeholder="Display name" required /></div><input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="Email" type="email" required /><button type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save account'}</button><button type="button" className="delete-account-button" onClick={() => void deleteAccount()} disabled={busy}>Delete account and all data</button>{message && <small className="auth-success">{message}</small>}{error && <small className="auth-error">{error}</small>}</form>;
 }
 
 type PurchaseTransaction = {

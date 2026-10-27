@@ -17,6 +17,7 @@ Read-only plus self-contained mutations: registers its own throwaway member
 up what it creates. Requires the mock (or a live env) to be running.
 """
 import json
+import hashlib
 import os
 import secrets
 import sys
@@ -91,6 +92,16 @@ def check_ticket_summary(t, label):
     check(ok, f"{label}: ticket summary has id/subject/status/priority/category/preview/created_at/updated_at", repr(t)[:120])
 
 
+def solve_challenge(challenge, difficulty):
+    """Solve a proof-of-work registration challenge like the frontend does."""
+    prefix = "0" * max(1, min(difficulty, 8))
+    nonce = 0
+    while True:
+        if hashlib.sha256(f"{challenge}{nonce}".encode()).hexdigest().startswith(prefix):
+            return {"challenge": challenge, "nonce": str(nonce)}
+        nonce += 1
+
+
 def check_admin_user(u, label):
     ok = isinstance(u, dict) and all(is_str(u.get(k)) for k in ("id", "username", "email", "display_name", "role"))
     check(ok, f"{label}: admin user row has string id/username/email/display_name/role", repr(u)[:120])
@@ -162,11 +173,50 @@ def run():
           "/api/auth/session: signed-out shape is exactly {authenticated:false}", repr(body))
 
     # -- register + login (AuthPanel submit) ----------------------------------
-    code, body = member.req("/api/auth/register", "POST", {
+    # Registration requires a solved proof-of-work challenge (human
+    # verification) plus clean username/email/password values.
+    code, challenge_body = member.req("/api/auth/register-challenge")
+    check(code == 200 and isinstance((challenge_body or {}).get("challenge"), str)
+          and isinstance((challenge_body or {}).get("difficulty"), int),
+          "/api/auth/register-challenge: {challenge, difficulty, expires_in}", repr(challenge_body)[:120])
+    proof = solve_challenge((challenge_body or {}).get("challenge", ""),
+                             (challenge_body or {}).get("difficulty", 0))
+    code, reg_body = member.req("/api/auth/register", "POST", {
         "username": username, "email": f"{username}@example.test",
         "password": "contract-pass-1", "display_name": "Contract Shape",
+        "proof": proof,
     })
-    check(code == 201, "register returns 201", f"{code} {repr(body)[:120]}")
+    check(code == 201, "register returns 201", f"{code} {repr(reg_body)[:120]}")
+    body = reg_body
+    # Bot deterrents: reserved names, disposable email, common passwords, and
+    # missing human-verification proof are each rejected with a named 400.
+    code, body = member.req("/api/auth/register", "POST", {
+        "username": "admin", "email": f"reserved-{username}@example.test",
+        "password": "contract-pass-1", "display_name": "Reserved",
+    })
+    check(code == 400 and (body or {}).get("error", {}).get("code") == "that_username_is_reserved",
+          "register: reserved username rejected", f"{code} {repr(body)[:120]}")
+    code, body = member.req("/api/auth/register", "POST", {
+        "username": f"disp-{username}"[:30], "email": "throwaway@mailinator.com",
+        "password": "contract-pass-1", "display_name": "Disposable",
+    })
+    check(code == 400 and (body or {}).get("error", {}).get("code") == "disposable_email_addresses_are_not_accepted",
+          "register: disposable email rejected", f"{code} {repr(body)[:120]}")
+    code, body = member.req("/api/auth/register", "POST", {
+        "username": f"weak-{username}"[:30], "email": f"weak-{username}@example.test",
+        "password": "password123", "display_name": "Weak",
+    })
+    check(code == 400 and (body or {}).get("error", {}).get("code") == "that_password_is_too_common",
+          "register: common password rejected", f"{code} {repr(body)[:120]}")
+    code, body = member.req("/api/auth/register", "POST", {
+        "username": f"noproof-{username}"[:30], "email": f"noproof-{username}@example.test",
+        "password": "contract-pass-1", "display_name": "No Proof",
+    })
+    check(code == 400 and (body or {}).get("error", {}).get("code") == "human_verification_failed",
+          "register: missing human-verification proof rejected", f"{code} {repr(body)[:120]}")
+    # The negatives above reused `body`; the shape checks below read the
+    # successful registration again.
+    body = reg_body
     check(body.get("registered") is True, "register: registered=true", repr(body)[:120])
     if body.get("verification_required"):
         check("email" in body, "register: verification path returns email")

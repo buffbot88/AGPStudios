@@ -53,6 +53,85 @@ AUTH_CORS_PATHS = {"/api/auth/session", "/api/auth/login", "/api/auth/register",
 AUTH_CORS_METHODS = {"GET", "POST"}
 AUTH_CORS_HEADERS = {"content-type", "x-csrf-token"}
 
+# Registration hardening: strict username/email/password filters, a
+# proof-of-work human-verification challenge (no third-party captcha keys to
+# manage), and a per-IP registration budget. Challenges are single-use with
+# a 10-minute TTL; the browser solves one with SubtleCrypto in a couple of
+# seconds before POSTing, which prices out naive bot registrations.
+REGISTER_ATTEMPTS = {}
+REGISTER_BUDGET = 5                # registrations per IP per window
+REGISTER_WINDOW = 600.0            # seconds
+REGISTER_CHALLENGES = {}
+REGISTER_CHALLENGE_TTL = 600.0
+REGISTER_CHALLENGE_DIFFICULTY = 4  # leading zero hex chars of sha256(challenge + nonce)
+
+USERNAME_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,29}")
+RESERVED_USERNAMES = frozenset({
+    "admin", "administrator", "root", "system", "support", "help", "helpdesk",
+    "moderator", "mod", "staff", "owner", "official", "agp", "agpstudios",
+    "ashat", "security", "abuse", "webmaster", "postmaster", "hostmaster",
+    "info", "mail", "email", "news", "games", "game", "server", "console",
+    "api", "bot", "robot", "guest", "anonymous", "null", "undefined",
+    "test", "tester", "demo", "member", "user", "account", "billing",
+    "payment", "paypal", "discord", "youtube", "twitch", "twitter",
+    "steam", "minecraft", "paws", "parcels", "everenfell",
+})
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+DISPOSABLE_EMAIL_DOMAINS = frozenset({
+    "mailinator.com", "guerrillamail.com", "guerrillamailblock.com",
+    "sharklasers.com", "grr.la", "10minutemail.com", "10minutemail.net",
+    "tempmail.com", "temp-mail.org", "tempail.com", "throwawaymail.com",
+    "yopmail.com", "yopmail.fr", "yopmail.net", "maildrop.cc",
+    "getnada.com", "mohmal.com", "fakemail.net", "emailondeck.com",
+    "trashmail.com", "trashmail.net", "spamgourmet.com", "bugmenot.com",
+    "mintemail.com", "mytemp.email", "dispostable.com", "harakirimail.com",
+    "inboxalias.com", "mailnesia.com", "easytrashmail.com", "dodgit.com",
+})
+COMMON_PASSWORDS = frozenset({
+    "password", "password1", "password123", "12345678", "123456789",
+    "qwerty", "qwerty123", "letmein", "welcome", "welcome1", "admin123",
+    "agpstudios", "pawsandparcels", "everenfell", "monkeyking", "ashat",
+    "iloveyou", "football", "baseball", "dragon", "sunshine", "master",
+    "shadow", "abc12345", "passw0rd",
+})
+
+
+def valid_username(username):
+    """Return an error message when the username is unacceptable, else None."""
+    if not isinstance(username, str) or not username:
+        return "a username is required"
+    if not USERNAME_RE.fullmatch(username):
+        return "usernames must start with a letter and use 3-30 letters, numbers, _ or -"
+    if username.lower() in RESERVED_USERNAMES:
+        return "that username is reserved"
+    return None
+
+
+def valid_email(email):
+    """Return an error message when the email is unacceptable, else None."""
+    if not isinstance(email, str) or not email:
+        return "a valid email address is required"
+    if len(email) > 254 or not EMAIL_RE.fullmatch(email):
+        return "a valid email address is required"
+    local, _, domain = email.rpartition("@")
+    if not local or len(local) > 64 or local.startswith(".") or local.endswith(".") or ".." in local:
+        return "a valid email address is required"
+    labels = domain.split(".")
+    if ".." in domain or any(not label or len(label) > 63 or label.startswith("-") or label.endswith("-") for label in labels):
+        return "a valid email address is required"
+    if domain.lower() in DISPOSABLE_EMAIL_DOMAINS:
+        return "disposable email addresses are not accepted"
+    return None
+
+
+def valid_password(password):
+    """Return an error message when the password is unacceptable, else None."""
+    if not isinstance(password, str) or not 8 <= len(password) <= 128:
+        return "passwords must be 8-128 characters"
+    if password.lower() in COMMON_PASSWORDS:
+        return "that password is too common"
+    return None
+
 # Studio news from GitHub: recent commits across buffbot88's public repos,
 # merged with the curated studio_news rows. The unauthenticated GitHub API
 # budget is 60 requests/hour per IP; one refresh costs 1 (repo list) + up to
@@ -65,6 +144,57 @@ GITHUB_NEWS_MAX_REPOS = 10
 GITHUB_NEWS_PER_REPO = 3
 GITHUB_NEWS_CACHE = {"items": [], "fetched_at": 0.0}
 GITHUB_NEWS_LOCK = threading.Lock()
+NEWS_REFRESHER_STARTED = False
+NEWS_REFRESHER_LOCK = threading.Lock()
+
+# The tiny summarizer: turn raw commit subjects into news-friendly lines.
+# Conventional commits get a human verb ("feat: x" -> "New: x"); merge
+# commits and empty subjects are skipped as noise.
+CONVENTIONAL_RE = re.compile(r"^(feat|fix|docs|style|refactor|perf|test|chore|build|ci|revert)(\([^\)]*\))?\s*:\s*(.+)$", re.IGNORECASE)
+COMMIT_VERBS = {"feat": "New", "fix": "Fixed", "docs": "Docs", "style": "Polish",
+                "refactor": "Reworked", "perf": "Faster", "test": "Tests",
+                "chore": "Upkeep", "build": "Build", "ci": "CI", "revert": "Reverted"}
+
+
+def summarize_commit(repo, message):
+    """Turn a raw commit message into a news-friendly (title, summary) pair.
+
+    Returns None for noise (merge commits, empty subjects) so those rows
+    never surface on the homepage.
+    """
+    subject = (message or "").strip().split("\n", 1)[0].strip()[:140]
+    if not subject or subject.lower().startswith("merge "):
+        return None
+    match = CONVENTIONAL_RE.match(subject)
+    if match:
+        verb = COMMIT_VERBS.get(match.group(1).lower(), "Updated")
+        rest = (match.group(3) or "").strip()[:140] or subject
+        title = rest[:1].upper() + rest[1:] if rest else subject
+        return (title, f"{repo} \u00b7 {verb}: {rest}")
+    return (subject or repo, f"{repo} \u00b7 {subject}")
+
+
+def ensure_news_refresher():
+    """Keep the commit cache warm: refresh every TTL even when nobody visits.
+
+    The endpoint also refreshes lazily on request, so a dead refresher only
+    costs freshness, never availability. Starts once per process.
+    """
+    global NEWS_REFRESHER_STARTED
+    with NEWS_REFRESHER_LOCK:
+        if NEWS_REFRESHER_STARTED:
+            return
+        NEWS_REFRESHER_STARTED = True
+
+    def loop():
+        while True:
+            time.sleep(GITHUB_NEWS_TTL)
+            try:
+                github_commit_news()
+            except Exception:
+                pass
+
+    threading.Thread(target=loop, name="github-news-refresh", daemon=True).start()
 
 
 def github_get_json(url):
@@ -90,7 +220,10 @@ def github_repo_commits(repo):
             message = (detail.get("message") or "").strip()
             if not sha or not message:
                 continue
-            subject = message.split("\n", 1)[0].strip()[:140]
+            summarized = summarize_commit(repo, message)
+            if not summarized:
+                continue
+            title, summary = summarized
             try:
                 published = int(datetime.fromisoformat(
                     ((detail.get("author", {}) or {}).get("date", "")).replace("Z", "+00:00")).timestamp())
@@ -98,8 +231,8 @@ def github_repo_commits(repo):
                 published = int(time.time())
             items.append({
                 "id": f"github:{sha}",
-                "title": subject or repo,
-                "summary": f"{repo} · {subject}",
+                "title": title,
+                "summary": summary,
                 "url": commit.get("html_url") or f"https://github.com/{GITHUB_USER}/{repo}",
                 "published_at": published,
             })
@@ -336,6 +469,8 @@ class Proxy(BaseHTTPRequestHandler):
             return self.news_list()
         if urlparse(self.path).path == "/api/auth/verify-email":
             return self.verify_email(parse_qs(urlparse(self.path).query).get('token', [''])[0])
+        if urlparse(self.path).path == "/api/auth/register-challenge":
+            return self.register_challenge()
         if urlparse(self.path).path.startswith("/api/admin/"):
             return self.admin_get()
         if urlparse(self.path).path == "/api/notifications":
@@ -915,6 +1050,7 @@ class Proxy(BaseHTTPRequestHandler):
         buffbot88's public GitHub repos (cached 30 min; DB rows alone when
         GitHub is unreachable), newest first.
         """
+        ensure_news_refresher()
         try:
             with db() as conn:
                 with conn.cursor() as cur:
@@ -1142,9 +1278,12 @@ class Proxy(BaseHTTPRequestHandler):
         try:
             length=int(self.headers.get("Content-Length","0")); form=json.loads(self.rfile.read(length)); username=form.get("username", "").strip(); email=form.get("email", "").strip(); display=form.get("display_name", user["display_name"]).strip()
             if not username or not email or not display: return error(self,"username, email, and display_name are required")
+            problem = valid_username(username) or valid_email(email)
+            if problem: return error(self, problem)
+            if len(display) > 60: return error(self, "display name is required")
             with db() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("SELECT id FROM users WHERE (username=? OR email=?) AND id<>? LIMIT 1",(username,email,user["id"]))
+                    cur.execute("SELECT id FROM users WHERE (username=? OR LOWER(email)=LOWER(?)) AND id<>? LIMIT 1",(username,email,user["id"]))
                     if cur.fetchone(): return error(self,"username or email already in use",409)
                     cur.execute("UPDATE users SET username=?,email=?,display_name=? WHERE id=?",(username,email,display,user["id"]))
             return oidc_json(self,{"user":{**self.safe_user(user),"username":username,"email":email,"display_name":display}})
@@ -1209,13 +1348,56 @@ class Proxy(BaseHTTPRequestHandler):
             return oidc_json(self, {"verified":True})
         except Exception as exc: return error(self, f"verification unavailable: {exc}",503)
 
+    def register_challenge(self):
+        """Issue a single-use proof-of-work challenge for registration."""
+        now = time.time()
+        for token, expires in list(REGISTER_CHALLENGES.items()):
+            if expires <= now:
+                del REGISTER_CHALLENGES[token]
+        challenge = secrets.token_hex(16)
+        REGISTER_CHALLENGES[challenge] = now + REGISTER_CHALLENGE_TTL
+        return oidc_json(self, {"challenge": challenge,
+                                "difficulty": REGISTER_CHALLENGE_DIFFICULTY,
+                                "expires_in": int(REGISTER_CHALLENGE_TTL)})
+
+    def register_proof_ok(self, form):
+        """Verify the proof-of-work solution; challenges are single-use."""
+        proof = form.get("proof")
+        if not isinstance(proof, dict):
+            return False
+        challenge, nonce = proof.get("challenge"), proof.get("nonce")
+        if not isinstance(challenge, str) or not isinstance(nonce, str):
+            return False
+        if not nonce or len(nonce) > 64:
+            return False
+        expires = REGISTER_CHALLENGES.pop(challenge, None)
+        if expires is None or expires < time.time():
+            return False
+        digest = sha256((challenge + nonce).encode()).hexdigest()
+        return digest.startswith("0" * REGISTER_CHALLENGE_DIFFICULTY)
+
     def auth_register(self):
+        client = self.client_address[0]
+        now = time.time()
+        REGISTER_ATTEMPTS[client] = [stamp for stamp in REGISTER_ATTEMPTS.get(client, []) if now - stamp < REGISTER_WINDOW]
+        if len(REGISTER_ATTEMPTS[client]) >= REGISTER_BUDGET:
+            return error(self, "too many registration attempts", 429)
+        REGISTER_ATTEMPTS[client].append(now)
         try:
-            length=int(self.headers.get("Content-Length","0")); form=json.loads(self.rfile.read(length)); username=form.get("username", "").strip(); email=form.get("email", "").strip(); password=form.get("password", ""); display=form.get("display_name", username).strip()
-            if not (3 <= len(username) <= 30 and username.replace('_','').isalnum() and '@' in email and len(password) >= 8 and display): return oidc_json(self, {"error":"invalid_registration"},400)
+            length=int(self.headers.get("Content-Length","0")); form=json.loads(self.rfile.read(length))
+            if not isinstance(form, dict):
+                return error(self, "invalid registration")
+            username=str(form.get("username", "")).strip(); email=str(form.get("email", "")).strip(); password=form.get("password", ""); display=str(form.get("display_name", username)).strip()
+            problem = valid_username(username) or valid_email(email) or valid_password(password)
+            if problem:
+                return error(self, problem)
+            if not display or len(display) > 60:
+                return error(self, "display name is required")
+            if not self.register_proof_ok(form):
+                return error(self, "human verification failed")
             with db() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("SELECT COUNT(*) AS n FROM users WHERE username=? OR email=?", (username,email))
+                    cur.execute("SELECT COUNT(*) AS n FROM users WHERE username=? OR LOWER(email)=LOWER(?)", (username,email))
                     if cur.fetchone()["n"]: return oidc_json(self, {"error":"username_or_email_taken"},409)
                     user_id=secrets.token_hex(16); password_hash=crypt.crypt(password, crypt.mksalt(crypt.METHOD_BLOWFISH))
                     cur.execute("INSERT INTO users (id,username,email,password_hash,display_name,role,is_active,email_verified_at) VALUES (?,?,?,?,?,'Member',1,CURRENT_TIMESTAMP)",(user_id,username,email,password_hash,display))

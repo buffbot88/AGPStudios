@@ -37,6 +37,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 import secrets
 import sys
 import time
@@ -124,6 +125,95 @@ def message_hash(text):
     """Lower-hex SHA-256 of UTF-8 bytes, matching the API's SQLite function."""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
+# Mirrors proxy.py's registration hardening so the 400/409/429 paths are
+# testable: strict username/email/password filters, a proof-of-work
+# human-verification challenge, and a per-IP registration budget.
+REGISTER_BUDGET = 5           # keep in sync with proxy.py
+REGISTER_WINDOW = 600.0
+REGISTER_CHALLENGES = {}
+REGISTER_CHALLENGE_TTL = 600.0
+REGISTER_CHALLENGE_DIFFICULTY = 4
+REGISTER_ATTEMPTS = {}
+USERNAME_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,29}")
+RESERVED_USERNAMES = {
+    "admin", "administrator", "root", "system", "support", "help", "helpdesk",
+    "moderator", "mod", "staff", "owner", "official", "agp", "agpstudios",
+    "ashat", "security", "abuse", "webmaster", "postmaster", "hostmaster",
+    "info", "mail", "email", "news", "games", "game", "server", "console",
+    "api", "bot", "robot", "guest", "anonymous", "null", "undefined",
+    "test", "tester", "demo", "member", "user", "account", "billing",
+    "payment", "paypal", "discord", "youtube", "twitch", "twitter",
+    "steam", "minecraft", "paws", "parcels", "everenfell",
+}
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+DISPOSABLE_EMAIL_DOMAINS = {
+    "mailinator.com", "guerrillamail.com", "guerrillamailblock.com",
+    "sharklasers.com", "grr.la", "10minutemail.com", "10minutemail.net",
+    "tempmail.com", "temp-mail.org", "tempail.com", "throwawaymail.com",
+    "yopmail.com", "yopmail.fr", "yopmail.net", "maildrop.cc",
+    "getnada.com", "mohmal.com", "fakemail.net", "emailondeck.com",
+    "trashmail.com", "trashmail.net", "spamgourmet.com", "bugmenot.com",
+    "mintemail.com", "mytemp.email", "dispostable.com", "harakirimail.com",
+    "inboxalias.com", "mailnesia.com", "easytrashmail.com", "dodgit.com",
+}
+COMMON_PASSWORDS = {
+    "password", "password1", "password123", "12345678", "123456789",
+    "qwerty", "qwerty123", "letmein", "welcome", "welcome1", "admin123",
+    "agpstudios", "pawsandparcels", "everenfell", "monkeyking", "ashat",
+    "iloveyou", "football", "baseball", "dragon", "sunshine", "master",
+    "shadow", "abc12345", "passw0rd",
+}
+
+
+def valid_username(username):
+    if not isinstance(username, str) or not username:
+        return "a username is required"
+    if not USERNAME_RE.fullmatch(username):
+        return "usernames must start with a letter and use 3-30 letters, numbers, _ or -"
+    if username.lower() in RESERVED_USERNAMES:
+        return "that username is reserved"
+    return None
+
+
+def valid_email(email):
+    if not isinstance(email, str) or not email:
+        return "a valid email address is required"
+    if len(email) > 254 or not EMAIL_RE.fullmatch(email):
+        return "a valid email address is required"
+    local, _, domain = email.rpartition("@")
+    if not local or len(local) > 64 or local.startswith(".") or local.endswith(".") or ".." in local:
+        return "a valid email address is required"
+    labels = domain.split(".")
+    if ".." in domain or any(not label or len(label) > 63 or label.startswith("-") or label.endswith("-") for label in labels):
+        return "a valid email address is required"
+    if domain.lower() in DISPOSABLE_EMAIL_DOMAINS:
+        return "disposable email addresses are not accepted"
+    return None
+
+
+def valid_password(password):
+    if not isinstance(password, str) or not 8 <= len(password) <= 128:
+        return "passwords must be 8-128 characters"
+    if password.lower() in COMMON_PASSWORDS:
+        return "that password is too common"
+    return None
+
+
+def register_proof_ok(form):
+    proof = form.get("proof")
+    if not isinstance(proof, dict):
+        return False
+    challenge, nonce = proof.get("challenge"), proof.get("nonce")
+    if not isinstance(challenge, str) or not isinstance(nonce, str):
+        return False
+    if not nonce or len(nonce) > 64:
+        return False
+    expires = REGISTER_CHALLENGES.pop(challenge, None)
+    if expires is None or expires < time.time():
+        return False
+    return hashlib.sha256((challenge + nonce).encode()).hexdigest().startswith("0" * REGISTER_CHALLENGE_DIFFICULTY)
+
+
 # Mirrors proxy.py's public telemetry limits so the 429/413 paths are testable.
 CLIENT_ERROR_BUDGET = 20      # keep in sync with proxy.py
 CLIENT_ERROR_WINDOW = 60.0
@@ -185,6 +275,8 @@ def reset_state():
     SESSIONS.clear()
     CSRF.clear()
     VERIFICATIONS.clear()
+    REGISTER_CHALLENGES.clear()
+    REGISTER_ATTEMPTS.clear()
     ONLINE_VISITORS.clear()
     PAYMENT_SETTINGS.update({"paypal_email": "", "paypal_client_id": "", "client_secret_configured": False, "environment": "sandbox", "encryption_key_configured": True})
 
@@ -488,6 +580,16 @@ class Handler(BaseHTTPRequestHandler):
                     del VERIFICATIONS[username]
                     return self.reply(200, {"verified": True})
             return self.reply(*err("invalid or expired verification token", 400))
+        if path == "/api/auth/register-challenge":
+            now = time.time()
+            for token, expires in list(REGISTER_CHALLENGES.items()):
+                if expires <= now:
+                    del REGISTER_CHALLENGES[token]
+            challenge = secrets.token_hex(16)
+            REGISTER_CHALLENGES[challenge] = now + REGISTER_CHALLENGE_TTL
+            return self.reply(200, {"challenge": challenge,
+                                    "difficulty": REGISTER_CHALLENGE_DIFFICULTY,
+                                    "expires_in": int(REGISTER_CHALLENGE_TTL)})
         if path == "/api/auth/session":
             _, user = self.current_user()
             if user:
@@ -734,13 +836,24 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(202, {"logged": True})
 
         if path == "/api/auth/register":
+            address = self.client_address[0]
+            now = time.time()
+            REGISTER_ATTEMPTS[address] = [stamp for stamp in REGISTER_ATTEMPTS.get(address, []) if now - stamp < REGISTER_WINDOW]
+            if len(REGISTER_ATTEMPTS[address]) >= REGISTER_BUDGET:
+                return self.reply(*err("too many registration attempts", 429))
+            REGISTER_ATTEMPTS[address].append(now)
             username = form.get("username", "").strip()
             email = form.get("email", "").strip()
             password = form.get("password", "")
             display = form.get("display_name", username).strip()
-            if not (3 <= len(username) <= 30 and "@" in email and len(password) >= 8 and display):
-                return self.reply(*err("invalid_registration", 400))
-            if any(u["username"] == username or u["email"] == email for u in USERS.values()):
+            problem = valid_username(username) or valid_email(email) or valid_password(password)
+            if problem:
+                return self.reply(*err(problem, 400))
+            if not display or len(display) > 60:
+                return self.reply(*err("display name is required", 400))
+            if not register_proof_ok(form):
+                return self.reply(*err("human verification failed", 400))
+            if any(u["username"] == username or u["email"].lower() == email.lower() for u in USERS.values()):
                 return self.reply(*err("username_or_email_taken", 409))
             user_id = str(len(USERS) + 1)
             code = secrets.token_hex(4)
@@ -1054,7 +1167,12 @@ class Handler(BaseHTTPRequestHandler):
             display = form.get("display_name", user["display_name"]).strip()
             if not username or not email or not display:
                 return self.reply(*err("username, email, and display_name are required", 400))
-            if any(u["id"] != user["id"] and (u["username"] == username or u["email"] == email) for u in USERS.values()):
+            problem = valid_username(username) or valid_email(email)
+            if problem:
+                return self.reply(*err(problem, 400))
+            if len(display) > 60:
+                return self.reply(*err("display name is required", 400))
+            if any(u["id"] != user["id"] and (u["username"] == username or u["email"].lower() == email.lower()) for u in USERS.values()):
                 return self.reply(*err("username or email already in use", 409))
             user["username"] = username
             user["email"] = email

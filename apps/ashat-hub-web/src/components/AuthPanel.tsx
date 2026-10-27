@@ -8,6 +8,28 @@ type AuthMode = 'login' | 'register' | 'reset-request';
 
 export type AuthUser = User;
 
+/**
+ * Human verification: solve the server's proof-of-work challenge by finding a
+ * nonce whose SHA-256 hex starts with `difficulty` zeros. Batched
+ * SubtleCrypto keeps it to a couple of seconds for a real browser; bots pay
+ * the full price on every registration attempt.
+ */
+async function solveRegisterChallenge(challenge: string, difficulty: number): Promise<string> {
+  const prefix = '0'.repeat(Math.max(1, Math.min(difficulty, 8)));
+  const encoder = new TextEncoder();
+  const tried = async (nonce: number): Promise<boolean> => {
+    const hash = await crypto.subtle.digest('SHA-256', encoder.encode(`${challenge}${nonce}`));
+    return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, '0')).join('').startsWith(prefix);
+  };
+  let nonce = 0;
+  for (;;) {
+    const batch = await Promise.all(Array.from({ length: 64 }, (_, index) => tried(nonce + index)));
+    const hit = batch.indexOf(true);
+    if (hit !== -1) return String(nonce + hit);
+    nonce += 64;
+  }
+}
+
 export function AuthPanel({ onChange, onNavigate, embedded = false }: { onChange: (user: User | null) => void; onNavigate?: (path: string) => void; embedded?: boolean }) {
   const [user, setUser] = useState<User | null>(null);
   const [identifier, setIdentifier] = useState('');
@@ -83,12 +105,23 @@ export function AuthPanel({ onChange, onNavigate, embedded = false }: { onChange
         return;
       }
 
+      let proof: { challenge: string; nonce: string } | undefined;
+      if (mode === 'register') {
+        // One-time human-verification puzzle before the account is created.
+        setMessage('Checking you\u2019re human…');
+        const challengeResponse = await fetch(`${API}/auth/register-challenge`, { credentials: 'same-origin' });
+        if (!challengeResponse.ok) throw new Error('Human verification unavailable');
+        const { challenge, difficulty } = await challengeResponse.json() as { challenge: string; difficulty: number };
+        proof = { challenge, nonce: await solveRegisterChallenge(challenge, difficulty) };
+        setMessage('');
+      }
+
       const response = await fetch(`${API}/auth/${mode}`, {
         method: 'POST', credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(mode === 'login'
           ? { identifier, password }
-          : { username: identifier, email, password, display_name: identifier }),
+          : { username: identifier, email, password, display_name: identifier, proof }),
       });
       const data = await response.json() as {
         user?: User;
@@ -212,7 +245,7 @@ export function AuthPanel({ onChange, onNavigate, embedded = false }: { onChange
       <form className="auth-modal-form" onSubmit={(event) => void submit(event)} aria-label="Authentication">
         <div className="auth-field">
           <span className="field-icon" aria-hidden>◍</span>
-          <input value={identifier} onChange={(event) => setIdentifier(event.target.value)} placeholder={mode === 'register' ? 'Username' : 'Username or email'} autoComplete="username" required />
+          <input value={identifier} onChange={(event) => setIdentifier(event.target.value)} placeholder={mode === 'register' ? 'Username' : 'Username or email'} autoComplete="username" required {...(mode === 'register' ? { minLength: 3, maxLength: 30, pattern: '[A-Za-z][A-Za-z0-9_-]{2,29}', title: 'Start with a letter, 3-30 letters/numbers/_/-' } : {})} />
         </div>
         {mode === 'register' && <div className="auth-field">
           <span className="field-icon" aria-hidden>✉</span>
@@ -220,7 +253,7 @@ export function AuthPanel({ onChange, onNavigate, embedded = false }: { onChange
         </div>}
         {mode !== 'reset-request' && <div className="auth-field">
           <span className="field-icon" aria-hidden>⚿</span>
-          <input value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password" type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} required />
+          <input value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password" type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} required {...(mode === 'register' ? { minLength: 8, maxLength: 128 } : {})} />
         </div>}
         <button type="submit" className="auth-submit" disabled={busy}>{mode === 'login' ? 'Sign in' : mode === 'register' ? 'Create account' : 'Send reset link'}</button>
         <div className="auth-links">

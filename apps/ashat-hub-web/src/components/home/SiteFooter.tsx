@@ -26,9 +26,9 @@ export function SiteFooter() {
         <a className="wordmark" href="#top">
           <b>AGP</b> STUDIOS
         </a>
-        <span className="footer-legal-inline">© 2026 AGP Studios</span>
+        <span className="footer-identity">{FOOTER.tagline}</span>
         <div className="footer-group">
-          <span className="footer-identity">{FOOTER.tagline}</span>
+          <span className="footer-legal-inline">© 2026 AGP Studios</span>
           <div className="footer-socials">
             {FOOTER.socials.map((social) => (
               <a key={social.icon} href={social.href} aria-label={social.label} target="_blank" rel="noreferrer">

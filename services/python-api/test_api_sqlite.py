@@ -6,6 +6,7 @@ import sys
 import tempfile
 import threading
 from http.server import ThreadingHTTPServer
+import urllib.error
 from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -60,10 +61,30 @@ def main():
             _, _, headers = request("/api/auth/session", origin="https://evil.example")
             assert headers.get("Access-Control-Allow-Origin") is None
 
+            status, challenge, _ = request("/api/auth/register-challenge")
+            assert status == 200 and challenge["challenge"] and isinstance(challenge["difficulty"], int)
+            prefix = "0" * challenge["difficulty"]
+            nonce = next(n for n in range(10_000_000)
+                         if proxy.sha256(f"{challenge['challenge']}{n}".encode()).hexdigest().startswith(prefix))
             status, body, _ = request("/api/auth/register", "POST", {
                 "username": "sqlitemember", "email": "sqlite@example.test",
-                "password": "sqlite-pass-123", "display_name": "SQLite Member"})
+                "password": "sqlite-pass-123", "display_name": "SQLite Member",
+                "proof": {"challenge": challenge["challenge"], "nonce": str(nonce)}})
             assert status == 201 and body["registered"]
+            try:
+                status, body, _ = request("/api/auth/register", "POST", {
+                    "username": "admin", "email": "reserved@example.test",
+                    "password": "sqlite-pass-123", "display_name": "Reserved"})
+            except urllib.error.HTTPError as exc:
+                status, body = exc.code, json.loads(exc.read())
+            assert status == 400 and body["error"]["code"] == "that_username_is_reserved"
+            try:
+                status, body, _ = request("/api/auth/register", "POST", {
+                    "username": "sqlitejunk", "email": "junk@mailinator.com",
+                    "password": "sqlite-pass-123", "display_name": "Junk"})
+            except urllib.error.HTTPError as exc:
+                status, body = exc.code, json.loads(exc.read())
+            assert status == 400 and body["error"]["code"] == "disposable_email_addresses_are_not_accepted"
             status, body, headers = request("/api/auth/login", "POST", {
                 "identifier": "sqlitemember", "password": "sqlite-pass-123"})
             assert status == 200

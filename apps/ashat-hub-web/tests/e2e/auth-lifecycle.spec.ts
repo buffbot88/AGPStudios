@@ -51,7 +51,9 @@ async function registerMember(page: import('@playwright/test').Page) {
   await page.getByPlaceholder('Email').fill(email);
   await page.getByPlaceholder('Password').fill(MEMBER_PASSWORD);
   await page.locator('.auth-modal form').getByRole('button', { name: 'Create account' }).click();
-  await expect(page.locator('.auth-success')).toContainText('Account created. Sign in to continue.');
+  // Registration solves a proof-of-work human-verification puzzle first, so
+  // success legitimately takes seconds after the click.
+  await expect(page.locator('.auth-success')).toContainText('Account created. Sign in to continue.', { timeout: 30_000 });
   // Register closes nothing: the modal flips to sign-in with the name prefilled.
   await page.getByPlaceholder('Password').fill(MEMBER_PASSWORD);
   await page.locator('.auth-modal form').getByRole('button', { name: 'Sign in' }).click();
@@ -95,7 +97,7 @@ test.describe('auth lifecycle', () => {
       await page.locator('.auth-modal form').getByRole('button', { name: 'Create account' }).click();
 
       // The account exists but is unverified, and the UI says where to go next.
-      await expect(page.locator('.auth-success')).toContainText(`Account created. Check ${email} for a verification link.`);
+      await expect(page.locator('.auth-success')).toContainText(`Account created. Check ${email} for a verification link.`, { timeout: 30_000 });
 
       // Signing in before verifying is refused, with an explanation rather than
       // a raw error — this is the gate the whole flow depends on.

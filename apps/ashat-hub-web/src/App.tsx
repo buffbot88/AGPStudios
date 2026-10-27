@@ -98,6 +98,13 @@ function App() {
   useEffect(() => {
     void fetchGames().then(({ games: next }) => setGames(next));
     void fetchNews().then(({ news: next }) => setNews(next));
+    // Studio news refreshes server-side every 30 minutes; re-poll on the same
+    // cadence so a long-open homepage picks up fresh commits without a reload.
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      void fetchNews().then(({ news: next }) => setNews(next));
+    }, 30 * 60 * 1000);
+    return () => window.clearInterval(timer);
   }, []);
 
   // Restrained scroll reveals for homepage sections. Re-observes after
