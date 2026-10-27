@@ -265,7 +265,7 @@ export async function request<T>(
   // boundary, so a wrong shape names its field instead of reaching a component
   // that would render a blank. Error bodies are already handled above.
   const parsed = (body || {}) as T;
-  const schema = schemaFor(new URL(url, window.location.origin).pathname);
+  const schema = schemaFor(new URL(url, window.location.origin).pathname, method);
   if (schema) {
     try {
       validatePayload(`${method} ${url}`, schema, parsed);

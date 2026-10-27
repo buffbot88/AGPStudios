@@ -282,6 +282,18 @@ const byPath: Record<string, Schema<unknown>> = {
   '/admin/settings': recordOf(anyValue) as Schema<unknown>,
 };
 
+/** Mutations with a known response shape, keyed by `METHOD path-after-/api`.
+ * Without these, a POST to a path that also has a GET list schema (its only
+ * byPath entry) validates the mutation response against the list shape and
+ * throws — e.g. POST /api/admin/games `{ok, slug}` against `{games: [...]}`. */
+const byMethodPath: Record<string, Schema<unknown>> = {
+  'POST /support': obj<{ id: string; status: string }>({ id: str, status: str }),
+  'POST /admin/news': obj<{ ok: boolean; id: string }>({ ok: bool, id: str }),
+  'POST /admin/games': obj<{ ok: boolean; slug: string }>({ ok: bool, slug: str }),
+  'POST /admin/news/refresh': obj<{ ok: boolean; commits: number }>({ ok: bool, commits: numish }),
+  'POST /admin/payments/settings': obj<{ ok: boolean }>({ ok: bool }),
+};
+
 /** Endpoints with a path parameter. */
 const byPattern: { pattern: RegExp; schema: Schema<unknown> }[] = [
   { pattern: /^\/support\/[^/]+$/, schema: obj<{ ticket: unknown; replies: unknown[] }>({
@@ -308,9 +320,11 @@ const byPattern: { pattern: RegExp; schema: Schema<unknown> }[] = [
   }) },
 ];
 
-/** Schema for a request path (with or without `/api`), or undefined if unvalidated. */
-export function schemaFor(path: string): Schema<unknown> | undefined {
+/** Schema for a request path (with or without `/api`), or undefined if unvalidated.
+ * Mutations only match their own METHOD + path entry — never a GET list schema. */
+export function schemaFor(path: string, method = 'GET'): Schema<unknown> | undefined {
   const clean = path.replace(/^\/api/, '').split('?')[0].replace(/\/$/, '') || '/';
+  if (method !== 'GET') return byMethodPath[`${method.toUpperCase()} ${clean}`];
   const exact = byPath[clean];
   if (exact) return exact;
   return byPattern.find((entry) => entry.pattern.test(clean))?.schema;
