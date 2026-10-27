@@ -49,3 +49,5 @@ AshatHub_Old/
 # Preview runtime (ephemeral dev servers)
 modules/AshatHub/previews/
 
+/.freebuff
+.freebuff/project-id

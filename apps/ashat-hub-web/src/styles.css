@@ -501,9 +501,10 @@ h3 {
 }
 
 /* ---------- Cinematic hero ---------- */
-/* Full-viewport environment banner. `.hero-art` layers the art-directed
-   castle vista under a grey glass veil so the photo sits back and the
-   foreground copy keeps focus. */
+/* Fixed full-page vista backdrop. `.hero-art` is pinned to the viewport
+   (negative z-index keeps it above the portal background but below all
+   content), so the page scrolls over a static, darkened, faintly spooky
+   castle scene. No blur anywhere — readability comes from the veil. */
 .hero {
   position: relative;
   display: flex;
@@ -513,10 +514,12 @@ h3 {
 }
 
 .hero-art {
-  position: absolute;
+  position: fixed;
   inset: 0;
+  z-index: -1;
   background:
-    linear-gradient(rgba(28, 31, 36, 0.62), rgba(28, 31, 36, 0.52) 42%, rgba(13, 16, 19, 0.8)),
+    radial-gradient(120% 95% at 50% 42%, transparent 52%, rgba(0, 0, 0, 0.55) 100%),
+    linear-gradient(rgba(8, 10, 13, 0.7), rgba(8, 10, 13, 0.62) 45%, rgba(4, 6, 8, 0.88)),
     url('/hero-vista.png') center 32% / cover no-repeat,
     linear-gradient(#0b0e11, #101417 62%, #0d1013);
 }
@@ -526,11 +529,8 @@ h3 {
   position: absolute;
   inset: 0;
   background:
-    linear-gradient(115deg, rgba(200, 205, 212, 0.08), transparent 38%),
-    radial-gradient(80% 26% at 50% 62%, rgba(240, 238, 232, 0.045), transparent 70%),
-    radial-gradient(70% 22% at 50% 78%, rgba(240, 238, 232, 0.035), transparent 70%);
-  backdrop-filter: blur(2px) saturate(0.85);
-  -webkit-backdrop-filter: blur(2px) saturate(0.85);
+    linear-gradient(115deg, rgba(200, 205, 212, 0.06), transparent 40%),
+    radial-gradient(80% 26% at 50% 62%, rgba(240, 238, 232, 0.04), transparent 70%);
 }
 
 .hero-fade {
